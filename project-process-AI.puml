@@ -1,0 +1,383 @@
+@startuml 项目流程-AISynergism-时序图
+title 项目流程-AI Synergism 时序图
+' 由 项目流程-AISynergism.drawio 转换（完整流程；参与者=8 泳道列）
+autonumber
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 320
+skinparam sequenceMessageAlign center
+skinparam noteBackgroundColor #FFFFDD
+skinparam noteBorderColor #CCCCCC
+skinparam ParticipantPadding 10
+skinparam sequenceGroupBackgroundColor #E8F4FD
+skinparam sequenceGroupBorderColor #7EB6D6
+skinparam sequenceDividerBackgroundColor #F0F0F0
+
+box "Demand team" #E6F3FF
+    participant "PM" as PM
+    participant "BA" as BA
+end box
+box "Technical team" #E8F5E9
+    participant "SA" as SA
+    participant "AI" as AI #LightBlue
+    participant "DEV" as DEV
+    participant "QA" as QA
+end box
+
+participant "OP" as OP
+participant "Heinrich 海因斯三角条数" as HEI
+participant "Remark" as Remark
+
+note over HEI #LightYellow
+项目节点对应海因里希三角
+【腾讯文档】Heinrich's Triangle 海因里希三角
+https://docs.qq.com/sheet/DS0RjdHpkc3pzT1Ju?tab=BB08J2
+在 draw 中更新对应因素数
+end note
+
+AI --> AI: 初始化
+note right AI
+    使用脚本初始化 AI 工作空间
+    - 初始化 skill
+    - 配置 项目参考 （项目代码，项目思维导图，项目 wiki）
+    - 配置 项目约束 （需求设计规范，代码实现规范）
+end note
+
+== 需求分析阶段 ==
+
+PM -> PM : 需求分析
+PM -> PM : BRD 设计
+note right of PM
+    把需求从混沌变为混乱
+end note
+PM -> BA : BRD 讲解
+activate BA
+BA->SA: 需求调研
+SA->SA: 调研
+note right SA
+      使用 chatgpt
+        [[/深度研究xx需求内容 chatGPT://]]
+      评估可行性
+      给出预计方案
+      给出预计时间
+      给出预计成本
+end note
+BA -> BA : PRD 设计
+BA --> BA : 边界 & 逆向设计
+note right of BA
+    把需求从混乱变为繁杂
+end note
+deactivate BA
+group PRD
+    note over PM
+        提前 2h 同步 PRD
+    end note
+    BA --> PM : 讲解
+    BA --> DEV : 讲解
+
+    BA --> SA : 讲解
+    BA-->AI: 会议纪要
+    note over AI
+        [[chatgpt:// ChatGPT录音模式]] / [[https://tingwu.aliyun.com/ 通义听悟]]
+    end note
+end
+
+
+    SA -> SA : PRD 阅读
+activate SA
+    SA -> SA : PRD 拆分成功能点 to [[hook://file/98hLI7Dlp?p=UHJvamVjdCBtYW5hZ2VtZW50IOmhueebrueuoeeQhi3mqKHniYgvQ2hlY2tsaXN0IOajgOafpea4heWNlQ==&n=base%20stencil%E5%9F%BA%E7%A1%80%E6%A8%A1%E7%89%88%2D%E7%89%88%E6%9C%AC%E5%86%85%E5%AE%B9%2D%E9%A1%B9%E7%9B%AE%E5%90%8D%2D%E7%BB%84%E7%BB%87%E5%90%8D%2Dinterior%20CheckList%2DBen%2D0%2E0%2E1%2Ddate%2D%E7%8A%B6%E6%80%81Todo%2Exlsx Xmind]]
+    note right of SA
+        把需求从繁杂变为复杂
+    end note
+    SA -> SA : PRD 拆分对应细节 to [[hook://file/98hLI7Dlp?p=UHJvamVjdCBtYW5hZ2VtZW50IOmhueebrueuoeeQhi3mqKHniYgvQ2hlY2tsaXN0IOajgOafpea4heWNlQ==&n=base%20stencil%E5%9F%BA%E7%A1%80%E6%A8%A1%E7%89%88%2D%E7%89%88%E6%9C%AC%E5%86%85%E5%AE%B9%2D%E9%A1%B9%E7%9B%AE%E5%90%8D%2D%E7%BB%84%E7%BB%87%E5%90%8D%2Dinterior%20CheckList%2DBen%2D0%2E0%2E1%2Ddate%2D%E7%8A%B6%E6%80%81Todo%2Exlsx Xmind]]
+    note right of SA
+        把需求从复杂变为简单子项
+    end note
+
+    SA -> SA : PRD 估时 to [[hook://file/9UgxiZDfS?p=UHJvamVjdCBtYW5hZ2VtZW50IOmhueebrueuoeeQhi3mqKHniYgvRXN0aW1hdGUg6ZyA5rGC5Lyw5pe2&n=base%20stencil%E5%9F%BA%E7%A1%80%E6%A8%A1%E7%89%88%2DBRDv0%2E0%2E1%2D%E9%9C%80%E6%B1%82%E5%86%85%E5%AE%B9%2D%E6%A8%A1%E5%9D%97%2D%E9%A1%B9%E7%9B%AE%E5%90%8D%2D%E7%BB%84%E7%BB%87%E5%90%8D%2DInternal%20estimation%2DBen%2D0%2E0%2E1%2D20250804%2Exlsx Excel]]
+    note right of SA
+        保证每个子项目时长小于 2h
+
+    end note
+deactivate SA
+
+activate AI
+SA -> AI : AI 需求分析
+note right of AI #LightBlue
+ 项目代码和 wiki 和场景设计，把 PRD 交给 AI 进行拆解工作
+
+ todo： 通过 需求编号 自动检索项目代码/自动检索 wiki ，自动检索项目功能 xmind
+
+ propmt ： 按照 xx 进行分析，产出 xx
+end note
+deactivate AI
+
+activate SA
+SA -> AI : PRD 估时提取
+AI -> AI : PRD 估时提取
+note right of AI #LightBlue
+ propmt:
+ 把 excel 中估时明细按照 ppt 功能
+ 进行汇总工时，只统计功能开发部分；I 列是工时
+end note
+'AI --> SA : AI 辅助：PRD 估时
+SA --> PM : PRD 估时同步
+SA --> DEV : PRD 估时同步
+deactivate SA
+
+DEV -> DEV: 二次确认工时
+
+== 设计阶段 ==
+
+PM -> PM : 需求排期
+group Kick Off Meet
+
+
+    PM --> PM : 需求评审
+    PM --> PM : 会议录音
+    PM --> AI : AI 总结会议录音
+    BA --> PM : 讲解需求
+    BA --> SA : 讲解需求
+    BA --> DEV : 讲解需求
+    BA --> QA : 讲解需求
+
+    note over PM
+    同步 BRD、需求梳理信息
+    end note
+
+    note over DEV
+    落地开会前对需求梳理，
+    带着疑问和对改动的认知
+    end note
+end
+
+DEV --> SA : PRD 复述
+note right DEV
+    复述对于brd理解，业务实现，后端推进（PRD 有问题同步修改）
+end note
+activate BA
+    DEV --> BA : PRD 复述/反馈问题
+    note right DEV
+        可单独跟需求方复述
+    end note
+    BA --> BA : PRD 更新反馈点
+deactivate BA
+
+PM -> PM : TB 任务拆分
+note right PM
+    最大任务时常小于 4 小时
+    对应拆分的发布版本，任务标题关联对应项目
+
+end note
+
+activate DEV
+DEV -> PM : 需求影响范围评估
+DEV --> SA : 需求影响范围反馈
+DEV --> QA : 需求影响范围反馈
+deactivate DEV
+
+DEV -> DEV : 前后端需求实现沟通会议\n（产出沟通共识会议纪要）
+
+
+
+DEV -> DEV : 前端技术方案编写；
+DEV -> DEV : 后端技术方案编写；
+note right DEV #LightYellow
+技术方案明细：
+API 变动、数据结构变动、ER 图、流程图、
+实现内容、失效影响评估
+编写核心逻辑 PDL（基于估时）
+end note
+
+== 开发阶段 ==
+DEV -> DEV : 技术方案合并
+
+DEV -> DEV : 核验估时
+DEV -> DEV : 技术方案审核\n（基于技术方案讲解对于需求的实现）
+
+AI --> SA : AI 辅助：Setup Checklist 自动校验（域名/Nginx/PHP/支付/三方接口/Magento 配置体检）
+DEV -> SA : 技术方案审核\n（Quick review & review）
+SA --> BA : 技术方案审核
+BA --> PM : 技术方案审核
+DEV -> QA : 技术方案审核
+
+AI --> DEV : AI 辅助：技术方案审核\n（架构合理性评分；安全漏洞预扫描；性能瓶颈预判）
+
+note over SA #LightGreen
+• 快速确认"不出大错"，让开发可以安全启动
+• Quick review 在 1 个番茄钟时间内响应
+end note
+SA ->  DEV: 技术方案审核
+QA-> QA : 测试用例编写
+QA -> QA : 测试用例评审
+QA -> DEV : 测试用例评审
+DEV -> SA : 测试用例评审
+SA -> PM : 测试用例评审
+DEV -> SA : 数据结构审核
+DEV -> DEV : 数据结构设计
+DEV -> DEV : 接口设计
+DEV -> SA : 接口审核
+DEV -> DEV : 界面设计
+DEV -> DEV : 功能开发\n（实现 AB Test）
+
+note right DEV
+（构建对应主任务分支）
+end note
+
+note over HEI : 海因里希三角条数 = 1
+DEV -> DEV : 记录&更新 CheckList
+DEV -> DEV : 联调
+[-> SA : 环境就绪确认
+SA -> DEV : 更新技术文档
+AI --> SA : AI 辅助：技术文档自动同步\n（代码变更 → API 文档 / ER 图 / 架构图自动更新）
+DEV -> DEV : 自测\n（产出自测表）
+[-> DEV : 代码质量检查/修正
+DEV -> DEV : 自动代码质量检查（Sonar）
+DEV -> PM : 更新 BRD，同步给客户
+DEV -> QA : 更新测试用例
+DEV -> DEV : 漏洞扫描（Scan）
+DEV -> QA : CodeCheck
+DEV -> DEV : 代码质量检查/修正
+note over HEI : 海因里希三角条数 = 2
+QA -> OP : Auto Review Code
+SA -> SA : 每周功能演示
+DEV --> SA : 每周代码质量检查
+DEV -> DEV : 冒烟演示\n（后端主导）
+== 测试阶段 ==
+DEV -> QA : 核验冒烟演示
+QA -> QA : 测试
+note over DEV #LightYellow
+后端主导原因：数据负责人是后端，
+需要对数据负责，交付功能要具有可测试性
+end note
+note over HEI : 海因里希三角条数 = 1
+QA -> QA : 性能测试
+note over QA #LightCoral
+**Testing 规范**
+1. 禁止开发模式测试
+2. 禁止忽略任何错误（错误必须有对应原因才可关闭，
+   开发解决不了上报对应 SA）
+end note
+[-> DEV : 性能测试
+QA -> QA : UAT 用例
+DEV -> QA : 性能测试
+QA -> OP : UAT
+QA --> PM : UAT 用例
+QA --> SA : 功能测试
+OP --> PM : 创建发布计划\n（至少在发版日提前 3 天）
+OP -> DEV : 禁止发布 PreProd
+note over OP #LightBlue
+**UAT 发布规范**
+1. 停止发布 PreProd 环境代码
+2. 协调多方支持 UAT 答疑
+   （QA、三方人员：阿里云 / WMS / OMS 等）
+end note
+PM -> PM : 核对发布任务和发布涉及项目和开发涉及人员
+SA -> SA : 创建预发布分支
+PM -> SA : 核对发布任务和发布涉及项目和开发涉及人员
+== 部署阶段 ==
+
+SA -> SA : Setup 部署
+note right Remark #LightBlue
+
+部署
+    注意域名配置
+    前端服务走前端域名
+    三方接口和oms 走后端域名
+    域名解析 - CDN(有无 CDN) - WAF -SLB - ECS
+    检查域名备案
+    磁盘挂载
+    项目下/pub/media
+    项目下/var/log
+    项目下/var/export
+    申请 IT 开阿里云监控
+    开发同事提供 Index，PDP，PLP 页面
+    Nginx 图片上传大小配置
+    nginx.conf client_max_body_size
+    php.ini upload_max_filesize
+    有无邮箱配置（邮箱尽可能为邮件组）
+    有无微信通知模版
+    有无支付配置
+    支付账户必需未被限额
+    有无三方接口配置
+    OMS
+    WMS
+    SF 物流
+    SMS
+    CMS
+    CRM
+    PIM
+Magento
+    订单号前缀配置（生产与其他环境不能一致）
+    sales_sequence_profile.prefix
+    是否启用无库存展示商品开关
+     store-config - catalog - stock
+    配置图片无压缩
+    store - config - system- Images Upload Configuration
+    有无限购配置
+    有无缓存配置
+    有无定时脚本
+    商品属性全部设置为 global (如果没有区分店铺需求)
+    小程序token必须单一源更新！
+    支付必须操作前必须先查询平台状态，且保证支付状态不被覆盖，且保证单位时间只有一个待支付流水
+
+end note
+
+SA -> DEV : 分支合并
+note over HEI : 海因里希三角条数 = 1
+[-> SA : 完善 CheckList\n（继承历史 Checklist）
+AI --> SA : AI 辅助：Checklist 增量项推荐（按本次变更范围）
+SA -> SA : 评审 CheckList
+SA -> BA : 完善 CheckList
+SA -> DEV : 完善 CheckList
+SA -> PM : 评审 CheckList
+SA -> QA : 评审 CheckList
+SA -> SA : 评审 CheckList
+SA -> SA : Sonar 代码检查
+DEV -> SA : Code Review\n（快速熟悉代码：创建 UML 与设计核验、\n生成流程控制图 CFG、重构代码、构建单元测试）\n仅 P1 以上做打回
+AI --> SA : AI 辅助：智能 Code Review\n（自动生成 UML 时序图 / CFG；变更风险评分；单测覆盖率缺口分析）
+DEV -> DEV : 代码讲解
+note over HEI : 海因里希三角条数 = 1
+SA -> SA : Postman Run
+AI --> SA : AI 辅助：自动化测试脚本生成\n（基于接口文档自动生成 Postman Collection + 断言 + 环境变量）
+note over HEI : 海因里希三角条数 = 1
+DEV -> DEV : 功能演示
+[-> PM : 上线邮件确认
+PM -> PM : 确认发布
+DEV -> SA : 功能演示\n（演示接口符合对应接口文档类型）
+SA -> SA : 功能预演
+SA -> SA : SQL 执行
+AI --> SA : AI 辅助：SQL 风险检测（缺索引/锁表/大表迁移/不可回滚）
+PM -> SA : SQL 执行
+[-> DEV : 提供 db_schema SQL
+DEV -> SA : SQL 执行
+DEV -> DEV : 提供 PageBuild SQL
+SA -> SA : PageBuild SQL 执行
+DEV -> SA : PageBuild SQL 执行
+SA -> DEV : 创建/维护配置项\n（Pagebuild / StoreConfig）
+OP -> OP : 检查配置项
+DEV -> SA : 检查配置项\n（Pagebuild / StoreConfig）
+DEV -> OP : 维护配置项\n（Pagebuild / StoreConfig）
+note over HEI : 海因里希三角条数 = 1
+SA -> SA : Magento 发布
+AI --> SA : AI 辅助：发布风险预评估\n（变更影响面分析；回滚脚本自动生成；发布窗口冲突检测）
+SA -> QA : 测试回归
+QA -> PM : 发布成功邮件
+note over QA #LightCoral
+**Test Regression**
+1. 禁止开发模式回归测试
+end note
+PM -> PM : 功能（AB Test）有效性验证&分析
+PM -> SA : 合并 Prod 分支到 Dev，Stg，Preprod分支
+PM -> DEV : 合并 Prod 分支到开发分支
+note over PM,SA #Wheat
+**AB 灰度比例**
+100% O → 5% A → 5% B → 50% B → 95% B
+end note
+PM -> PM : 逆向 Test 验证&分析
+[-> DEV : 监控服务 1d
+DEV -> DEV : 监控服务 1w
+DEV -> DEV : 监控服务 1y
+== 维护阶段 ==
+AI --> SA : AI 辅助：技术债务量化\n（代码复杂度趋势 / 重复率 / 依赖老化评分；自动生成还债优先级列表）
+
+@enduml

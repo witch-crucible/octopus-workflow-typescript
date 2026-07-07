@@ -1,0 +1,19 @@
+{
+  "name": "@octopus/agent-layer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*.js": "./dist/*.js"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@octopus/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.2.0",
+    "typescript": "^5.6.0"
+  }
+}

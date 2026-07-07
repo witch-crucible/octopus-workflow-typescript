@@ -1,0 +1,23 @@
+{
+  "name": "octopus-workflow-typescript",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI 项目流程自动化引擎 — multi-agent workflow orchestration",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r exec tsc --noEmit",
+    "lint": "biome check packages/",
+    "lint:fix": "biome check --write packages/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "bash scripts/verify.sh",
+    "clean": "pnpm -r exec rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  }
+}

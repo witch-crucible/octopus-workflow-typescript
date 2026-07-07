@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.codegraph/
+*.tsbuildinfo
+coverage/
+.tmp/
+*.log
+
+# Runtime state
+.omo/run-continuation/
+.octo_engine_test/
