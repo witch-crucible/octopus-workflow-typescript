@@ -31,6 +31,24 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   [TaskStatus.SKIPPED]: "已跳过",
 }
 
+/** 阶段步骤状态枚举 */
+export enum StageStatus {
+  PENDING = "PENDING",
+  IN_PROGRESS = "IN_PROGRESS",
+  COMPLETED = "COMPLETED",
+  BLOCKED = "BLOCKED",
+  SKIPPED = "SKIPPED",
+}
+
+/** 阶段步骤状态标签映射 */
+export const STAGE_STATUS_LABELS: Record<StageStatus, string> = {
+  [StageStatus.PENDING]: "待处理",
+  [StageStatus.IN_PROGRESS]: "进行中",
+  [StageStatus.COMPLETED]: "已完成",
+  [StageStatus.BLOCKED]: "阻塞",
+  [StageStatus.SKIPPED]: "已跳过",
+}
+
 /** 任务接口 */
 export interface Task {
   /** 任务唯一 ID */
@@ -89,3 +107,40 @@ export interface TaskProgress {
   /** 完成百分比 0-100 */
   percent: number
 }
+
+/** 阶段步骤运行时信息 */
+export interface StageInfo {
+  /** 步骤定义 ID */
+  stageId: string
+  /** 所属阶段 */
+  phase: Phase
+  /** 当前状态 */
+  status: StageStatus
+  /** 依赖的步骤 ID 列表 */
+  dependsOn: string[]
+  /** 负责角色 */
+  responsibleRole: Role
+  /** 创建时间 */
+  createdAt: string
+  /** 更新时间 */
+  updatedAt: string
+  /** 完成时间 */
+  completedAt?: string
+  /** 是否跳过 */
+  skipped?: boolean
+}
+
+/** 阶段进度摘要 */
+export interface StageProgress {
+  total: number
+  completed: number
+  inProgress: number
+  blocked: number
+  pending: number
+  skipped: number
+  /** 完成百分比 0-100 */
+  percent: number
+}
+
+export { StageStatus, StageInfo }
+

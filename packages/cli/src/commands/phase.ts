@@ -22,19 +22,38 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .command("list")
     .description("列出所有阶段状态")
     .argument("[projectId]", "项目 ID")
-    .action((projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
-      if (!pid) return
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId?: string, options?: { json?: boolean }) => {
+      try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
 
-      const state = engine.getState(pid)
-      console.log("\n📊 阶段状态:")
-      for (const phase of PHASE_ORDER) {
-        const lock = state.phaseStatus[phase] ?? PhaseLock.LOCKED
-        const progress = engine.getPhaseProgress(state, phase)
-        const active = phase === state.currentPhase ? " ◀ 当前" : ""
-        console.log(`   ${lock === PhaseLock.COMPLETED ? "✅" : lock === PhaseLock.ACTIVE ? "▶" : "🔒"} ${phase.padEnd(16)} ${progress.completed}/${progress.total} 任务${active}`)
+        const state = engine.getState(pid)
+        if (options?.json) {
+          console.log(JSON.stringify({
+            projectId: state.projectId,
+            currentPhase: state.currentPhase,
+            phases: PHASE_ORDER.map((phase) => ({
+              phase,
+              lock: state.phaseStatus[phase] ?? PhaseLock.LOCKED,
+              progress: engine.getPhaseProgress(state, phase),
+            })),
+          }, null, 2))
+          return
+        }
+
+        console.log("\n📊 阶段状态:")
+        for (const phase of PHASE_ORDER) {
+          const lock = state.phaseStatus[phase] ?? PhaseLock.LOCKED
+          const progress = engine.getPhaseProgress(state, phase)
+          const active = phase === state.currentPhase ? " ◀ 当前" : ""
+          console.log(`   ${lock === PhaseLock.COMPLETED ? "✅" : lock === PhaseLock.ACTIVE ? "▶" : "🔒"} ${phase.padEnd(16)} ${progress.completed}/${progress.total} 任务${active}`)
+        }
+        console.log()
+      } catch (err) {
+        console.error(`❌ 获取阶段列表失败: ${(err as Error).message}`)
+        process.exit(1)
       }
-      console.log()
     })
 
   // ── phase advance ──
@@ -42,16 +61,29 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .command("advance")
     .description("前进到下一阶段")
     .argument("[projectId]", "项目 ID")
-    .action((projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
-      if (!pid) return
-
+    .option("--skip-ai-gates", "跳过 AI 门控检查")
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId?: string, options?: { skipAiGates?: boolean; json?: boolean }) => {
       try {
-        const state = engine.advancePhase(pid)
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
+
+        const state = engine.advancePhase(pid, options?.skipAiGates)
+
+        if (options?.json) {
+          console.log(JSON.stringify({
+            projectId: state.projectId,
+            currentPhase: state.currentPhase,
+            taskCount: state.tasks.filter((t) => t.phase === state.currentPhase).length,
+          }, null, 2))
+          return
+        }
+
         console.log(`✅ 已前进到: ${state.currentPhase} (${PhaseLabel(state.currentPhase)})`)
         console.log(`   当前任务数: ${state.tasks.filter((t) => t.phase === state.currentPhase).length}`)
       } catch (err) {
         console.error(`❌ ${(err as Error).message}`)
+        process.exit(1)
       }
     })
 
@@ -61,22 +93,34 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .description("回退到指定阶段")
     .argument("<phase>", "目标阶段名称")
     .argument("[projectId]", "项目 ID")
-    .action((targetPhase: string, projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
-      if (!pid) return
-
-      const phase = Object.values(Phase).find((p) => p.toLowerCase() === targetPhase.toLowerCase())
-      if (!phase) {
-        console.error(`❌ 未知阶段: ${targetPhase}`)
-        console.log(`   可用阶段: ${Object.values(Phase).join(", ")}`)
-        return
-      }
-
+    .option("--json", "以 JSON 格式输出")
+    .action((targetPhase: string, projectId?: string, options?: { json?: boolean }) => {
       try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
+
+        const phase = Object.values(Phase).find((p) => p.toLowerCase() === targetPhase.toLowerCase())
+        if (!phase) {
+          console.error(`❌ 未知阶段: ${targetPhase}`)
+          console.log(`   可用阶段: ${Object.values(Phase).join(", ")}`)
+          process.exit(1)
+          return
+        }
+
         const state = engine.rollbackTo(pid, phase)
+
+        if (options?.json) {
+          console.log(JSON.stringify({
+            projectId: state.projectId,
+            currentPhase: state.currentPhase,
+          }, null, 2))
+          return
+        }
+
         console.log(`✅ 已回退到: ${state.currentPhase} (${PhaseLabel(state.currentPhase)})`)
       } catch (err) {
         console.error(`❌ ${(err as Error).message}`)
+        process.exit(1)
       }
     })
 
@@ -86,31 +130,54 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .description("显示阶段详情")
     .argument("<phase>", "阶段名称")
     .argument("[projectId]", "项目 ID")
-    .action((phaseName: string, projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
-      if (!pid) return
+    .option("--json", "以 JSON 格式输出")
+    .action((phaseName: string, projectId?: string, options?: { json?: boolean }) => {
+      try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
 
-      const phase = Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase())
-      if (!phase) {
-        console.error(`❌ 未知阶段: ${phaseName}`)
-        return
-      }
-
-      const state = engine.getState(pid)
-      const tasks = state.tasks.filter((t) => t.phase === phase)
-      const progress = engine.getPhaseProgress(state, phase)
-
-      console.log(`\n📌 ${phase} (${PhaseLabel(phase)})`)
-      console.log(`   状态: ${state.phaseStatus[phase] ?? PhaseLock.LOCKED}`)
-      console.log(`   进度: ${progress.completed}/${progress.total} 任务 (${progress.percent}%)`)
-
-      if (tasks.length > 0) {
-        console.log("\n   任务列表:")
-        for (const task of tasks) {
-          console.log(`   ${task.status === "COMPLETED" ? "✅" : "⬜"} ${task.id} - ${task.title}`)
+        const phase = Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase())
+        if (!phase) {
+          console.error(`❌ 未知阶段: ${phaseName}`)
+          process.exit(1)
+          return
         }
+
+        const state = engine.getState(pid)
+        const tasks = state.tasks.filter((t) => t.phase === phase)
+        const progress = engine.getPhaseProgress(state, phase)
+
+        if (options?.json) {
+          console.log(JSON.stringify({
+            phase,
+            label: PhaseLabel(phase),
+            lock: state.phaseStatus[phase] ?? PhaseLock.LOCKED,
+            progress,
+            tasks: tasks.map((t) => ({
+              id: t.id,
+              title: t.title,
+              status: t.status,
+              responsibleRole: t.responsibleRole,
+            })),
+          }, null, 2))
+          return
+        }
+
+        console.log(`\n📌 ${phase} (${PhaseLabel(phase)})`)
+        console.log(`   状态: ${state.phaseStatus[phase] ?? PhaseLock.LOCKED}`)
+        console.log(`   进度: ${progress.completed}/${progress.total} 任务 (${progress.percent}%)`)
+
+        if (tasks.length > 0) {
+          console.log("\n   任务列表:")
+          for (const task of tasks) {
+            console.log(`   ${task.status === "COMPLETED" ? "✅" : "⬜"} ${task.id} - ${task.title}`)
+          }
+        }
+        console.log()
+      } catch (err) {
+        console.error(`❌ 获取阶段详情失败: ${(err as Error).message}`)
+        process.exit(1)
       }
-      console.log()
     })
 }
 
@@ -118,7 +185,8 @@ function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | 
   if (projectId) return projectId
   const projects = engine["store"].listProjects()
   if (projects.length === 0) {
-    console.log("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
+    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
+    process.exit(1)
     return null
   }
   return projects[0] ?? null

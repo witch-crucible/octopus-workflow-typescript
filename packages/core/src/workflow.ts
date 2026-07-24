@@ -10,6 +10,7 @@ import { Phase, PhaseLock } from "./phase.js"
 import type { Task, TaskFilter, TaskProgress } from "./task.js"
 import type { Checklist, ChecklistItem } from "./checklist.js"
 import type { HeinrichRecord, HeinrichObservation, HeinrichLevel } from "./risk.js"
+import { createEmptyHeinrichRecord } from "./risk.js"
 import type { Artifact, ArtifactType } from "./artifact.js"
 import { Role } from "./role.js"
 
@@ -39,6 +40,17 @@ export interface WorkflowState {
   artifacts: Artifact[]
   /** 扩展元数据 */
   metadata: Record<string, string>
+  /** 阶段步骤运行态 */
+  stages: Record<string, import("./task.js").StageInfo>
+  /** AI 门控开关 */
+  aiGatingEnabled: boolean
+  /** AI 门控审计记录 */
+  aiGateResults: Array<{
+    phase: Phase
+    allowed: boolean
+    reason?: string
+    timestamp: string
+  }>
 }
 
 /** 项目状态摘要（用于 CLI 输出） */
@@ -96,9 +108,12 @@ export function createEmptyState(
     phaseStatus,
     tasks: [],
     checklists: {},
-    heinrich: { majorDefects: 0, minorDefects: 0, trivialDefects: 0, observations: [] },
+    heinrich: createEmptyHeinrichRecord(),
     artifacts: [],
     metadata: {},
+    stages: {},
+    aiGatingEnabled: false,
+    aiGateResults: [],
   }
 }
 

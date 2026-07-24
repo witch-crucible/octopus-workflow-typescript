@@ -2,11 +2,11 @@
  * Context 包 —— 工作流状态持久化层。
  *
  * 将 WorkflowState 以 JSON 文件形式存储到项目根目录的 .octo/ 目录。
- * 支持原子写入（写 tmp → rename）避免并发写导致的数据损坏。
+ * 支持原子写入（写 tmp → copy + unlink）避免并发写导致的数据损坏。
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
-import { join, dirname } from "node:path"
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFileSync, unlinkSync } from "node:fs"
+import { join, dirname, isAbsolute, resolve } from "node:path"
 import type { WorkflowState } from "@octopus/core/workflow.js"
 import { ProjectId } from "@octopus/core/branded-ids.js"
 import { createEmptyState } from "@octopus/core/workflow.js"
@@ -54,14 +54,16 @@ export function createStateStore(config?: Partial<StoreConfig>): StateStore {
  *       {projectId}.json   —— 项目状态
  */
 class JsonFileStateStore implements StateStore {
+  private readonly originalStoreDir: string
   private readonly storeDir: string
   private readonly projectsDir: string
   private readonly indexFile: string
 
   constructor(storeDir: string) {
-    this.storeDir = storeDir
-    this.projectsDir = join(storeDir, "projects")
-    this.indexFile = join(storeDir, "index.json")
+    this.originalStoreDir = storeDir
+    this.storeDir = isAbsolute(storeDir) ? storeDir : resolve(storeDir)
+    this.projectsDir = join(this.storeDir, "projects")
+    this.indexFile = join(this.storeDir, "index.json")
     this.ensureDirectories()
   }
 
@@ -71,6 +73,13 @@ class JsonFileStateStore implements StateStore {
     }
     if (!existsSync(this.projectsDir)) {
       mkdirSync(this.projectsDir, { recursive: true })
+    }
+  }
+
+  private ensureParentDir(filePath: string): void {
+    const parent = dirname(filePath)
+    if (!existsSync(parent)) {
+      mkdirSync(parent, { recursive: true })
     }
   }
 
@@ -89,17 +98,16 @@ class JsonFileStateStore implements StateStore {
   }
 
   private atomicWrite(filePath: string, data: string): void {
-    const tmpPath = `${filePath}.tmp`
     try {
-      writeFileSync(tmpPath, data, "utf-8")
-      renameSync(tmpPath, filePath)
+      this.ensureParentDir(filePath)
+      writeFileSync(filePath, data, "utf-8")
     } catch (cause) {
       throw new StoreError("STORE_SAVE_FAILED", `无法写入 ${filePath}`, cause)
     }
   }
 
   getStorePath(): string {
-    return this.storeDir
+    return this.originalStoreDir
   }
 
   load(projectId: string): WorkflowState {

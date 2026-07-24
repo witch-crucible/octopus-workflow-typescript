@@ -7,10 +7,13 @@
  * - 支持常驻进程模式（复用进程减少冷启动）
  */
 
-import { execFileSync } from "node:child_process"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import type { AIRequest, AIResponse, AIAssistantType } from "@octopus/core/agent.js"
 import { AICallError } from "@octopus/core/errors.js"
 import { AgentCallId } from "@octopus/core/branded-ids.js"
+
+const execFileAsync = promisify(execFile)
 
 /** AI 客户端配置 */
 export interface AIClientConfig {
@@ -22,6 +25,10 @@ export interface AIClientConfig {
   claudePath: string
   /** 是否启用常驻模式 */
   persistent: boolean
+  /** 重试次数 */
+  retries: number
+  /** 重试间隔（毫秒） */
+  retryDelay: number
 }
 
 /** 默认配置 */
@@ -30,6 +37,8 @@ const DEFAULT_CONFIG: AIClientConfig = {
   defaultTimeout: 120_000,
   claudePath: "claude",
   persistent: false,
+  retries: 2,
+  retryDelay: 1000,
 }
 
 /** AI 客户端 */
@@ -41,43 +50,55 @@ export class AIClient {
     this.config = { ...DEFAULT_CONFIG, ...config }
   }
 
-  /** 基础调用 —— 直接执行 claude -p 子进程 */
+  /** 基础调用 —— 直接执行 claude -p 子进程（异步 + 重试） */
   async ask(request: AIRequest): Promise<AIResponse> {
     const startTime = Date.now()
     const system = request.system ?? ""
     const model = request.model ?? this.config.defaultModel
     const timeout = request.timeout ?? this.config.defaultTimeout
 
-    try {
-      const args = [
-        "-p",
-        "--model",
-        model,
-        "--strict-mcp-config",
-        "--output-format",
-        "json",
-        "--system-prompt",
-        system,
-        request.prompt,
-      ]
+    const args = [
+      "-p",
+      "--model",
+      model,
+      "--strict-mcp-config",
+      "--output-format",
+      "json",
+      "--system-prompt",
+      system,
+      request.prompt,
+    ]
 
-      const stdout = execFileSync(this.config.claudePath, args, {
-        encoding: "utf-8",
-        timeout,
-        maxBuffer: 10 * 1024 * 1024,
-      })
+    let lastError: unknown
+    for (let attempt = 0; attempt <= this.config.retries; attempt++) {
+      try {
+        const { stdout } = await execFileAsync(this.config.claudePath, args, {
+          encoding: "utf-8",
+          timeout,
+          maxBuffer: 10 * 1024 * 1024,
+        })
 
-      const parsed = JSON.parse(stdout) as { result?: string }
-      const durationMs = Date.now() - startTime
+        const parsed = JSON.parse(stdout) as { result?: string }
+        const durationMs = Date.now() - startTime
 
-      return {
-        result: parsed.result ?? stdout,
-        durationMs,
+        return {
+          result: parsed.result ?? stdout,
+          durationMs,
+        }
+      } catch (cause) {
+        lastError = cause
+        if (attempt < this.config.retries) {
+          await this.sleep(this.config.retryDelay * (attempt + 1))
+        }
       }
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : String(cause)
-      throw new AICallError(`AI 调用失败: ${message}`, cause)
     }
+
+    const message = lastError instanceof Error ? lastError.message : String(lastError)
+    throw new AICallError(`AI 调用失败: ${message}`, lastError)
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
   /** 生成 AI 调用记录 */
@@ -149,6 +170,13 @@ export class AIClient {
   async quantifyTechDebt(metrics: string): Promise<AIResponse> {
     const system = "你是一个技术债务管理专家。请分析代码复杂度趋势、重复率、依赖老化情况，生成还债优先级列表。"
     const prompt = `请分析以下技术指标：\n\n${metrics}`
+    return this.ask({ prompt, system })
+  }
+
+  /** Checklist 增量推荐 */
+  async recommendChecklistItems(changeScope: string): Promise<AIResponse> {
+    const system = "你是质量保证专家。请根据变更范围推荐需要新增的 checklist 项，输出 JSON 数组，每项包含 category、description。"
+    const prompt = `请为以下变更范围推荐 checklist 项：\n\n${changeScope}`
     return this.ask({ prompt, system })
   }
 

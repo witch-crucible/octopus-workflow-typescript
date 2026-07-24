@@ -12,13 +12,14 @@
 
 import { createMachine } from "xstate"
 import type { WorkflowState, ProjectStatusSummary } from "@octopus/core/workflow.js"
-import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER } from "@octopus/core/phase.js"
+import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER, getPhaseDef } from "@octopus/core/phase.js"
 import type { Task, TaskFilter, TaskProgress } from "@octopus/core/task.js"
 import { TaskStatus } from "@octopus/core/task.js"
+import { StageStatus, StageProgress, StageInfo } from "@octopus/core/task.js"
 import type { Checklist, ChecklistItem } from "@octopus/core/checklist.js"
 import { ChecklistItemStatus } from "@octopus/core/checklist.js"
-import type { HeinrichRecord, HeinrichObservation, HeinrichLevel, QualityAssessment } from "@octopus/core/risk.js"
-import { QualityVerdict, HEINRICH_IDEAL_RATIO, createEmptyHeinrichRecord } from "@octopus/core/risk.js"
+import type { HeinrichRecord, HeinrichObservation, QualityAssessment } from "@octopus/core/risk.js"
+import { QualityVerdict, HEINRICH_IDEAL_RATIO, createEmptyHeinrichRecord, HeinrichLevel } from "@octopus/core/risk.js"
 import type { Artifact, ArtifactType } from "@octopus/core/artifact.js"
 import type { ProjectId } from "@octopus/core/branded-ids.js"
 import { PhaseId, TaskId, ChecklistItemId, ObservationId, ArtifactId } from "@octopus/core/branded-ids.js"
@@ -29,6 +30,7 @@ import { createEmptyChecklist } from "@octopus/core/checklist.js"
 import type { StateStore } from "@octopus/context/index.js"
 import { createTasksForPhase } from "@octopus/task-library/index.js"
 import type { AIClient } from "@octopus/agent-layer/index.js"
+import type { AIEventHandler, AIEventPayload, AIGateResult } from "@octopus/core/agent.js"
 
 /** xstate v5 状态机定义 */
 const workflowMachine = createMachine({
@@ -54,6 +56,12 @@ export interface GateCheckResult {
 export interface WorkflowEngineConfig {
   store: StateStore
   aiClient?: AIClient
+  /** 是否启用严格权限校验 */
+  strictPermissions?: boolean
+  /** AI 门控开关 */
+  aiGatingEnabled?: boolean
+  /** 海因里希条数阈值 */
+  heinrichThreshold?: number
 }
 
 /**
@@ -62,10 +70,22 @@ export interface WorkflowEngineConfig {
 export class WorkflowEngine {
   private readonly store: StateStore
   private readonly aiClient: AIClient | undefined
+  private readonly strictPermissions: boolean
+  private readonly aiGatingEnabled: boolean
+  private readonly heinrichThreshold: number
+  private aiHandlers: Array<(event: {
+    type: "onPhaseAdvance" | "onPhaseRollback"
+    from: Phase
+    to: Phase
+    state: WorkflowState
+  }) => Promise<{ allowed: boolean; reason?: string }> | { allowed: boolean; reason?: string }> = []
 
   constructor(config: WorkflowEngineConfig) {
     this.store = config.store
     this.aiClient = config.aiClient
+    this.strictPermissions = config.strictPermissions ?? false
+    this.aiGatingEnabled = config.aiGatingEnabled ?? false
+    this.heinrichThreshold = config.heinrichThreshold ?? 3
   }
 
   // ── 项目生命周期 ──
@@ -81,6 +101,20 @@ export class WorkflowEngine {
 
     // 初始化海因里希记录
     state.heinrich = createEmptyHeinrichRecord()
+
+    // 初始化阶段步骤运行态
+    const phaseDef = getPhaseDef(state.currentPhase)
+    for (const stage of phaseDef.stages) {
+      state.stages[stage.id] = {
+        stageId: stage.id,
+        phase: state.currentPhase,
+        status: StageStatus.PENDING,
+        dependsOn: stage.dependsOn,
+        responsibleRole: stage.responsibleRoles[0] ?? Role.AI,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+    }
 
     this.store.save(state)
     return state
@@ -138,6 +172,89 @@ export class WorkflowEngine {
     return this.checkAdvanceGate(state)
   }
 
+  // ── AI 门控 ──
+
+  /** 注册 AI 门控处理器 */
+  registerAIHandler(handler: AIEventHandler): void {
+    this.aiHandlers.push(handler)
+  }
+
+  /** 触发 AI 门控事件 */
+  private emitAIEvent(payload: AIEventPayload): AIGateResult {
+    for (const handler of this.aiHandlers) {
+      const result = handler(payload)
+      if (result && !result.allowed) {
+        return result
+      }
+    }
+    return { allowed: true }
+  }
+
+  // ── Stage 生命周期 ──
+
+  /** 更新阶段步骤状态 */
+  updateStageStatus(projectId: string, stageId: string, status: StageStatus): WorkflowState {
+    const state = this.getState(projectId)
+    const stage = state.stages[stageId]
+
+    if (!stage) {
+      throw new Error(`阶段步骤不存在: ${stageId}`)
+    }
+
+    stage.status = status
+    stage.updatedAt = new Date().toISOString()
+    if (status === StageStatus.COMPLETED) {
+      stage.completedAt = new Date().toISOString()
+    }
+
+    this.store.save(state)
+    return state
+  }
+
+  /** 检查阶段步骤依赖是否满足 */
+  private checkStageDependencies(state: WorkflowState, phase: Phase): GateCheckResult {
+    const reasons: string[] = []
+    const phaseStages = Object.values(state.stages).filter((s) => s.phase === phase)
+
+    for (const stage of phaseStages) {
+      if (stage.status === StageStatus.SKIPPED) continue
+      if (stage.dependsOn.length === 0) continue
+
+      const unmet = stage.dependsOn.filter((depId) => {
+        const dep = state.stages[depId]
+        return !dep || dep.status !== StageStatus.COMPLETED
+      })
+
+      if (unmet.length > 0) {
+        reasons.push(`阶段步骤 ${stage.stageId} 依赖未满足: ${unmet.join(", ")}`)
+      }
+    }
+
+    return { allowed: reasons.length === 0, reasons }
+  }
+
+  /** 获取阶段步骤进度 */
+  getStageProgress(projectId: string, phase: Phase): StageProgress {
+    const state = this.getState(projectId)
+    const phaseStages = Object.values(state.stages).filter((s) => s.phase === phase)
+    const total = phaseStages.length
+    const completed = phaseStages.filter((s) => s.status === StageStatus.COMPLETED).length
+    const inProgress = phaseStages.filter((s) => s.status === StageStatus.IN_PROGRESS).length
+    const blocked = phaseStages.filter((s) => s.status === StageStatus.BLOCKED).length
+    const pending = phaseStages.filter((s) => s.status === StageStatus.PENDING).length
+    const skipped = phaseStages.filter((s) => s.status === StageStatus.SKIPPED).length
+
+    return {
+      total,
+      completed,
+      inProgress,
+      blocked,
+      pending,
+      skipped,
+      percent: total > 0 ? Math.round((completed / total) * 100) : 0,
+    }
+  }
+
   private checkAdvanceGate(state: WorkflowState): GateCheckResult {
     const reasons: string[] = []
     const currentPhase = state.currentPhase
@@ -168,7 +285,7 @@ export class WorkflowEngine {
   }
 
   /** 前进到下一阶段 */
-  advancePhase(projectId: string): WorkflowState {
+  async advancePhase(projectId: string, skipAiGating?: boolean): Promise<WorkflowState> {
     const state = this.getState(projectId)
     const gate = this.checkAdvanceGate(state)
 
@@ -176,9 +293,42 @@ export class WorkflowEngine {
       throw new PhaseLockedError(state.currentPhase, gate.reasons)
     }
 
+    // Stage 依赖检查
+    const stageGate = this.checkStageDependencies(state, state.currentPhase)
+    if (!stageGate.allowed) {
+      throw new PhaseLockedError(state.currentPhase, stageGate.reasons)
+    }
+
     const next = getNextPhase(state.currentPhase)
     if (!next) {
       throw new InvalidPhaseTransitionError(state.currentPhase, "NEXT", "已是最终阶段")
+    }
+
+    // AI 门控
+    if (this.aiGatingEnabled && !skipAiGating) {
+      const aiResult = this.emitAIEvent({
+        type: "onPhaseAdvance",
+        from: state.currentPhase,
+        to: next,
+        state,
+      })
+
+      if (!aiResult.allowed) {
+        state.aiGateResults.push({
+          phase: state.currentPhase,
+          allowed: false,
+          reason: aiResult.reason,
+          timestamp: new Date().toISOString(),
+        })
+        this.store.save(state)
+        throw new PhaseLockedError(state.currentPhase, [`AI 门控拒绝: ${aiResult.reason ?? "未通过预检查"}`])
+      }
+
+      state.aiGateResults.push({
+        phase: state.currentPhase,
+        allowed: true,
+        timestamp: new Date().toISOString(),
+      })
     }
 
     // 标记当前阶段为 COMPLETED
@@ -196,8 +346,53 @@ export class WorkflowEngine {
       state.checklists[next] = createEmptyChecklist(next)
     }
 
-    // 海因里希三角：阶段前进时记录计数
-    state.heinrich.majorDefects += 1
+    // Checklist 继承
+    this.inheritChecklist(state, state.currentPhase)
+
+    // 初始化下一阶段 Stage 运行态
+    const nextPhaseDef = getPhaseDef(next)
+    for (const stage of nextPhaseDef.stages) {
+      if (!state.stages[stage.id]) {
+        state.stages[stage.id] = {
+          stageId: stage.id,
+          phase: next,
+          status: StageStatus.PENDING,
+          dependsOn: stage.dependsOn,
+          responsibleRole: stage.responsibleRoles[0] ?? Role.AI,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+      }
+    }
+
+    // 海因里希三角：阶段前进时记录条数触发计数
+    state.heinrich.triggerCounts[next] = (state.heinrich.triggerCounts[next] ?? 0) + 1
+
+    // Heinrich 条数审计触发
+    this.checkHeinrichAuditTrigger(state, next)
+
+    // AI checklist 增量推荐（尽力而为，不阻塞）
+    if (this.aiClient) {
+      try {
+        const scope = `Phase transition from ${state.currentPhase} to ${next}`
+        const recommendation = await this.aiClient.recommendChecklistItems(scope)
+        const parsed = JSON.parse(recommendation.result ?? "[]") as Array<{ category: string; description: string }>
+        const target = state.checklists[next]
+        if (target && Array.isArray(parsed)) {
+          for (const item of parsed) {
+            target.items.push({
+              id: ChecklistItemId(`cl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+              category: item.category ?? "AI Recommended",
+              description: item.description,
+              status: ChecklistItemStatus.PENDING,
+              inherited: false,
+            })
+          }
+        }
+      } catch {
+        // AI 推荐失败不影响阶段前进
+      }
+    }
 
     this.store.save(state)
     return state
@@ -217,6 +412,33 @@ export class WorkflowEngine {
       )
     }
 
+    // AI 门控
+    if (this.aiGatingEnabled) {
+      const aiResult = this.emitAIEvent({
+        type: "onPhaseRollback",
+        from: state.currentPhase,
+        to: targetPhase,
+        state,
+      })
+
+      if (!aiResult.allowed) {
+        state.aiGateResults.push({
+          phase: state.currentPhase,
+          allowed: false,
+          reason: aiResult.reason,
+          timestamp: new Date().toISOString(),
+        })
+        this.store.save(state)
+        throw new PhaseLockedError(state.currentPhase, [`AI 门控拒绝回退: ${aiResult.reason ?? "未通过预检查"}`])
+      }
+
+      state.aiGateResults.push({
+        phase: state.currentPhase,
+        allowed: true,
+        timestamp: new Date().toISOString(),
+      })
+    }
+
     // 锁定当前阶段后的所有阶段
     for (let i = currentIdx; i >= 0; i--) {
       const phase = PHASE_ORDER[i]
@@ -231,6 +453,16 @@ export class WorkflowEngine {
     state.currentPhase = targetPhase
     this.store.save(state)
     return state
+  }
+
+  // ── 权限校验 ──
+
+  /** 校验当前操作角色是否有权限 */
+  private requireRole(projectId: string, taskId: string, userRole: Role, requiredRole: Role): void {
+    if (!this.strictPermissions) return
+    if (userRole !== requiredRole) {
+      throw new Error(`权限不足: 需要角色 ${requiredRole}，当前角色 ${userRole}`)
+    }
   }
 
   // ── 任务操作 ──
@@ -257,12 +489,16 @@ export class WorkflowEngine {
   }
 
   /** 完成任务 */
-  completeTask(projectId: string, taskId: string): WorkflowState {
+  completeTask(projectId: string, taskId: string, role?: Role): WorkflowState {
     const state = this.getState(projectId)
     const task = state.tasks.find((t) => t.id === taskId)
 
     if (!task) {
       throw new Error(`任务不存在: ${taskId}`)
+    }
+
+    if (role) {
+      this.requireRole(projectId, taskId, role, task.responsibleRole)
     }
 
     task.status = TaskStatus.COMPLETED
@@ -333,6 +569,12 @@ export class WorkflowEngine {
       throw new Error(`清单项不存在: ${itemId}`)
     }
 
+    if (role && this.strictPermissions) {
+      if (item.verifiedBy && role !== item.verifiedBy) {
+        throw new Error(`权限不足: 清单项需要角色 ${item.verifiedBy}，当前角色 ${role}`)
+      }
+    }
+
     item.status = ChecklistItemStatus.VERIFIED
     if (role) {
       item.verifiedBy = role
@@ -388,6 +630,43 @@ export class WorkflowEngine {
     return state.heinrich
   }
 
+  /** 记录海因里希条数标记 */
+  logHeinrichMarker(projectId: string, phase: Phase, description?: string): WorkflowState {
+    const state = this.getState(projectId)
+    state.heinrich.triggerCounts[phase] = (state.heinrich.triggerCounts[phase] ?? 0) + 1
+
+    state.heinrich.observations.push({
+      id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+      phase,
+      level: HeinrichLevel.TRIVIAL,
+      description: description ?? `Heinrich marker at ${phase}`,
+      notedAt: new Date().toISOString(),
+    })
+
+    this.store.save(state)
+    return state
+  }
+
+  /** 检查 Heinrich 条数是否达到审计阈值 */
+  private checkHeinrichAuditTrigger(state: WorkflowState, phase: Phase): void {
+    const count = state.heinrich.triggerCounts[phase] ?? 0
+    if (count >= this.heinrichThreshold) {
+      const auditTask: Task = {
+        id: TaskId(`heinrich_audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        stageId: `heinrich.audit.${phase}`,
+        phase,
+        title: `Heinrich 质量审计 - ${phase}`,
+        description: `阶段 ${phase} 的 Heinrich 条数已达到阈值 ${this.heinrichThreshold}，需进行质量评估。`,
+        responsibleRole: Role.HEI,
+        status: TaskStatus.PENDING,
+        artifactIds: [],
+        createdAt: new Date().toISOString(),
+      }
+
+      state.tasks.push(auditTask)
+    }
+  }
+
   /** 记录观测 */
   logObservation(projectId: string, phase: Phase, level: HeinrichLevel, description: string): WorkflowState {
     const state = this.getState(projectId)
@@ -433,7 +712,7 @@ export class WorkflowEngine {
     const trivial = idealRatio["TRIVIAL"]!
 
     if (heinrich.majorDefects === 0) {
-      return {
+      const assessment = {
         expectedMinor: 0,
         expectedTrivial: 0,
         actualMinor: heinrich.minorDefects,
@@ -442,6 +721,40 @@ export class WorkflowEngine {
         trivialRatio: 0,
         verdict: QualityVerdict.INSUFFICIENT_DATA,
       }
+
+      state.heinrich.observations.push({
+        id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        phase: state.currentPhase,
+        level: HeinrichLevel.TRIVIAL,
+        description: `Quality assessment: ${assessment.verdict}`,
+        notedAt: new Date().toISOString(),
+      })
+
+      this.store.save(state)
+      return assessment
+    }
+
+    if (heinrich.minorDefects === 0 && heinrich.trivialDefects === 0) {
+      const assessment = {
+        expectedMinor: 0,
+        expectedTrivial: 0,
+        actualMinor: heinrich.minorDefects,
+        actualTrivial: heinrich.trivialDefects,
+        minorRatio: 0,
+        trivialRatio: 0,
+        verdict: QualityVerdict.INSUFFICIENT_DATA,
+      }
+
+      state.heinrich.observations.push({
+        id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        phase: state.currentPhase,
+        level: HeinrichLevel.TRIVIAL,
+        description: `Quality assessment: ${assessment.verdict}`,
+        notedAt: new Date().toISOString(),
+      })
+
+      this.store.save(state)
+      return assessment
     }
 
     const expectedMinor = heinrich.majorDefects * minor / major
@@ -458,7 +771,7 @@ export class WorkflowEngine {
       verdict = QualityVerdict.HEALTHY
     }
 
-    return {
+    const assessment = {
       expectedMinor,
       expectedTrivial,
       actualMinor: heinrich.minorDefects,
@@ -466,6 +779,47 @@ export class WorkflowEngine {
       minorRatio,
       trivialRatio,
       verdict,
+    }
+
+    state.heinrich.observations.push({
+      id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+      phase: state.currentPhase,
+      level: HeinrichLevel.TRIVIAL,
+      description: `Quality assessment: ${verdict} (minorRatio=${minorRatio.toFixed(2)}, trivialRatio=${trivialRatio.toFixed(2)})`,
+      notedAt: new Date().toISOString(),
+    })
+
+    this.store.save(state)
+    return assessment
+  }
+
+  // ── Checklist 继承 ──
+
+  /** 继承上一阶段清单到当前阶段 */
+  private inheritChecklist(state: WorkflowState, currentPhase: Phase): void {
+    const previous = getPreviousPhase(currentPhase)
+    if (!previous) return
+
+    const source = state.checklists[previous]
+    if (!source) return
+
+    if (!state.checklists[currentPhase]) {
+      state.checklists[currentPhase] = createEmptyChecklist(currentPhase)
+    }
+
+    const target = state.checklists[currentPhase]
+    if (!target) return
+
+    for (const item of source.items) {
+      if (item.status === ChecklistItemStatus.VERIFIED || item.status === ChecklistItemStatus.NA) {
+        target.items.push({
+          ...item,
+          id: ChecklistItemId(`cl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+          status: item.status,
+          inherited: true,
+          notes: `${item.notes ?? ""} Inherited from ${previous}`.trim(),
+        })
+      }
     }
   }
 

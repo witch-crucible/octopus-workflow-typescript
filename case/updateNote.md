@@ -1,0 +1,13 @@
+curl 'https://www.teambition.com/version-manage/api/v1/repositories/5f06b7255c00c934f6cb0761/versions/6a31fd31ba6edd8cf540470f/note' \
+  -X 'PUT' \
+  -H 'x-request-id: a3e84532-be71-4d49-ac0f-8a1ab08266f5' \
+  -H 'sec-ch-ua-platform: "macOS"' \
+  -H 'Referer: https://www.teambition.com/project/5ed77da84d9f550021c1dd88/plugin/66827e547ecd42002b015ad3/repo/5f06b7255c00c934f6cb0761/version/6a31fd31ba6edd8cf540470f' \
+  -H 'sec-ch-ua: "Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"' \
+  -H 'x-timezone: 8' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -H 'x-tenant-id: 5a30c1688a4d91000158ce4f' \
+  --data-raw '{"note":"https://doc.weixin.qq.com/sheet/e3_AZUArwZNANoCNyv2aMQFiSMOZY4lE?scode=AMsAhQehACI5KSQCS7AZUArwZNANo&tab=000001"}'

@@ -16,39 +16,46 @@
  */
 
 import { Command } from "commander"
-import { createStateStore } from "@octopus/context/index.js"
-import { WorkflowEngine } from "@octopus/workflow-engine/index.js"
-import { createAIClient } from "@octopus/agent-layer/index.js"
+import { loadConfig, createWorkflowEngineFromConfig } from "@octopus/context/index.js"
 import { buildInitCommand } from "./commands/init.js"
 import { buildStatusCommand } from "./commands/status.js"
 import { buildPhaseCommands } from "./commands/phase.js"
 import { buildTaskCommands } from "./commands/task.js"
 import { buildChecklistCommands } from "./commands/checklist.js"
 import { buildHeinrichCommands } from "./commands/heinrich.js"
+import { buildStageCommands } from "./commands/stage.js"
 import { buildAiCommands } from "./commands/ai.js"
 
-const store = createStateStore()
-const engine = new WorkflowEngine({ store, aiClient: createAIClient() })
+async function main(): Promise<void> {
+  const config = loadConfig()
+  const engine = await createWorkflowEngineFromConfig(config)
 
-const program = new Command()
+  const program = new Command()
 
-program
-  .name("octopus")
-  .description("AI 项目流程自动化引擎 — AI-assisted software development workflow orchestration")
-  .version("0.1.0")
+  program
+    .name("octopus")
+    .description("AI 项目流程自动化引擎 — AI-assisted software development workflow orchestration")
+    .version("0.1.0")
 
-// 注册子命令
-buildInitCommand(program, engine)
-buildStatusCommand(program, engine)
-buildPhaseCommands(program, engine)
-buildTaskCommands(program, engine)
-buildChecklistCommands(program, engine)
-buildHeinrichCommands(program, engine)
-buildAiCommands(program, engine, store)
+  // 注册子命令
+  buildInitCommand(program, engine)
+  buildStatusCommand(program, engine)
+  buildPhaseCommands(program, engine)
+  buildTaskCommands(program, engine)
+  buildChecklistCommands(program, engine)
+  buildHeinrichCommands(program, engine)
+  buildStageCommands(program, engine)
+  buildAiCommands(program, engine)
 
-program.parse(process.argv)
+  program.parse(process.argv)
 
-// 未指定命令时显示帮助
-if (!process.argv.slice(2).length) {
-  program.outputHelp()
+  // 未指定命令时显示帮助
+  if (!process.argv.slice(2).length) {
+    program.outputHelp()
+  }
 }
+
+main().catch((err) => {
+  console.error("❌ CLI 启动失败:", err)
+  process.exit(1)
+})

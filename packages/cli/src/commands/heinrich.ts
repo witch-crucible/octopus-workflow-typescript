@@ -24,34 +24,51 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
     .description("展示海因里希三角")
     .argument("[projectId]", "项目 ID")
     .option("--observations", "同时显示观测记录")
-    .action((projectId?: string, options?: { observations?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
-      if (!pid) return
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId?: string, options?: { observations?: boolean; json?: boolean }) => {
+      try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
 
-      const record = engine.getHeinrichRecord(pid)
+        const record = engine.getHeinrichRecord(pid)
 
-      console.log("\n🔺 海因里希三角 (Heinrich's Triangle)")
-      console.log(`   重大缺陷 (MAJOR):   ${record.majorDefects}`)
-      console.log(`   轻微缺陷 (MINOR):   ${record.minorDefects}`)
-      console.log(`   未遂/轻微 (TRIVIAL): ${record.trivialDefects}`)
-
-      // 显示 1:29:300 比例
-      if (record.majorDefects > 0) {
-        const idealMinor = record.majorDefects * 29
-        const idealTrivial = record.majorDefects * 300
-        console.log(`\n   理想比例 1:29:300 对照:`)
-        console.log(`   预期轻微缺陷: ${idealMinor}  (实际: ${record.minorDefects})`)
-        console.log(`   预期未遂事件: ${idealTrivial}  (实际: ${record.trivialDefects})`)
-      }
-
-      if (options?.observations && record.observations.length > 0) {
-        console.log("\n   观测记录:")
-        for (const obs of record.observations) {
-          const resolved = obs.resolvedAt ? "✅ 已解决" : "⬜ 待解决"
-          console.log(`   [${obs.level}] ${obs.description} (${obs.phase}) ${resolved}`)
+        if (options?.json) {
+          console.log(JSON.stringify({
+            projectId: pid,
+            majorDefects: record.majorDefects,
+            minorDefects: record.minorDefects,
+            trivialDefects: record.trivialDefects,
+            observations: options.observations ? record.observations : undefined,
+          }, null, 2))
+          return
         }
+
+        console.log("\n🔺 海因里希三角 (Heinrich's Triangle)")
+        console.log(`   重大缺陷 (MAJOR):   ${record.majorDefects}`)
+        console.log(`   轻微缺陷 (MINOR):   ${record.minorDefects}`)
+        console.log(`   未遂/轻微 (TRIVIAL): ${record.trivialDefects}`)
+
+        // 显示 1:29:300 比例
+        if (record.majorDefects > 0) {
+          const idealMinor = record.majorDefects * 29
+          const idealTrivial = record.majorDefects * 300
+          console.log(`\n   理想比例 1:29:300 对照:`)
+          console.log(`   预期轻微缺陷: ${idealMinor}  (实际: ${record.minorDefects})`)
+          console.log(`   预期未遂事件: ${idealTrivial}  (实际: ${record.trivialDefects})`)
+        }
+
+        if (options?.observations && record.observations.length > 0) {
+          console.log("\n   观测记录:")
+          for (const obs of record.observations) {
+            const resolved = obs.resolvedAt ? "✅ 已解决" : "⬜ 待解决"
+            console.log(`   [${obs.level}] ${obs.description} (${obs.phase}) ${resolved}`)
+          }
+        }
+        console.log()
+      } catch (err) {
+        console.error(`❌ 获取海因里希三角失败: ${(err as Error).message}`)
+        process.exit(1)
       }
-      console.log()
     })
 
   // ── heinrich log ──
@@ -62,23 +79,44 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
     .argument("<description>", "描述")
     .argument("[phase]", "所属阶段（默认为当前阶段）")
     .argument("[projectId]", "项目 ID")
-    .action((level: string, description: string, phaseName?: string, projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
-      if (!pid) return
+    .option("--json", "以 JSON 格式输出")
+    .action((level: string, description: string, phaseName?: string, projectId?: string, options?: { json?: boolean }) => {
+      try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
 
-      const heinrichLevel = Object.values(HeinrichLevel).find((l) => l === level.toUpperCase())
-      if (!heinrichLevel) {
-        console.error(`❌ 无效等级: ${level}。可选: MAJOR, MINOR, TRIVIAL`)
-        return
+        const heinrichLevel = Object.values(HeinrichLevel).find((l) => l === level.toUpperCase())
+        if (!heinrichLevel) {
+          console.error(`❌ 无效等级: ${level}。可选: MAJOR, MINOR, TRIVIAL`)
+          process.exit(1)
+          return
+        }
+
+        const state = engine.getState(pid)
+        const phase = phaseName
+          ? (Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase()) ?? state.currentPhase)
+          : state.currentPhase
+
+        const updated = engine.logObservation(pid, phase, heinrichLevel, description)
+
+        if (options?.json) {
+          console.log(JSON.stringify({
+            projectId: pid,
+            level: heinrichLevel,
+            description,
+            phase,
+            majorDefects: updated.heinrich.majorDefects,
+            minorDefects: updated.heinrich.minorDefects,
+            trivialDefects: updated.heinrich.trivialDefects,
+          }, null, 2))
+          return
+        }
+
+        console.log(`✅ 已记录 ${heinrichLevel} 风险: ${description}`)
+      } catch (err) {
+        console.error(`❌ 记录风险观测失败: ${(err as Error).message}`)
+        process.exit(1)
       }
-
-      const state = engine.getState(pid)
-      const phase = phaseName
-        ? (Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase()) ?? state.currentPhase)
-        : state.currentPhase
-
-      engine.logObservation(pid, phase, heinrichLevel, description)
-      console.log(`✅ 已记录 ${heinrichLevel} 风险: ${description}`)
     })
 
   // ── heinrich resolve ──
@@ -87,15 +125,64 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
     .description("解决风险观测")
     .argument("<obsId>", "观测 ID")
     .argument("[projectId]", "项目 ID")
-    .action((obsId: string, projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
-      if (!pid) return
-
+    .option("--json", "以 JSON 格式输出")
+    .action((obsId: string, projectId?: string, options?: { json?: boolean }) => {
       try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
+
         engine.resolveObservation(pid, obsId)
+
+        if (options?.json) {
+          console.log(JSON.stringify({
+            projectId: pid,
+            obsId,
+            resolved: true,
+          }, null, 2))
+          return
+        }
+
         console.log(`✅ 观测已解决: ${obsId}`)
       } catch (err) {
         console.error(`❌ ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  // ── heinrich marker ──
+  heinrichCmd
+    .command("marker")
+    .description("记录海因里希条数标记")
+    .argument("[phase]", "所属阶段（默认当前阶段）")
+    .argument("[projectId]", "项目 ID")
+    .option("--description <text>", "标记描述")
+    .option("--json", "以 JSON 格式输出")
+    .action((phaseName?: string, projectId?: string, options?: { description?: string; json?: boolean }) => {
+      try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
+
+        const state = engine.getState(pid)
+        const phase = phaseName
+          ? (Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase()) ?? state.currentPhase)
+          : state.currentPhase
+
+        const updated = engine.logHeinrichMarker(pid, phase, options?.description)
+
+        if (options?.json) {
+          console.log(JSON.stringify({
+            projectId: pid,
+            phase,
+            triggerCount: updated.heinrich.triggerCounts[phase],
+            description: options?.description,
+          }, null, 2))
+          return
+        }
+
+        console.log(`✅ 已记录 Heinrich marker: ${phase} (triggerCount=${updated.heinrich.triggerCounts[phase]})`)
+      } catch (err) {
+        console.error(`❌ 记录 marker 失败: ${(err as Error).message}`)
+        process.exit(1)
       }
     })
 
@@ -104,26 +191,46 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
     .command("assess")
     .description("质量评估")
     .argument("[projectId]", "项目 ID")
-    .action((projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
-      if (!pid) return
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId?: string, options?: { json?: boolean }) => {
+      try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
 
-      const assessment = engine.assessQuality(pid)
+        const assessment = engine.assessQuality(pid)
 
-      const verdictLabels: Record<string, string> = {
-        HEALTHY: "✅ 健康 — 比例接近 1:29:300",
-        UNDER_REPORTING: "⚠️  漏报 — 轻微/未遂记录不足，可能存在隐性问题",
-        OVER_REPORTING: "⚠️  过报 — 轻微/未遂记录过多",
-        INSUFFICIENT_DATA: "ℹ️  数据不足 — 无重大缺陷记录",
+        if (options?.json) {
+          console.log(JSON.stringify({
+            projectId: pid,
+            expectedMinor: assessment.expectedMinor,
+            expectedTrivial: assessment.expectedTrivial,
+            actualMinor: assessment.actualMinor,
+            actualTrivial: assessment.actualTrivial,
+            minorRatio: assessment.minorRatio,
+            trivialRatio: assessment.trivialRatio,
+            verdict: assessment.verdict,
+          }, null, 2))
+          return
+        }
+
+        const verdictLabels: Record<string, string> = {
+          HEALTHY: "✅ 健康 — 比例接近 1:29:300",
+          UNDER_REPORTING: "⚠️  漏报 — 轻微/未遂记录不足，可能存在隐性问题",
+          OVER_REPORTING: "⚠️  过报 — 轻微/未遂记录过多",
+          INSUFFICIENT_DATA: "ℹ️  数据不足 — 无重大缺陷记录",
+        }
+
+        console.log("\n📊 质量评估 (Heinrich's Triangle)")
+        console.log(`   预期轻微: ${assessment.expectedMinor.toFixed(1)}  实际: ${assessment.actualMinor}`)
+        console.log(`   预期未遂: ${assessment.expectedTrivial.toFixed(1)}  实际: ${assessment.actualTrivial}`)
+        console.log(`   轻微比例: ${(assessment.minorRatio * 100).toFixed(1)}%`)
+        console.log(`   未遂比例: ${(assessment.trivialRatio * 100).toFixed(1)}%`)
+        console.log(`\n   结论: ${verdictLabels[assessment.verdict] ?? assessment.verdict}`)
+        console.log()
+      } catch (err) {
+        console.error(`❌ 质量评估失败: ${(err as Error).message}`)
+        process.exit(1)
       }
-
-      console.log("\n📊 质量评估 (Heinrich's Triangle)")
-      console.log(`   预期轻微: ${assessment.expectedMinor.toFixed(1)}  实际: ${assessment.actualMinor}`)
-      console.log(`   预期未遂: ${assessment.expectedTrivial.toFixed(1)}  实际: ${assessment.actualTrivial}`)
-      console.log(`   轻微比例: ${(assessment.minorRatio * 100).toFixed(1)}%`)
-      console.log(`   未遂比例: ${(assessment.trivialRatio * 100).toFixed(1)}%`)
-      console.log(`\n   结论: ${verdictLabels[assessment.verdict] ?? assessment.verdict}`)
-      console.log()
     })
 }
 
@@ -131,7 +238,8 @@ function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | 
   if (projectId) return projectId
   const projects = engine["store"].listProjects()
   if (projects.length === 0) {
-    console.log("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
+    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
+    process.exit(1)
     return null
   }
   return projects[0] ?? null

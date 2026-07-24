@@ -17,7 +17,7 @@ import type { StateStore } from "@octopus/context/index.js"
 export function buildAiCommands(
   program: Command,
   engine: WorkflowEngine,
-  _store: StateStore,
+  _store?: StateStore,
 ): void {
   const aiCmd = program
     .command("ai")
@@ -28,10 +28,19 @@ export function buildAiCommands(
     .command("ask")
     .description("询问 AI")
     .argument("<prompt>", "问题或指令")
-    .action(async (prompt: string) => {
+    .option("--json", "以 JSON 格式输出")
+    .action(async (prompt: string, options?: { json?: boolean }) => {
       try {
-        console.log("🤖 AI 思考中...")
         // 注意：实际项目中 AIClient 应从 engine 获取
+        if (options?.json) {
+          console.log(JSON.stringify({
+            prompt,
+            result: "AI 集成需要配置 claude CLI。请确保已安装并登录 Claude。运行: claude login",
+            durationMs: 0,
+          }, null, 2))
+          return
+        }
+        console.log("🤖 AI 思考中...")
         console.log(`📝 问题: ${prompt}`)
         console.log("ℹ️  AI 集成需要配置 claude CLI。请确保已安装并登录 Claude。")
         console.log("   运行: claude login")
@@ -45,9 +54,18 @@ export function buildAiCommands(
     .command("review")
     .description("AI Code Review")
     .argument("[projectId]", "项目 ID")
-    .action(async (projectId?: string) => {
+    .option("--json", "以 JSON 格式输出")
+    .action(async (projectId?: string, options?: { json?: boolean }) => {
       const pid = resolveProjectId(engine, projectId)
       if (!pid) return
+
+      if (options?.json) {
+        console.log(JSON.stringify({
+          projectId: pid,
+          result: "此功能需要读取 git diff 并调用 claude CLI。确保 claude CLI 已安装并登录。",
+        }, null, 2))
+        return
+      }
 
       console.log("🤖 AI Code Review 中...")
       console.log("   此功能需要读取 git diff 并调用 claude CLI。")
@@ -59,10 +77,19 @@ export function buildAiCommands(
     .command("estimate")
     .description("AI 估时")
     .argument("[projectId]", "项目 ID")
-    .action(async (projectId?: string) => {
+    .option("--json", "以 JSON 格式输出")
+    .action(async (projectId?: string, options?: { json?: boolean }) => {
       const pid = resolveProjectId(engine, projectId)
       if (!pid) {
         console.log("⚠️  未指定项目 ID。")
+        return
+      }
+
+      if (options?.json) {
+        console.log(JSON.stringify({
+          projectId: pid,
+          result: "此功能需要 PRD 内容作为输入并调用 claude CLI。",
+        }, null, 2))
         return
       }
 
@@ -76,7 +103,16 @@ export function buildAiCommands(
     .command("check-sql")
     .description("AI SQL 风险检测")
     .argument("<sql>", "SQL 内容")
-    .action(async (sql: string) => {
+    .option("--json", "以 JSON 格式输出")
+    .action(async (sql: string, options?: { json?: boolean }) => {
+      if (options?.json) {
+        console.log(JSON.stringify({
+          sql,
+          result: "此功能需要调用 claude CLI。",
+        }, null, 2))
+        return
+      }
+
       console.log("🤖 AI SQL 风险检测中...")
       console.log(`   SQL: ${sql.substring(0, 100)}${sql.length > 100 ? "..." : ""}`)
       console.log("   此功能需要调用 claude CLI。")
@@ -87,9 +123,18 @@ export function buildAiCommands(
     .command("debt")
     .description("AI 技术债务量化")
     .argument("[projectId]", "项目 ID")
-    .action(async (projectId?: string) => {
+    .option("--json", "以 JSON 格式输出")
+    .action(async (projectId?: string, options?: { json?: boolean }) => {
       const pid = resolveProjectId(engine, projectId)
       if (!pid) return
+
+      if (options?.json) {
+        console.log(JSON.stringify({
+          projectId: pid,
+          result: "此功能需要分析代码指标并调用 claude CLI。",
+        }, null, 2))
+        return
+      }
 
       console.log("🤖 AI 技术债务量化中...")
       console.log("   此功能需要分析代码指标并调用 claude CLI。")

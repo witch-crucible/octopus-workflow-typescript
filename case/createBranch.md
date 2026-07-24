@@ -1,0 +1,20 @@
+curl 'https://git.d1m.cn/dior-ec/cdc-middleground/middleground/-/branches' \
+  -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' \
+  -H 'Accept-Language: en,zh-CN;q=0.9,zh;q=0.8' \
+  -H 'Cache-Control: no-cache' \
+  -H 'Connection: keep-alive' \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -b 'diff_view=parallel; visitor_id=d187cc42-8c34-4a4a-a7a2-464ce6070eed; sidebar_collapsed=false; remember_user_token=eyJfcmFpbHMiOnsibWVzc2FnZSI6Ilcxc3hORFpkTENJa01tRWtNVEFrVkZGcGVVNXRTbXBPVVc0MFJra3pTRzVaTVZKWlR5SXNJakUzT0RRd01USXpNalF1TkRFeE5qazNOaUpkIiwiZXhwIjoiMjAyNi0wNy0yOFQwNjo1ODo0NC40MTFaIiwicHVyIjoiY29va2llLnJlbWVtYmVyX3VzZXJfdG9rZW4ifX0%3D--424fa893355143b0e7f510c6bc59c9c1609f9501; _gitlab_session=7ca13d15c0f6d39960e5dfbc0e749483; event_filter=all' \
+  -H 'Origin: https://git.d1m.cn' \
+  -H 'Pragma: no-cache' \
+  -H 'Referer: https://git.d1m.cn/dior-ec/cdc-middleground/middleground/-/branches/new' \
+  -H 'Sec-Fetch-Dest: document' \
+  -H 'Sec-Fetch-Mode: navigate' \
+  -H 'Sec-Fetch-Site: same-origin' \
+  -H 'Sec-Fetch-User: ?1' \
+  -H 'Upgrade-Insecure-Requests: 1' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36' \
+  -H 'sec-ch-ua: "Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "macOS"' \
+  --data-raw 'utf8=%E2%9C%93&authenticity_token=r%2FTivKxj9REXjFNzyhgNtIbUAV8iytLt0UJ7Z6lfWmIdPm%2FE11xRc%2FTd6y%2BNQr9Du33dMvZpvObfLKvStmGpVw%3D%3D&branch_name=prerelease%2F20260716.01-daily&ref=prod'

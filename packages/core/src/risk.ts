@@ -65,6 +65,8 @@ export interface HeinrichRecord {
   trivialDefects: number
   /** 观测记录列表 */
   observations: HeinrichObservation[]
+  /** 各阶段海因里希条数触发计数 */
+  triggerCounts: Record<Phase, number>
 }
 
 /** 质量评估结果 */
@@ -92,10 +94,16 @@ export interface QualityAssessment {
 
 /** 创建一个空白海因里希记录 */
 export function createEmptyHeinrichRecord(): HeinrichRecord {
+  const triggerCounts = {} as Record<Phase, number>
+  for (const phase of Object.values(Phase)) {
+    triggerCounts[phase] = 0
+  }
+
   return {
     majorDefects: 0,
     minorDefects: 0,
     trivialDefects: 0,
     observations: [],
+    triggerCounts,
   }
 }

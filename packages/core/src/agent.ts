@@ -6,6 +6,8 @@
  */
 
 import type { AgentCallId } from "./branded-ids.js"
+import type { WorkflowState } from "./workflow.js"
+import { Phase } from "./phase.js"
 
 /** AI 请求参数 */
 export interface AIRequest {
@@ -88,3 +90,23 @@ export const AI_ASSISTANT_LABELS: Record<AIAssistantType, string> = {
   [AIAssistantType.SETUP_CHECKLIST_CHECK]: "Setup Checklist 校验",
   [AIAssistantType.CHECKLIST_RECOMMENDATION]: "Checklist 增量推荐",
 }
+
+/** AI 门控事件类型 */
+export type AIEventType = "onPhaseAdvance" | "onPhaseRollback"
+
+/** AI 门控事件载荷 */
+export interface AIEventPayload {
+  type: AIEventType
+  from: Phase
+  to: Phase
+  state: WorkflowState
+}
+
+/** AI 门控处理器返回值 */
+export interface AIGateResult {
+  allowed: boolean
+  reason?: string
+}
+
+/** AI 门控处理器类型 */
+export type AIEventHandler = (payload: AIEventPayload) => Promise<AIGateResult> | AIGateResult

@@ -120,3 +120,6 @@ export function createDeploymentChecklist(): DeploymentChecklist {
     services: { email: false, wechatTemplate: false, payment: false, thirdPartyInterfaces: [] },
   }
 }
+
+export { GitClient, createGitClient } from "./git.js"
+export type { GitIntegrationConfig } from "./git.js"
