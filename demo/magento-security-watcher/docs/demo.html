@@ -1,0 +1,1429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Magento Security Watcher — 演示</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #070b10;
+      --bg-mid: #0d141c;
+      --surface: rgba(18, 28, 40, 0.82);
+      --surface-solid: #121c28;
+      --ink: #e8eef4;
+      --muted: #8b9aab;
+      --accent: #2ec4b6;
+      --accent-deep: #1a9f94;
+      --accent-bright: #5eead4;
+      --line: rgba(232, 238, 244, 0.08);
+      --line-strong: rgba(232, 238, 244, 0.16);
+      --font: "IBM Plex Sans", "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      font-family: var(--font);
+      color: var(--ink);
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(ellipse 90% 55% at 50% -15%, rgba(46, 196, 182, 0.16), transparent 55%),
+        radial-gradient(ellipse 45% 50% at 100% 30%, rgba(56, 100, 160, 0.14), transparent 50%),
+        radial-gradient(ellipse 40% 45% at 0% 85%, rgba(30, 80, 100, 0.18), transparent 55%),
+        linear-gradient(165deg, #0a1018 0%, var(--bg) 42%, #05080c 100%);
+    }
+
+    /* Technical hatch — distinct from product square grid */
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background-image:
+        repeating-linear-gradient(
+          -18deg,
+          transparent 0,
+          transparent 11px,
+          rgba(232, 238, 244, 0.045) 11px,
+          rgba(232, 238, 244, 0.045) 12px
+        ),
+        repeating-linear-gradient(
+          72deg,
+          transparent 0,
+          transparent 47px,
+          rgba(46, 196, 182, 0.055) 47px,
+          rgba(46, 196, 182, 0.055) 48px
+        );
+      mask-image: radial-gradient(ellipse 85% 80% at 50% 45%, #000 25%, transparent 82%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        linear-gradient(rgba(7, 11, 16, 0.35) 0%, transparent 18%, transparent 82%, rgba(7, 11, 16, 0.55) 100%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .frame {
+      position: fixed;
+      inset: 0.85rem;
+      border: 1px solid var(--line-strong);
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    .frame::before,
+    .frame::after,
+    .frame .c3,
+    .frame .c4 {
+      content: "";
+      position: absolute;
+      width: 1.1rem;
+      height: 1.1rem;
+      border-color: var(--accent);
+      border-style: solid;
+    }
+
+    .frame::before {
+      top: -1px; left: -1px;
+      border-width: 2px 0 0 2px;
+    }
+    .frame::after {
+      top: -1px; right: -1px;
+      border-width: 2px 2px 0 0;
+    }
+    .frame .c3 {
+      bottom: -1px; left: -1px;
+      border-width: 0 0 2px 2px;
+    }
+    .frame .c4 {
+      bottom: -1px; right: -1px;
+      border-width: 0 2px 2px 0;
+    }
+
+    .topbar {
+      position: fixed;
+      top: 1.15rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    .topbar .pulse {
+      width: 0.4rem;
+      height: 0.4rem;
+      background: var(--accent-bright);
+      animation: pulse 2.2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+
+    .deck {
+      position: relative;
+      height: 100%;
+      width: 100%;
+      z-index: 1;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: clamp(3.25rem, 6vh, 4.25rem) clamp(1.5rem, 3vw, 2.5rem) 5.25rem;
+      opacity: 0;
+    }
+
+    .slide.active {
+      display: flex;
+      opacity: 1;
+      animation: enter 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    @keyframes enter {
+      from { opacity: 0; transform: translateY(14px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .slide-inner {
+      width: min(78rem, 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .slide-inner.wide { width: min(87rem, 100%); }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.7rem;
+      margin: 0 0 1.25rem;
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      font-weight: 500;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .eyebrow::before,
+    .eyebrow::after {
+      content: "";
+      width: 2.4rem;
+      height: 1px;
+      background: var(--accent);
+      opacity: 0.7;
+    }
+
+    h1, h2 {
+      margin: 0;
+      font-weight: 700;
+      letter-spacing: -0.035em;
+      line-height: 1.12;
+    }
+
+    h1 {
+      font-size: clamp(2.8rem, 5.8vw, 4.6rem);
+      margin-bottom: 1.25rem;
+    }
+
+    h2 {
+      font-size: clamp(2rem, 3.8vw, 3.3rem);
+      margin-bottom: 1.75rem;
+      max-width: 57rem;
+    }
+
+    h2::after {
+      content: "";
+      display: block;
+      width: 3.5rem;
+      height: 2px;
+      margin: 1.15rem auto 0;
+      background: var(--accent);
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 54rem;
+      font-size: clamp(1.2rem, 2.2vw, 1.7rem);
+      color: var(--muted);
+      line-height: 1.6;
+      font-weight: 450;
+    }
+
+    .brand-sub {
+      margin: 0 0 1rem;
+      font-family: var(--mono);
+      font-size: 0.95rem;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      color: var(--accent);
+    }
+
+    .tagline {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.5rem 0.4rem;
+      margin-top: 2.1rem;
+      max-width: 60rem;
+    }
+
+    .tagline span {
+      font-family: var(--mono);
+      font-size: 0.95rem;
+      font-weight: 500;
+      padding: 0.55rem 0.95rem;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      color: var(--ink);
+    }
+
+    .tagline .sep {
+      border: none;
+      background: transparent;
+      color: var(--accent);
+      padding: 0.55rem 0.2rem;
+    }
+
+    ul.clean {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      width: min(51rem, 100%);
+      text-align: left;
+    }
+
+    ul.clean li {
+      display: grid;
+      grid-template-columns: 2.6rem 1fr;
+      gap: 1.05rem;
+      padding: 1.1rem 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 1.28rem;
+      line-height: 1.5;
+    }
+
+    ul.clean li:last-child { border-bottom: none; }
+
+    ul.clean li .idx {
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--accent);
+      padding-top: 0.35rem;
+      letter-spacing: 0.04em;
+    }
+
+    ul.clean strong { font-weight: 650; }
+
+    ul.goals {
+      width: min(44rem, 100%);
+    }
+
+    ul.goals li {
+      grid-template-columns: 2.4rem 1fr auto;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    ul.goals li .mark {
+      width: 1.65rem;
+      height: 1.65rem;
+      border: 2px solid;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    ul.goals li.in .mark {
+      border-color: var(--accent);
+      background: rgba(46, 196, 182, 0.12);
+    }
+
+    ul.goals li.in .mark::after {
+      content: "";
+      position: absolute;
+      left: 0.42rem;
+      top: 0.18rem;
+      width: 0.38rem;
+      height: 0.72rem;
+      border: solid var(--accent);
+      border-width: 0 2px 2px 0;
+      transform: rotate(40deg);
+    }
+
+    ul.goals li.out {
+      opacity: 0.92;
+      border-bottom-color: rgba(196, 100, 90, 0.35);
+    }
+
+    ul.goals li.out .mark {
+      border-color: #d08070;
+      background: rgba(176, 80, 70, 0.12);
+    }
+
+    ul.goals li.out .mark::before,
+    ul.goals li.out .mark::after {
+      content: "";
+      position: absolute;
+      width: 0.95rem;
+      height: 2px;
+      background: #d08070;
+      left: 50%;
+      top: 50%;
+    }
+
+    ul.goals li.out .mark::before { transform: translate(-50%, -50%) rotate(45deg); }
+    ul.goals li.out .mark::after { transform: translate(-50%, -50%) rotate(-45deg); }
+
+    ul.goals li .body strong {
+      display: block;
+      margin-bottom: 0.2rem;
+    }
+
+    ul.goals li .body .sub {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    ul.goals li .tag {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      padding: 0.35rem 0.55rem;
+      white-space: nowrap;
+      border: 1px solid;
+    }
+
+    ul.goals li.in .tag {
+      color: var(--accent-bright);
+      border-color: rgba(46, 196, 182, 0.45);
+      background: rgba(46, 196, 182, 0.1);
+    }
+
+    ul.goals li.out .tag {
+      color: #e0a090;
+      border-color: rgba(208, 128, 112, 0.45);
+      background: rgba(176, 80, 70, 0.1);
+    }
+
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 0.55rem;
+      margin: 0.35rem 0 1.85rem;
+    }
+
+    .flow .step {
+      font-family: var(--mono);
+      font-size: 1.1rem;
+      font-weight: 600;
+      padding: 0.85rem 1.35rem;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      border-bottom: 2px solid var(--accent);
+    }
+
+    .flow .arrow {
+      color: var(--accent);
+      font-family: var(--mono);
+      font-weight: 600;
+      font-size: 1.2rem;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+      width: min(48rem, 100%);
+      margin-top: 2.1rem;
+    }
+
+    @media (max-width: 560px) {
+      .metrics { grid-template-columns: 1fr; }
+    }
+
+    .metric {
+      position: relative;
+      padding: 1.45rem 1.15rem 1.25rem;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      backdrop-filter: blur(8px);
+    }
+
+    .metric::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--accent);
+    }
+
+    .metric .n {
+      font-family: var(--mono);
+      font-size: 2.9rem;
+      font-weight: 600;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .metric .l {
+      margin-top: 0.55rem;
+      font-size: 0.95rem;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+    }
+
+    table.qty {
+      width: min(42rem, 100%);
+      border-collapse: collapse;
+      margin-top: 0.35rem;
+      text-align: left;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+    }
+
+    table.qty th,
+    table.qty td {
+      padding: 1.05rem 1.4rem;
+      border-bottom: 1px solid var(--line);
+      font-size: 1.2rem;
+    }
+
+    table.qty tr:last-child td { border-bottom: none; }
+
+    table.qty th {
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: rgba(46, 196, 182, 0.08);
+    }
+
+    table.qty td.num {
+      font-family: var(--mono);
+      font-weight: 600;
+      text-align: right;
+      width: 9.5rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.1rem;
+      width: 100%;
+      max-width: 60rem;
+      text-align: left;
+      margin-top: 0.35rem;
+    }
+
+    @media (max-width: 720px) {
+      .split { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      padding: 1.45rem 1.5rem 1.5rem;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      backdrop-filter: blur(8px);
+    }
+
+    .panel.accent-edge {
+      border-top: 2px solid var(--accent);
+    }
+
+    .panel.dim-edge {
+      border-top: 2px solid var(--line-strong);
+    }
+
+    .panel h3 {
+      margin: 0 0 0.9rem;
+      font-family: var(--mono);
+      font-size: 0.88rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .panel.dim-edge h3 { color: var(--muted); }
+
+    .panel ul {
+      margin: 0;
+      padding-left: 1.2rem;
+      line-height: 1.7;
+      color: var(--ink);
+      font-size: 1.2rem;
+    }
+
+    .arch-wrap {
+      width: 100%;
+      margin-top: 0.45rem;
+      padding: 1.1rem 1.15rem 1.2rem;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      text-align: left;
+    }
+
+    .arch-layers {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .arch-row {
+      display: grid;
+      grid-template-columns: 5.5rem 1fr;
+      gap: 0.75rem;
+      align-items: stretch;
+    }
+
+    .arch-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      border: 1px solid rgba(46, 196, 182, 0.35);
+      background: rgba(46, 196, 182, 0.08);
+      writing-mode: horizontal-tb;
+      text-align: center;
+      padding: 0.4rem 0.25rem;
+    }
+
+    .arch-label.mod {
+      color: #8eb4f0;
+      border-color: rgba(107, 143, 212, 0.55);
+      background: rgba(28, 39, 68, 0.9);
+    }
+
+    .arch-label.mid {
+      color: #e0b85c;
+      border-color: rgba(196, 163, 90, 0.55);
+      background: rgba(42, 36, 24, 0.95);
+    }
+
+    .arch-label.svc {
+      color: #9aa8b8;
+      border-color: #3d5166;
+      background: #121820;
+    }
+
+    .arch-cells {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: stretch;
+    }
+
+    .arch-cell {
+      flex: 1 1 8.5rem;
+      min-width: 7.5rem;
+      padding: 0.55rem 0.7rem 0.6rem;
+      background: #1c2744;
+      border: 1px solid #6b8fd4;
+    }
+
+    .arch-cell.hi {
+      border-color: rgba(46, 196, 182, 0.7);
+      background: #143038;
+    }
+
+    .arch-cell.svc {
+      background: #121820;
+      border-color: #3d5166;
+    }
+
+    .arch-cell .t {
+      font-size: 0.95rem;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+
+    .arch-cell .d {
+      margin-top: 0.35rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .arch-mid {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem 0.35rem;
+      width: 100%;
+      padding: 0.55rem 0.7rem;
+      background: #2a2418;
+      border: 1px dashed #c4a35a;
+      font-family: var(--mono);
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: #e8eef4;
+    }
+
+    .arch-mid .arrow {
+      color: #e0b85c;
+      font-weight: 700;
+    }
+
+    .arch-note {
+      margin: 0.65rem 0 0;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.45;
+      text-align: center;
+    }
+
+    .callflow {
+      width: min(46rem, 100%);
+      margin: 0.2rem auto 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .callflow.ext {
+      width: min(58rem, 100%);
+    }
+
+    .cf-stage {
+      display: grid;
+      grid-template-columns: minmax(12rem, 1fr) 3rem minmax(12rem, 1fr);
+      align-items: center;
+      column-gap: 0;
+    }
+
+    .callflow.ext .cf-stage,
+    .callflow.ext .cf-vlink {
+      grid-template-columns: minmax(9.5rem, 1fr) 2.6rem minmax(9.5rem, 1fr) 2.6rem minmax(9.5rem, 1fr);
+    }
+
+    .cf-main,
+    .cf-mid,
+    .cf-side {
+      min-width: 0;
+    }
+
+    .cf-main .call-box,
+    .cf-mid .call-box,
+    .cf-side .call-box {
+      width: 100%;
+      max-width: none;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    .call-box {
+      padding: 0.65rem 0.9rem;
+      background: #1c2744;
+      border: 1px solid #6b8fd4;
+      text-align: center;
+    }
+
+    .call-box.entry {
+      border-color: rgba(46, 196, 182, 0.7);
+      background: #143038;
+    }
+
+    .call-box.data {
+      border-style: dashed;
+      border-color: #c4a35a;
+      background: #2a2418;
+    }
+
+    .call-box.svc {
+      background: #121820;
+      border-color: #3d5166;
+      border-style: solid;
+    }
+
+    .call-box .k {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      margin-bottom: 0.2rem;
+    }
+
+    .call-box:not(.entry):not(.data):not(.svc) .k {
+      color: #8eb4f0;
+    }
+
+    .call-box.data .k {
+      color: #e0b85c;
+    }
+
+    .call-box .t {
+      display: block;
+      font-size: 1.02rem;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .call-box .d {
+      display: block;
+      margin-top: 0.35rem;
+      font-size: 0.76rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    /* Vertical connector under main column */
+    .cf-vlink {
+      display: grid;
+      grid-template-columns: minmax(12rem, 1fr) 3rem minmax(12rem, 1fr);
+      height: 1.3rem;
+    }
+
+    .cf-vlink > i {
+      grid-column: 1;
+      justify-self: center;
+      width: 2px;
+      height: calc(100% - 3px);
+      background: var(--accent);
+      position: relative;
+    }
+
+    .cf-vlink > i::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: -2px;
+      transform: translate(-50%, 0);
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 6px solid var(--accent);
+    }
+
+    /* Horizontal connector from module to service */
+    .cf-hlink {
+      height: 2px;
+      width: calc(100% - 2px);
+      margin: 0 1px;
+      background: var(--accent);
+      position: relative;
+      align-self: center;
+      box-sizing: border-box;
+    }
+
+    .cf-hlink::after {
+      content: "";
+      position: absolute;
+      right: -2px;
+      top: 50%;
+      transform: translateY(-50%);
+      border-top: 5px solid transparent;
+      border-bottom: 5px solid transparent;
+      border-left: 6px solid var(--accent);
+    }
+
+    .cf-hlink .lbl {
+      position: absolute;
+      left: 50%;
+      top: -1.05rem;
+      transform: translateX(-50%);
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      white-space: nowrap;
+      background: var(--bg);
+      padding: 0 0.2rem;
+    }
+
+    .call-caption {
+      margin-top: 0.85rem;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--muted);
+      text-align: center;
+      max-width: 40rem;
+      line-height: 1.5;
+      align-self: center;
+    }
+
+    .hint {
+      margin-top: 1.7rem;
+      font-family: var(--mono);
+      font-size: 0.95rem;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      max-width: 54rem;
+      line-height: 1.5;
+    }
+
+    .roadmap {
+      width: min(72rem, 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      text-align: left;
+      margin-top: 0.35rem;
+    }
+
+    .roadmap-item {
+      display: grid;
+      grid-template-columns: 2.6rem 1fr;
+      gap: 0.9rem 1.1rem;
+      padding: 1.05rem 1.25rem 1.15rem;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      border-left: 3px solid var(--accent);
+    }
+
+    .roadmap-item .idx {
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--accent);
+      padding-top: 0.2rem;
+    }
+
+    .roadmap-item h3 {
+      margin: 0 0 0.55rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .roadmap-item .pair {
+      display: grid;
+      grid-template-columns: 5.5rem 1fr;
+      gap: 0.35rem 0.75rem;
+      margin: 0;
+      font-size: 1.05rem;
+      line-height: 1.5;
+      color: var(--ink);
+    }
+
+    .roadmap-item .pair + .pair { margin-top: 0.4rem; }
+
+    .roadmap-item .k {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      padding-top: 0.18rem;
+      white-space: nowrap;
+    }
+
+    .roadmap-item .pair.dim .k { color: var(--muted); }
+
+    .roadmap-item .v { color: var(--ink); }
+    .roadmap-item .v strong { font-weight: 650; }
+
+    .chrome {
+      position: fixed;
+      left: 1.1rem;
+      right: 1.1rem;
+      bottom: 1.1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.65rem 0.9rem;
+      background: rgba(10, 16, 24, 0.88);
+      border: 1px solid var(--line-strong);
+      backdrop-filter: blur(12px);
+      z-index: 20;
+    }
+
+    .dots {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      justify-content: center;
+      flex: 1;
+    }
+
+    .dots button {
+      width: 1.35rem;
+      height: 3px;
+      padding: 0;
+      border: none;
+      background: var(--line-strong);
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+
+    .dots button:hover { background: var(--muted); }
+    .dots button[aria-current="true"] {
+      background: var(--accent);
+      transform: scaleX(1.15);
+    }
+
+    .page-label,
+    .nav-hint {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      min-width: 4.5rem;
+    }
+
+    .nav-hint { text-align: right; min-width: 7.5rem; }
+
+    kbd {
+      display: inline-block;
+      padding: 0.05rem 0.28rem;
+      border: 1px solid var(--line-strong);
+      background: var(--surface-solid);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 0.65rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame" aria-hidden="true"><span class="c3"></span><span class="c4"></span></div>
+  <div class="topbar" aria-hidden="true">
+    <span class="pulse"></span>
+    <span>MSW · Demo</span>
+    <span>·</span>
+    <span>Security Watch</span>
+  </div>
+
+  <div class="deck" id="deck" aria-live="polite">
+
+    <section class="slide active" data-title="封面">
+      <div class="slide-inner">
+        <!-- <p class="brand-sub">MSW</p> -->
+        <h1>Magento Security Watcher</h1>
+        <p class="lead" style="font-size: clamp(1.45rem, 2.6vw, 2rem); color: var(--ink); font-weight: 600;">
+          Magento2 安全情报与项目扫描
+        </p>
+        <div class="tagline">
+          <span>ingest</span><span class="sep">→</span>
+          <span>RiskItem</span><span class="sep">→</span>
+          <span>scan</span><span class="sep">→</span>
+          <span>Finding</span><span class="sep">→</span>
+          <span>notify</span>
+        </div>
+        <p class="hint">← → 或空格翻页 · 建议全屏演示</p>
+      </div>
+    </section>
+
+    <section class="slide" data-title="初衷">
+      <div class="slide-inner">
+        <p class="eyebrow">初衷</p>
+        <h2>每次 PM 都会问?</h2>
+        <ul class="clean goals">
+          <li class="in">
+            <span class="mark" aria-hidden="true"></span>
+            <div class="body"><strong>哪些项目受影响？</strong><span class="sub">自动扫描对照后给出各项目结论</span></div>
+            <span class="tag">目标范围</span>
+          </li>
+          <li class="in">
+            <span class="mark" aria-hidden="true"></span>
+            <div class="body"><strong>风险大不大？</strong><span class="sub">严重度 / CVE / 公告优先级</span></div>
+            <span class="tag">目标范围</span>
+          </li>
+          <li class="in">
+            <span class="mark" aria-hidden="true"></span>
+            <div class="body"><strong>具体影响什么业务？</strong><span class="sub">AI 分析总结 + 中文业务影响说明</span></div>
+            <span class="tag">目标范围</span>
+          </li>
+          <li class="in">
+            <span class="mark" aria-hidden="true"></span>
+            <div class="body"><strong>要怎么修？</strong><span class="sub">升级或打补丁等修复选项说明</span></div>
+            <span class="tag">目标范围</span>
+          </li>
+          <li class="out">
+            <span class="mark" aria-hidden="true"></span>
+            <div class="body"><strong>要多少时间？</strong><span class="sub">工期因项目不同差异大</span></div>
+            <span class="tag">不在范围</span>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide" data-title="解决什么">
+      <div class="slide-inner">
+        <p class="eyebrow">解决什么？</p>
+        <h2>手工分析，重复劳动，响应慢</h2>
+        <ul class="clean">
+          <li><span class="idx">01</span><div><strong>手工分析</strong> — Adobe 公告、CVE、补丁分散各处，每次都要人工拼装理解，成本高、易漏点</div></li>
+          <li><span class="idx">02</span><div><strong>项目多</strong> — 我们有很多 magento 项目，每个项目要逐一排查，工作量大</div></li>
+          <li><span class="idx">03</span><div><strong>重复劳动</strong> — 多个团队各自为战，都要排查同一公告，效率低</div></li>
+          <li><span class="idx">04</span><div><strong>响应慢</strong> — 从出公告到知道谁还没修，链路长、缺少追溯</div></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide" data-title="价值">
+      <div class="slide-inner">
+        <p class="eyebrow">价值</p>
+        <h2>风险项级跟踪 · 双层证据 · 引入 AI 分析</h2>
+        <ul class="clean">
+          <li><span class="idx">01</span><div><strong>按 RiskItem 跟踪</strong> — 不以整份公告糊成一团，每条风险可独立入库与扫描</div></li>
+          <li><span class="idx">02</span><div><strong>版本 + 内容指纹</strong> — 升级与补丁内容均可核验，结论带 evidence</div></li>
+          <li><span class="idx">03</span><div><strong>引入 AI 分析</strong> — 中文叙述、结构化辅助、指纹草稿，加速读懂与入库</div></li>
+        </ul>
+        <div class="metrics">
+          <div class="metric"><div class="n">1</div><div class="l">已配置项目</div></div>
+          <div class="metric"><div class="n">2</div><div class="l">已入库公告</div></div>
+          <div class="metric"><div class="n">2</div><div class="l">RiskItem</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="主流程">
+      <div class="slide-inner">
+        <p class="eyebrow">主流程</p>
+        <h2>Bulletin → RiskItem → Finding → 通知</h2>
+        <div class="flow" aria-label="主流程">
+          <span class="step">ingest</span>
+          <span class="arrow">→</span>
+          <span class="step">RiskItem</span>
+          <span class="arrow">→</span>
+          <span class="step">scan</span>
+          <span class="arrow">→</span>
+          <span class="step">Finding</span>
+          <span class="arrow">→</span>
+          <span class="step">notify</span>
+        </div>
+        <ul class="clean">
+          <li><span class="idx">IN</span><div><strong>ingest</strong> — 采集公告，拆风险项，拉 NVD / 补丁，生成分析与指纹</div></li>
+          <li><span class="idx">SC</span><div><strong>scan</strong> — 拉取配置分支，对照风险项产出 Finding</div></li>
+          <li><span class="idx">NT</span><div><strong>notify</strong> — 企微通知，按状态去重，避免重复打扰</div></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide" data-title="架构">
+      <div class="slide-inner wide">
+        <p class="eyebrow">技术架构</p>
+        <h2>入口 · 模块 · 中间层 · 服务</h2>
+        <div class="arch-wrap">
+          <div class="arch-layers">
+            <div class="arch-row">
+              <div class="arch-label">入口</div>
+              <div class="arch-cells">
+                <div class="arch-cell hi"><div class="t">CLI 命令</div><div class="d">msw ingest / scan / notify / status / serve</div></div>
+                <div class="arch-cell hi"><div class="t">Web 看板</div><div class="d">只读查看；不触发入库与扫描</div></div>
+              </div>
+            </div>
+            <div class="arch-row">
+              <div class="arch-label mod">模块</div>
+              <div class="arch-cells">
+                <div class="arch-cell"><div class="t">情报入库</div><div class="d">公告采集、拆 RiskItem、补强 NVD/补丁</div></div>
+                <div class="arch-cell"><div class="t">指纹构建</div><div class="d">规则解析 diff + 可选 AI 草稿</div></div>
+                <div class="arch-cell"><div class="t">Git / 工作区</div><div class="d">拉配置分支或本地目录</div></div>
+                <div class="arch-cell"><div class="t">库存 + 匹配</div><div class="d">版本层与内容指纹，确定性结论</div></div>
+                <div class="arch-cell"><div class="t">通知</div><div class="d">企微推送与去重</div></div>
+              </div>
+            </div>
+            <div class="arch-row">
+              <div class="arch-label mid">中间层</div>
+              <div class="arch-cells">
+                <div class="arch-mid">
+                  <span>Bulletin 公告</span>
+                  <span class="arrow">→</span>
+                  <span>RiskItem 风险项</span>
+                  <span class="arrow">→</span>
+                  <span>Finding 项目结论</span>
+                </div>
+              </div>
+            </div>
+            <div class="arch-row">
+              <div class="arch-label svc">服务</div>
+              <div class="arch-cells">
+                <div class="arch-cell svc"><div class="t">LLM</div><div class="d">入库分析 / 指纹草稿；扫描时写项目说明</div></div>
+                <div class="arch-cell svc"><div class="t">SQLite</div><div class="d">情报、Finding、通知状态持久化</div></div>
+                <div class="arch-cell svc"><div class="t">Web 服务</div><div class="d">FastAPI + Jinja2 内网看板</div></div>
+                <div class="arch-cell svc"><div class="t">外部情报</div><div class="d">Adobe 公告 · NVD · 补丁源</div></div>
+                <div class="arch-cell svc"><div class="t">外部触达</div><div class="d">Git 远端 · 企微 Webhook</div></div>
+              </div>
+            </div>
+          </div>
+          <p class="arch-note">下一页起：情报入库、项目扫描的调用关系（框 + 箭头）</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="情报入库">
+      <div class="slide-inner wide">
+        <p class="eyebrow">内部流程</p>
+        <h2>情报入库</h2>
+        <div class="callflow">
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box entry"><span class="k">入口</span><span class="t">msw ingest</span><span class="d">CLI</span></div></div>
+            <div></div><div></div>
+          </div>
+          <div class="cf-vlink"><i></i></div>
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box"><span class="k">模块</span><span class="t">情报入库</span><span class="d">拉公告 · 拆条目</span></div></div>
+            <div class="cf-hlink"><span class="lbl">调用</span></div>
+            <div class="cf-side"><div class="call-box svc"><span class="k">服务</span><span class="t">Adobe / NVD / 补丁</span><span class="d">外部情报源</span></div></div>
+          </div>
+          <div class="cf-vlink"><i></i></div>
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box"><span class="k">模块</span><span class="t">指纹构建</span><span class="d">规则解析 diff</span></div></div>
+            <div class="cf-hlink"><span class="lbl">调用</span></div>
+            <div class="cf-side"><div class="call-box svc"><span class="k">服务</span><span class="t">LLM</span><span class="d">可选指纹草稿</span></div></div>
+          </div>
+          <div class="cf-vlink"><i></i></div>
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box"><span class="k">模块</span><span class="t">中文分析</span><span class="d">业务影响 / 叙述</span></div></div>
+            <div class="cf-hlink"><span class="lbl">调用</span></div>
+            <div class="cf-side"><div class="call-box svc"><span class="k">服务</span><span class="t">LLM</span><span class="d">可选分析</span></div></div>
+          </div>
+          <div class="cf-vlink"><i></i></div>
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box data"><span class="k">中间层</span><span class="t">Bulletin → RiskItem</span></div></div>
+            <div class="cf-hlink"><span class="lbl">写入</span></div>
+            <div class="cf-side"><div class="call-box svc"><span class="k">服务</span><span class="t">SQLite</span><span class="d">落库</span></div></div>
+          </div>
+          <p class="call-caption">产出可扫描的 RiskItem（版本表 / 指纹 / 中文说明）</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="项目扫描">
+      <div class="slide-inner wide">
+        <p class="eyebrow">内部流程</p>
+        <h2>项目扫描</h2>
+        <div class="callflow ext">
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box entry"><span class="k">入口</span><span class="t">msw scan</span><span class="d">--project / --local-workspace / --notify</span></div></div>
+            <div></div><div></div><div></div><div></div>
+          </div>
+          <div class="cf-vlink"><i></i></div>
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box"><span class="k">模块</span><span class="t">Git / 工作区</span><span class="d">拉分支或本地目录</span></div></div>
+            <div class="cf-hlink"><span class="lbl">调用</span></div>
+            <div class="cf-side"><div class="call-box svc"><span class="k">服务</span><span class="t">Git 远端</span><span class="d">或本地路径</span></div></div>
+            <div></div><div></div>
+          </div>
+          <div class="cf-vlink"><i></i></div>
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box"><span class="k">模块</span><span class="t">库存解析</span><span class="d">composer / 产品版本</span></div></div>
+            <div class="cf-hlink"><span class="lbl">读取</span></div>
+            <div class="cf-mid"><div class="call-box data"><span class="k">中间层</span><span class="t">RiskItem</span><span class="d">已入库风险</span></div></div>
+            <div class="cf-hlink"><span class="lbl">来自</span></div>
+            <div class="cf-side"><div class="call-box svc"><span class="k">服务</span><span class="t">SQLite</span><span class="d">风险情报库</span></div></div>
+          </div>
+          <div class="cf-vlink"><i></i></div>
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box"><span class="k">模块</span><span class="t">匹配判定</span><span class="d">版本层 + 内容指纹</span></div></div>
+            <div class="cf-hlink"><span class="lbl">产出</span></div>
+            <div class="cf-mid"><div class="call-box data"><span class="k">中间层</span><span class="t">Finding</span><span class="d">项目 × 风险结论</span></div></div>
+            <div class="cf-hlink"><span class="lbl">写入</span></div>
+            <div class="cf-side"><div class="call-box svc"><span class="k">服务</span><span class="t">SQLite</span><span class="d">结论落库</span></div></div>
+          </div>
+          <div class="cf-vlink"><i></i></div>
+          <div class="cf-stage">
+            <div class="cf-main"><div class="call-box"><span class="k">模块</span><span class="t">项目说明</span><span class="d">可选叙述</span></div></div>
+            <div class="cf-hlink"><span class="lbl">调用</span></div>
+            <div class="cf-side"><div class="call-box svc"><span class="k">服务</span><span class="t">LLM</span><span class="d">不裁定是否已修</span></div></div>
+            <div></div><div></div>
+          </div>
+          <p class="call-caption">结论只由匹配规则给出；LLM 只写说明</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="判定逻辑">
+      <div class="slide-inner wide">
+        <p class="eyebrow">扫描核心逻辑</p>
+        <h2>怎么判断这个项目有没有漏洞</h2>
+        <div class="roadmap">
+          <div class="roadmap-item">
+            <div class="idx">01</div>
+            <div>
+              <h3>两道检查，规则匹配（无 AI 参与）</h3>
+              <div class="pair"><span class="k">看版本</span><span class="v">先看项目装的 Magento / 包版本，有没有达到公告要求的安全版本。升上去了，一般就认定已修好。</span></div>
+              <div class="pair"><span class="k">看代码</span><span class="v">若没升级、只打了补丁：对比补丁前后的关键代码片段——还是旧代码 → 没修好；已是新代码 → 补丁打上了。多处改动要处处都对上才算。</span></div>
+            </div>
+          </div>
+          <div class="roadmap-item">
+            <div class="idx">02</div>
+            <div>
+              <h3>结论怎么出</h3>
+              <div class="pair"><span class="k">无关</span><span class="v">这个版本根本不在公告影响范围 → 标成「不适用」</span></div>
+              <div class="pair"><span class="k">已升级</span><span class="v">版本已经够新 → 「已修复」</span></div>
+              <div class="pair"><span class="k">只打补丁</span><span class="v">版本还旧，但关键代码已变成补丁后的样子 → 「已修复」（靠补丁）</span></div>
+              <div class="pair"><span class="k">仍有风险</span><span class="v">版本还在影响范围，且代码仍是补丁前的样子 → 「未修复」</span></div>
+              <div class="pair"><span class="k">其他</span><span class="v">文件找不到、对不上、又没有可用指纹 → 「未修复」。</span></div>
+            </div>
+          </div>
+          <div class="roadmap-item">
+            <div class="idx">03</div>
+            <div>
+              <h3>最后留下什么</h3>
+              <div class="pair"><span class="k">详细记录</span><span class="v">每条结论都写清：修没修好、靠升级还是补丁，以及版本比对和代码检查的证据，方便事后核对。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="AI">
+      <div class="slide-inner wide">
+        <p class="eyebrow">AI 怎么分析</p>
+        <h2>AI 帮忙读懂，规则负责下结论</h2>
+        <div class="split">
+          <div class="panel accent-edge">
+            <h3>AI 可以帮</h3>
+            <ul>
+              <li>把<strong>官方公告 + NVD</strong>（及补丁信息）合在一起读懂</li>
+              <li>写成<strong>人能看懂的中文</strong>：风险大不大、影响什么业务、怎么修</li>
+              <li>从补丁里<strong>草稿</strong>出「改前 / 改后」代码对照，方便后面扫</li>
+            </ul>
+          </div>
+          <div class="panel dim-edge">
+            <h3>AI 不能定</h3>
+            <ul>
+              <li><strong>哪个项目有没有修好</strong>——只看版本号和代码是否对上</li>
+              <li>扫描结论、证据怎么记——全部走规则，可复查</li>
+              <li>企微要不要再推——按状态去重，不靠模型临场发挥</li>
+            </ul>
+          </div>
+        </div>
+        <p class="hint">一句话：AI 加快「读懂公告」；「这项目修了没」永远由规则说了算</p>
+      </div>
+    </section>
+
+    <section class="slide" data-title="怎么用">
+      <div class="slide-inner wide">
+        <p class="eyebrow">怎么用</p>
+        <h2>配置一次，定时跑通闭环</h2>
+        <div class="roadmap">
+          <div class="roadmap-item">
+            <div class="idx">01</div>
+            <div>
+              <h3>准备配置</h3>
+              <div class="pair"><span class="k">做什么</span><span class="v">复制 <span style="font-family:var(--mono)">settings.yaml</span>、<span style="font-family:var(--mono)">projects.yaml</span>、<span style="font-family:var(--mono)">.env</span>；在项目列表里填 git 分支与负责人，密钥放环境变量勿写进仓库。</span></div>
+            </div>
+          </div>
+          <div class="roadmap-item">
+            <div class="idx">02</div>
+            <div>
+              <h3>入库情报</h3>
+              <div class="pair"><span class="k">命令</span><span class="v"><span style="font-family:var(--mono)">msw ingest</span> — 采集 Adobe 公告，拆成 RiskItem；可拉 NVD、补丁指纹，并可选 LLM 中文分析。</span></div>
+            </div>
+          </div>
+          <div class="roadmap-item">
+            <div class="idx">03</div>
+            <div>
+              <h3>扫描项目</h3>
+              <div class="pair"><span class="k">命令</span><span class="v"><span style="font-family:var(--mono)">msw scan</span> — 按配置拉分支（或 <span style="font-family:var(--mono)">--local-workspace</span>）；可加 <span style="font-family:var(--mono)">--project</span> 指定项目、<span style="font-family:var(--mono)">--notify</span> 边扫边通知。</span></div>
+            </div>
+          </div>
+          <div class="roadmap-item">
+            <div class="idx">04</div>
+            <div>
+              <h3>查看结果与定时</h3>
+              <div class="pair"><span class="k">日常</span><span class="v"><span style="font-family:var(--mono)">msw status</span> 看汇总；<span style="font-family:var(--mono)">msw serve</span> 开内网看板；需要时 <span style="font-family:var(--mono)">msw notify</span>。cron：先 <span style="font-family:var(--mono)">ingest</span>，再 <span style="font-family:var(--mono)">scan --notify</span>。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" data-title="接下来">
+      <div class="slide-inner wide">
+        <p class="eyebrow">接下来做什么</p>
+        <h2>覆盖更多现场，服务更多技术栈</h2>
+        <div class="roadmap">
+          <div class="roadmap-item">
+            <div class="idx">01</div>
+            <div>
+              <h3>没有 Git 仓库权限时怎么扫</h3>
+              <div class="pair dim"><span class="k">问题</span><span class="v">部分项目无仓库读权限，或 vendor 不在 Git 里，当前「拉分支再扫」走不通。</span></div>
+              <div class="pair"><span class="k">做法</span><span class="v">支持<strong>本地/挂载目录</strong>直接扫描；或定期<strong>投递产物包</strong>（含 composer.lock 与关键代码）；权限更紧时只交<strong>版本清单</strong>做版本层判定；有权限的机器可跑<strong>轻量采集 Agent</strong>回传结果。</span></div>
+            </div>
+          </div>
+          <div class="roadmap-item">
+            <div class="idx">02</div>
+            <div>
+              <h3>自动化渗透测试</h3>
+              <div class="pair dim"><span class="k">问题</span><span class="v">渗透验证成本高、难常态化，难以覆盖多项目与多漏洞场景。</span></div>
+              <div class="pair"><span class="k">做法</span><span class="v">在<strong>测试环境</strong>上对未修复项做受控、可重复的自动验证（不碰线上）；结果回写看板并与通知联动。</span></div>
+            </div>
+          </div>
+          <div class="roadmap-item">
+            <div class="idx">03</div>
+            <div>
+              <h3>其他框架、其他语言怎么支持</h3>
+              <div class="pair dim"><span class="k">问题</span><span class="v">情报源、依赖锁文件、版本语义与补丁路径都绑在 Magento/PHP 上，无法直接套到 Node、Java 等栈。</span></div>
+              <div class="pair"><span class="k">做法</span><span class="v">把链路拆成可插拔的三块：<strong>Advisory</strong>（公告从哪来、怎么拆 RiskItem）、<strong>Inventory</strong>（npm / pip / maven 等怎么读版本）、<strong>Matcher</strong>（版本规则 + 指纹约定）。核心仍是 Bulletin → RiskItem → Finding，换适配器即可扩展。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="chrome">
+    <div class="page-label" id="pageLabel">01 / 12</div>
+    <div class="dots" id="dots" role="tablist" aria-label="幻灯片"></div>
+    <div class="nav-hint"><kbd>←</kbd> <kbd>→</kbd> <kbd>空格</kbd></div>
+  </div>
+
+  <script>
+    (function () {
+      var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+      var dotsEl = document.getElementById("dots");
+      var pageLabel = document.getElementById("pageLabel");
+      var index = 0;
+      var total = slides.length;
+
+      function pad(n) {
+        return (n < 10 ? "0" : "") + n;
+      }
+
+      slides.forEach(function (_, i) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("aria-label", "第 " + (i + 1) + " 屏");
+        btn.addEventListener("click", function () { go(i); });
+        dotsEl.appendChild(btn);
+      });
+
+      var dots = Array.prototype.slice.call(dotsEl.querySelectorAll("button"));
+
+      function go(i) {
+        if (i < 0 || i >= total) return;
+        slides[index].classList.remove("active");
+        dots[index].removeAttribute("aria-current");
+        index = i;
+        slides[index].classList.add("active");
+        dots[index].setAttribute("aria-current", "true");
+        pageLabel.textContent = pad(index + 1) + " / " + pad(total);
+        try {
+          history.replaceState(null, "", "#" + (index + 1));
+        } catch (e) {}
+      }
+
+      function fromHash() {
+        var n = parseInt((location.hash || "").replace("#", ""), 10);
+        if (n >= 1 && n <= total) go(n - 1);
+        else go(0);
+      }
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
+          e.preventDefault();
+          go(index + 1);
+        } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+          e.preventDefault();
+          go(index - 1);
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          go(0);
+        } else if (e.key === "End") {
+          e.preventDefault();
+          go(total - 1);
+        }
+      });
+
+      window.addEventListener("hashchange", fromHash);
+      fromHash();
+    })();
+  </script>
+</body>
+</html>

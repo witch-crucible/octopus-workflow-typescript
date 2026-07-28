@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% from "_macros.html" import finding_body, sev_badge, status_badge %}
+{% block title %}{{ project.name }}{% endblock %}
+{% block content %}
+<h1>{{ project.name }}</h1>
+<p class="lede mono">{{ project.id }}</p>
+
+<div class="page-actions">
+  <button type="button" class="btn no-print" data-print-pdf
+    title="打开打印对话框，选择「存储为 PDF」">导出 PDF</button>
+  <button type="button" class="btn no-print" data-notify-url="/projects/{{ project.id }}/notify"
+    data-notify-confirm="确认向企微发送该项目的汇总通知？">发送通知</button>
+  <a class="btn" href="/projects">返回列表</a>
+</div>
+
+<dl class="meta-grid">
+  <div><dt>启用</dt><dd>{{ '是' if project.enabled else '否' }}</dd></div>
+  <div><dt>分支</dt><dd class="mono">{{ project.branch }}</dd></div>
+  <div><dt>Git</dt><dd class="mono">{{ project.git_display }}</dd></div>
+  <div><dt>负责人</dt><dd>{{ project.owners|join(', ') or '—' }}</dd></div>
+  <div><dt>风险计数</dt>
+    <dd class="counts">
+      <span class="hot">未修 {{ counts.vulnerable + counts.unknown }}</span>
+      · 错误 {{ counts.error }}
+      · 已修 {{ counts.fixed }} · N/A {{ counts.not_applicable }}
+    </dd>
+  </div>
+  <div><dt>最近扫描</dt>
+    <dd>
+      {% if last_scan %}
+        {{ last_scan.finished_at or last_scan.started_at }} · {{ last_scan.status }}
+        {% if last_scan.git_commit %}<span class="mono muted"> · {{ last_scan.git_commit[:12] }}</span>{% endif %}
+        {% if last_scan.error %}<div class="warn-text mono">{{ last_scan.error }}</div>{% endif %}
+      {% else %}尚未扫描{% endif %}
+    </dd>
+  </div>
+</dl>
+
+{% if project.profile %}
+<details class="fold">
+  <summary>profile</summary>
+  <div class="fold-body"><pre class="raw">{{ project.profile | tojson(indent=2) }}</pre></div>
+</details>
+{% endif %}
+
+<h2>需关注（{{ open_findings|length }}）</h2>
+{% if open_findings %}
+  <div id="open-findings" class="finding-list">
+  {% for f in open_findings %}
+  <details class="fold finding-open" open>
+    <summary>
+      <div class="finding-summary-main">
+        <strong><a href="/risks/{{ f.risk_id }}" onclick="event.stopPropagation()">{{ f.title }}</a></strong>
+        <span class="mono muted">{{ f.risk_id }}</span>
+        {{ status_badge(f.remediation_status, f.remediation_status_zh) }}
+        {{ sev_badge(f.severity, f.severity_zh) }}
+      </div>
+      <button type="button" class="btn btn-sm fold-toggle" aria-expanded="true">折叠</button>
+    </summary>
+    <div class="fold-body">{{ finding_body(f) }}</div>
+  </details>
+  {% endfor %}
+  </div>
+{% else %}
+<p class="empty">当前无未修复 / 错误项</p>
+{% endif %}
+
+<h2>已处理（{{ closed_findings|length }}）</h2>
+{% if closed_findings %}
+  <div id="closed-findings" class="finding-list">
+  {% for f in closed_findings %}
+  <details class="fold finding-closed">
+    <summary>
+      <div class="finding-summary-main">
+        <strong>{{ f.title }}</strong>
+        <span class="mono muted">{{ f.risk_id }}</span>
+        {{ status_badge(f.remediation_status, f.remediation_status_zh) }}
+        {{ sev_badge(f.severity, f.severity_zh) }}
+      </div>
+      <button type="button" class="btn btn-sm fold-toggle" aria-expanded="false">展开</button>
+    </summary>
+    <div class="fold-body">{{ finding_body(f) }}</div>
+  </details>
+  {% endfor %}
+  </div>
+{% else %}
+<p class="empty">暂无已修复或不适用项</p>
+{% endif %}
+
+<h2>扫描历史</h2>
+{% if scan_runs %}
+<div class="table-wrap">
+  <table class="data">
+    <thead><tr><th>ID</th><th>开始</th><th>结束</th><th>状态</th><th>Commit</th><th>错误</th></tr></thead>
+    <tbody>
+    {% for s in scan_runs %}
+      <tr>
+        <td>{{ s.id }}</td>
+        <td>{{ s.started_at }}</td>
+        <td>{{ s.finished_at or '—' }}</td>
+        <td>{{ s.status }}</td>
+        <td class="mono">{{ (s.git_commit or '—')[:12] }}</td>
+        <td class="mono">{{ s.error or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">无扫描记录</p>
+{% endif %}
+
+<h2>通知状态</h2>
+{% if alerts %}
+<div class="table-wrap">
+  <table class="data">
+    <thead><tr><th>alert_key</th><th>status</th><th>fingerprint</th><th>通知时间</th></tr></thead>
+    <tbody>
+    {% for a in alerts %}
+      <tr>
+        <td class="mono">{{ a.alert_key }}</td>
+        <td>{{ a.last_status }}</td>
+        <td class="mono">{{ a.last_fingerprint[:16] }}…</td>
+        <td>{{ a.last_notified_at or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">无 alert_state 记录</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  function syncToggle(details) {
+    var btn = details.querySelector(":scope > summary > .fold-toggle");
+    if (!btn) return;
+    btn.textContent = details.open ? "折叠" : "展开";
+    btn.setAttribute("aria-expanded", details.open ? "true" : "false");
+  }
+  document.querySelectorAll("#open-findings details.fold, #closed-findings details.fold").forEach(function (details) {
+    syncToggle(details);
+    details.addEventListener("toggle", function () {
+      syncToggle(details);
+    });
+    var btn = details.querySelector(":scope > summary > .fold-toggle");
+    if (!btn) return;
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      details.open = !details.open;
+    });
+  });
+})();
+</script>
+{% endblock %}

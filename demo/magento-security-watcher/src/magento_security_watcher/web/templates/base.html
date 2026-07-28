@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MSW{% endblock %} · Magento Security Watcher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <a class="brand-name" href="/">Magento Security Watcher</a>
+      <span class="brand-mark">MSW · 内网只读看板</span>
+    </div>
+    <nav class="nav" aria-label="主导航">
+      <a href="/" class="{{ 'active' if nav == '/' else '' }}">总览</a>
+      <a href="/projects" class="{{ 'active' if nav.startswith('/projects') else '' }}">项目</a>
+      <a href="/risks" class="{{ 'active' if nav.startswith('/risks') else '' }}">风险</a>
+      <a href="/bulletins" class="{{ 'active' if nav.startswith('/bulletins') else '' }}">公告</a>
+    </nav>
+  </header>
+  <main class="main">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    只读视图 · 访问受 IP 白名单约束 · 判定逻辑仍由 CLI ingest/scan 执行
+  </footer>
+  <script>
+  (function () {
+    function openDetailsForPrint() {
+      var nodes = document.querySelectorAll("details.fold");
+      var prev = [];
+      nodes.forEach(function (el) {
+        prev.push(el.open);
+        el.open = true;
+      });
+      return function restore() {
+        nodes.forEach(function (el, i) {
+          el.open = prev[i];
+        });
+      };
+    }
+
+    function printPdf() {
+      var restore = openDetailsForPrint();
+      var finished = false;
+      var done = function () {
+        if (finished) return;
+        finished = true;
+        restore();
+        window.removeEventListener("afterprint", done);
+      };
+      window.addEventListener("afterprint", done);
+      window.print();
+    }
+
+    document.querySelectorAll("[data-print-pdf]").forEach(function (btn) {
+      btn.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        printPdf();
+      });
+    });
+
+    document.querySelectorAll("[data-notify-url]").forEach(function (btn) {
+      btn.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        var url = btn.getAttribute("data-notify-url");
+        var msg = btn.getAttribute("data-notify-confirm") || "确认发送到企微？";
+        if (!url || !window.confirm(msg)) return;
+        btn.disabled = true;
+        fetch(url, { method: "POST", headers: { Accept: "application/json" } })
+          .then(function (res) {
+            return res.json().then(function (data) {
+              return { ok: res.ok && data && data.ok, message: (data && data.message) || res.statusText };
+            });
+          })
+          .then(function (result) {
+            window.alert(result.message || (result.ok ? "已发送" : "发送失败"));
+          })
+          .catch(function (err) {
+            window.alert("发送失败：" + (err && err.message ? err.message : err));
+          })
+          .finally(function () {
+            btn.disabled = false;
+          });
+      });
+    });
+
+    if (new URLSearchParams(window.location.search).get("print") === "1") {
+      window.addEventListener("load", function () {
+        printPdf();
+        if (window.history && window.history.replaceState) {
+          var u = new URL(window.location.href);
+          u.searchParams.delete("print");
+          window.history.replaceState({}, "", u.pathname + u.search + u.hash);
+        }
+      });
+    }
+  })();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

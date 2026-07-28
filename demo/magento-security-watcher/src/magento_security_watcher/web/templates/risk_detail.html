@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% from "_macros.html" import analysis_block %}
+{% block title %}{{ risk.title }}{% endblock %}
+{% block content %}
+<h1>{{ risk.title }}</h1>
+<p class="lede mono">{{ risk.risk_id }} · 公告 {{ risk.bulletin_external_id }}</p>
+
+<div class="page-actions">
+  {% if risk.report_url %}
+  <a class="btn" href="{{ risk.report_url }}">打开报告文件</a>
+  {% endif %}
+  <a class="btn" href="/risks">返回列表</a>
+</div>
+
+<p class="muted">创建 {{ risk.created_at }} · 更新 {{ risk.updated_at }}</p>
+
+{{ analysis_block(risk.analysis) }}
+{% endblock %}

@@ -1,0 +1,15 @@
+# Magento Security Watcher — example crontab (Debian)
+# Install package into a venv, then adjust paths and user.
+
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+MSW_ROOT=/opt/magento-security-watcher
+WECOM_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=REPLACE
+# OPENAI_API_KEY=
+# NVD_API_KEY=
+
+# Ingest official advisories every morning
+15 6 * * * cd $MSW_ROOT && . .venv/bin/activate && msw --root $MSW_ROOT ingest >>$MSW_ROOT/data/cron-ingest.log 2>&1
+
+# Scan all projects and notify on changes
+30 6 * * * cd $MSW_ROOT && . .venv/bin/activate && msw --root $MSW_ROOT scan --notify >>$MSW_ROOT/data/cron-scan.log 2>&1

@@ -1,0 +1,64 @@
+# Copy to settings.yaml and adjust. Secrets via environment variables.
+
+data_dir: data
+db_path: data/db/watcher.sqlite
+
+advisory:
+  # Official Magento/Adobe Commerce security product index.
+  bulletin_list_url: "https://helpx.adobe.com/security/products/magento.html"
+  # Optional: local fixture directory for offline / tests (overrides remote when set).
+  fixture_dir: null
+  # Optional: browser-saved HTML when terminal cannot reach Adobe (VPN/proxy mismatch).
+  local_index_html: null
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  # Fetch newest N bulletin detail pages for CVE extraction (0 = listing only).
+  detail_fetch_limit: 15
+  request_timeout_seconds: 45
+  # When APSB page cannot prove isolated patches, follow Release Notes / KB links.
+  follow_release_notes: true
+  kb_fetch_limit_per_bulletin: 2
+  # Download repo.magento.com/patch/*.zip during ingest to build fingerprints.
+  download_isolated_patch_zips: true
+  patch_zip_download_limit: 4
+
+nvd:
+  enabled: true
+  api_base: "https://services.nvd.nist.gov/rest/json/cves/2.0"
+  # Optional: NVD_API_KEY env for higher rate limits
+  # Without API key NIST recommends ~6s between requests
+  request_delay_seconds: 6
+  # Reuse cached CVE JSON under data/cache/nvd (same CVE not re-fetched within TTL)
+  cache_ttl_days: 30
+  # If rate-limited (429), reuse expired cache when available
+  use_stale_on_rate_limit: true
+
+llm:
+  enabled: false
+  api_base: "https://api.deepseek.com/v1"
+  model: "deepseek-chat"
+  # 勿把密钥写进 YAML；使用 MSW_LLM_API_KEY 或 OPENAI_API_KEY
+  timeout_seconds: 120
+  log_dir: data/logs/llm
+
+wecom:
+  enabled: false
+  # Webhook 写在项目根 `.env`：WECOM_WEBHOOK_URL=...
+  mention_all_on_critical: false
+
+git:
+  mirrors_dir: data/mirrors
+  # Serial by default (6–20 projects with vendor)
+  concurrency: 1
+  fetch_timeout_seconds: 600
+
+scan:
+  notify_on_complete: false
+
+web:
+  host: "127.0.0.1"
+  port: 8080
+  # Empty = loopback only. Add intranet CIDRs when binding 0.0.0.0.
+  allowed_cidrs:
+    - "127.0.0.1/32"
+    - "::1/128"
+  trust_x_forwarded_for: false

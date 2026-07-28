@@ -71,6 +71,28 @@ export interface MonitoringIntegration extends IntegrationService {
   registerAlert(serviceName: string, duration: "1d" | "1w" | "1y"): Promise<IntegrationResult>
 }
 
+/** Teambition 集成接口 */
+export interface TeambitionIntegration extends IntegrationService {
+  /** 任务编号 → 任务详情 */
+  resolveTask(ref: string, projectId?: string): Promise<IntegrationResult>
+  /** 项目编号前缀 → 项目信息 */
+  resolveProject(prefix: string): Promise<IntegrationResult>
+  /** 更新任务字段（最多 4 个独立 PUT） */
+  updateTask(update: import("./teambition.js").TaskUpdate): Promise<IntegrationResult>
+  /** 查任务参与者及父任务参与者 */
+  taskParticipants(taskId: string): Promise<IntegrationResult>
+  /** 我的待办任务列表 */
+  myTasks(userId: string, projectId?: string): Promise<IntegrationResult>
+  /** 子任务列表 */
+  taskChildren(parentTaskId: string): Promise<IntegrationResult>
+  /** 项目工作流状态列表 */
+  projectStatuses(projectId: string): Promise<IntegrationResult>
+  /** 按关键字搜索成员 */
+  searchMembers(query: string): Promise<IntegrationResult>
+  /** 通过邮箱或名称解析成员 */
+  resolveMember(emailOrName: string): Promise<IntegrationResult>
+}
+
 /** 环境部署检查清单 —— 映射 PlantUML 中部署阶段的详细检查项 */
 export interface DeploymentChecklist {
   domain: {
@@ -123,3 +145,7 @@ export function createDeploymentChecklist(): DeploymentChecklist {
 
 export { GitClient, createGitClient } from "./git.js"
 export type { GitIntegrationConfig } from "./git.js"
+export { TeambitionClient, createTeambitionClient } from "./teambition.js"
+export type { TeambitionIntegrationConfig, TbTask, WorkflowStatus, ChildTask, TbMember, TaskUpdate } from "./teambition.js"
+export { SecurityWatchClient, createSecurityWatchClient } from "./security-watch.js"
+export type { SecurityWatchConfig } from "./security-watch.js"

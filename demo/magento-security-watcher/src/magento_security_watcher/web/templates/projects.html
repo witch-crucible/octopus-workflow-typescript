@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}项目{% endblock %}
+{% block content %}
+<h1>项目</h1>
+<p class="lede">配置于 projects.yaml；风险概述取自每个风险的最新扫描结论。</p>
+
+{% if projects %}
+<div class="table-wrap">
+  <table class="data">
+    <thead>
+      <tr>
+        <th>名称</th>
+        <th>分支 / Git</th>
+        <th>风险概述</th>
+        <th>最后扫描</th>
+        <th>通知</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in projects %}
+      <tr>
+        <td>
+          <a href="/projects/{{ p.id }}"><strong>{{ p.name }}</strong></a>
+          <div class="mono muted">{{ p.id }}</div>
+          <div class="muted">{% if p.enabled %}启用{% else %}已禁用{% endif %}
+            {% if p.owners %} · {{ p.owners|join(', ') }}{% endif %}
+          </div>
+        </td>
+        <td>
+          <div class="mono">{{ p.branch }}</div>
+          <div class="mono muted">{{ p.git_display }}</div>
+        </td>
+        <td class="counts">
+          <span class="hot">未修 {{ p.counts.vulnerable + p.counts.unknown }}</span>
+          · 错误 {{ p.counts.error }}
+          · 已修 {{ p.counts.fixed }}
+          · N/A {{ p.counts.not_applicable }}
+        </td>
+        <td>
+          {% if p.last_scan %}
+            <div>{{ p.last_scan.finished_at or p.last_scan.started_at }}</div>
+            <div class="muted">{{ p.last_scan.status }}{% if p.last_scan.error %} · {{ p.last_scan.error[:80] }}{% endif %}</div>
+          {% else %}
+            <span class="muted">尚未扫描</span>
+          {% endif %}
+        </td>
+        <td class="{% if p.notify_kind == 'warn' %}warn-text{% elif p.notify_kind == 'ok' %}ok-text{% else %}muted{% endif %}">
+          {{ p.notify_label }}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">未配置项目。请编辑 config/projects.yaml。</p>
+{% endif %}
+{% endblock %}
