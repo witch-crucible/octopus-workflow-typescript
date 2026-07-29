@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { Phase, PhaseLock, PHASE_ORDER, PHASE_LABELS, getPhaseIndex, getNextPhase, getPreviousPhase, isValidTransition, getPhaseDef, getStages } from "./phase.js"
+import { Phase, PhaseLock, PHASE_ORDER, PHASE_LABELS, getPhaseIndex, getNextPhase, getPreviousPhase, isValidTransition } from "./phase.js"
+import { getPhaseDef, getStages } from "./spec.js"
 
 describe("Phase", () => {
   it("const 对象包含所有6个阶段", () => {

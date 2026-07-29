@@ -29,9 +29,9 @@ describe("createEmptyState", () => {
     }
   })
 
-  it("初始任务列表为空", () => {
+  it("初始步骤列表为空", () => {
     const state = createEmptyState(projectId, projectName, description)
-    expect(state.tasks).toEqual([])
+    expect(state.steps).toEqual([])
     expect(state.artifacts).toEqual([])
     expect(state.checklists).toEqual({})
   })

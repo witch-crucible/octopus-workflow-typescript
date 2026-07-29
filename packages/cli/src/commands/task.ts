@@ -31,7 +31,7 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
         if (!pid) return
 
         const state = engine.getState(pid)
-        let tasks = state.tasks
+        let tasks = engine.getTasks(pid)
 
         if (phaseName) {
           const phase = Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase())
@@ -109,7 +109,7 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
 
         const role = options?.asRole ? (Object.values(Role).find((r) => r.toLowerCase() === options.asRole!.toLowerCase()) as Role | undefined) : undefined
         const state = engine.completeTask(pid, taskId, role)
-        const task = state.tasks.find((t) => t.id === taskId)
+        const task = engine.getTasks(pid).find((t) => t.id === taskId)
 
         if (options?.json) {
           console.log(JSON.stringify({
@@ -151,7 +151,7 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
         }
 
         const state = engine.setTaskStatus(pid, taskId, taskStatus)
-        const task = state.tasks.find((t) => t.id === taskId)
+        const task = engine.getTasks(pid).find((t) => t.id === taskId)
 
         if (options?.json) {
           console.log(JSON.stringify({

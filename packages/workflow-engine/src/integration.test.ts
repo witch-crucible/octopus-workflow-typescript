@@ -113,7 +113,7 @@ describe("WorkflowEngine 集成测试", () => {
     const engine = createEngine()
     const state = engine.initProject("制品测试")
     const created = engine.createArtifact(state.projectId, {
-      type: ArtifactType.DOCUMENT,
+      type: ArtifactType.PRD,
       title: "产品需求文档",
       description: "v1",
       phase: Phase.REQUIREMENTS_ANALYSIS,

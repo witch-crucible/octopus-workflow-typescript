@@ -74,13 +74,13 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
           console.log(JSON.stringify({
             projectId: state.projectId,
             currentPhase: state.currentPhase,
-            taskCount: state.tasks.filter((t) => t.phase === state.currentPhase).length,
+            taskCount: state.steps.filter((t) => t.phase === state.currentPhase).length,
           }, null, 2))
           return
         }
 
         console.log(`✅ 已前进到: ${state.currentPhase} (${PhaseLabel(state.currentPhase)})`)
-        console.log(`   当前任务数: ${state.tasks.filter((t) => t.phase === state.currentPhase).length}`)
+        console.log(`   当前任务数: ${state.steps.filter((t) => t.phase === state.currentPhase).length}`)
       } catch (err) {
         console.error(`❌ ${(err as Error).message}`)
         process.exit(1)
@@ -144,7 +144,7 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
         }
 
         const state = engine.getState(pid)
-        const tasks = state.tasks.filter((t) => t.phase === phase)
+        const tasks = engine.getTasks(pid, { phase })
         const progress = engine.getPhaseProgress(state, phase)
 
         if (options?.json) {

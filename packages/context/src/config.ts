@@ -7,12 +7,10 @@
  *  3. 默认值
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
-import { join, dirname } from "node:path"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import type { AIClientConfig } from "@octopus/agent-layer/index.js"
-import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
-import { StoreError } from "@octopus/core/errors.js"
-import { createStateStore } from "./index.js"
+import { ConfigError } from "@octopus/core/errors.js"
 
 /** 全局配置 */
 export interface OctopusConfig {
@@ -53,15 +51,15 @@ export const DEFAULT_CONFIG: OctopusConfig = {
 function loadFromEnv(): Partial<OctopusConfig> {
   const config: Partial<OctopusConfig> = {}
 
-  if (process.env.OCTOPUS_STORE_DIR) {
-    config.storeDir = process.env.OCTOPUS_STORE_DIR
+  if (process.env["OCTOPUS_STORE_DIR"]) {
+    config.storeDir = process.env["OCTOPUS_STORE_DIR"]
   }
 
-  if (process.env.OCTOPUS_AI_MODEL || process.env.OCTOPUS_AI_TIMEOUT || process.env.OCTOPUS_AI_CLAUDE_PATH) {
+  if (process.env["OCTOPUS_AI_MODEL"] || process.env["OCTOPUS_AI_TIMEOUT"] || process.env["OCTOPUS_AI_CLAUDE_PATH"]) {
     config.ai = { ...DEFAULT_CONFIG.ai }
-    if (process.env.OCTOPUS_AI_MODEL) config.ai.defaultModel = process.env.OCTOPUS_AI_MODEL
-    if (process.env.OCTOPUS_AI_TIMEOUT) config.ai.defaultTimeout = Number(process.env.OCTOPUS_AI_TIMEOUT)
-    if (process.env.OCTOPUS_AI_CLAUDE_PATH) config.ai.claudePath = process.env.OCTOPUS_AI_CLAUDE_PATH
+    if (process.env["OCTOPUS_AI_MODEL"]) config.ai.defaultModel = process.env["OCTOPUS_AI_MODEL"]
+    if (process.env["OCTOPUS_AI_TIMEOUT"]) config.ai.defaultTimeout = Number(process.env["OCTOPUS_AI_TIMEOUT"])
+    if (process.env["OCTOPUS_AI_CLAUDE_PATH"]) config.ai.claudePath = process.env["OCTOPUS_AI_CLAUDE_PATH"]
   }
 
   return config
@@ -118,27 +116,11 @@ export function saveConfig(config: OctopusConfig, storeDir?: string): void {
   try {
     writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8")
   } catch (cause) {
-    throw new StoreError("CONFIG_SAVE_FAILED", `无法写入配置 ${configPath}`, cause)
+    throw new ConfigError(`无法写入配置 ${configPath}`, configPath, cause)
   }
 }
 
 /** 将 OctopusConfig 转换为 AIClient 配置 */
 export function toAIClientConfig(config: OctopusConfig): AIClientConfig {
   return { ...config.ai }
-}
-
-/** 从配置创建 WorkflowEngine 实例 */
-export async function createWorkflowEngineFromConfig(config: OctopusConfig): Promise<WorkflowEngine> {
-  const [{ WorkflowEngine }, { createAIClient }] = await Promise.all([
-    import("@octopus/workflow-engine/index.js"),
-    import("@octopus/agent-layer/index.js"),
-  ])
-  const store = createStateStore({ storeDir: config.storeDir })
-  return new WorkflowEngine({
-    store,
-    aiClient: createAIClient(toAIClientConfig(config)),
-    strictPermissions: config.workflow.strictPermissions,
-    aiGatingEnabled: config.workflow.aiGatingEnabled,
-    heinrichThreshold: config.workflow.heinrichThreshold,
-  })
 }

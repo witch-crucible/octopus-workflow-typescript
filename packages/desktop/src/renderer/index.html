@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'" />
+    <title>Octopus Workflow</title>
+    <style>
+      body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; color: #1c1c1e; background: #f5f5f7; }
+      header { padding: 16px 24px; background: #1c1c1e; color: #fff; }
+      header h1 { margin: 0; font-size: 18px; }
+      main { display: grid; grid-template-columns: 280px 1fr; gap: 0; height: calc(100vh - 52px); }
+      .sidebar { border-right: 1px solid #ddd; padding: 16px; overflow: auto; background: #fff; }
+      .content { padding: 24px; overflow: auto; }
+      .project { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-family: ui-monospace, monospace; font-size: 12px; }
+      .project:hover, .project.active { background: #e8e8ed; }
+      input, button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; }
+      button { background: #0a84ff; color: #fff; border: none; cursor: pointer; }
+      button:hover { background: #0060df; }
+      .row { display: flex; gap: 8px; margin-bottom: 12px; }
+      .row input { flex: 1; }
+      .bar { display: inline-block; width: 120px; height: 8px; background: #e8e8ed; border-radius: 4px; overflow: hidden; vertical-align: middle; }
+      .bar > span { display: block; height: 100%; background: #34c759; }
+      table { border-collapse: collapse; width: 100%; }
+      td { padding: 6px 8px; border-bottom: 1px solid #eee; }
+      .muted { color: #888; }
+    </style>
+  </head>
+  <body>
+    <header><h1>🐙 Octopus Workflow</h1></header>
+    <main>
+      <div class="sidebar">
+        <div class="row">
+          <input id="name" placeholder="新项目名称" />
+        </div>
+        <div class="row">
+          <input id="desc" placeholder="描述（可选）" />
+          <button id="create">创建</button>
+        </div>
+        <h3>项目</h3>
+        <div id="projects"></div>
+      </div>
+      <div class="content" id="content">
+        <p class="muted">从左侧选择或创建一个项目。</p>
+      </div>
+    </main>
+    <script src="renderer.js"></script>
+  </body>
+</html>

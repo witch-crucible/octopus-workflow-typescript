@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 2,
+  "projectId": "proj_1785311243583_5hi5br",
+  "projectName": "cap_no_ai",
+  "description": "",
+  "createdAt": "2026-07-29T07:47:23.583Z",
+  "updatedAt": "2026-07-29T07:47:23.584Z",
+  "currentPhase": "RequirementsAnalysis",
+  "phaseStatus": {
+    "RequirementsAnalysis": "ACTIVE",
+    "Design": "LOCKED",
+    "Development": "LOCKED",
+    "Testing": "LOCKED",
+    "Deployment": "LOCKED",
+    "Maintenance": "LOCKED"
+  },
+  "steps": [
+    {
+      "id": "10.1",
+      "taskId": "10.1_1785311243583_7j0byp",
+      "phase": "RequirementsAnalysis",
+      "name": "需求分析和 BRD 设计",
+      "description": "PM 进行需求分析，完成 BRD 设计",
+      "responsibleRole": "PM",
+      "status": "PENDING",
+      "dependsOn": [],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.2",
+      "taskId": "10.2_1785311243583_8sdjy1",
+      "phase": "RequirementsAnalysis",
+      "name": "BRD 讲解",
+      "description": "PM 向 BA 讲解 BRD",
+      "responsibleRole": "PM",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.1"
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.3",
+      "taskId": "10.3_1785311243583_z5y45a",
+      "phase": "RequirementsAnalysis",
+      "name": "需求调研",
+      "description": "SA 进行技术调研，评估可行性和预计时间/成本",
+      "responsibleRole": "SA",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.2"
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.4",
+      "taskId": "10.4_1785311243583_6b2h3e",
+      "phase": "RequirementsAnalysis",
+      "name": "PRD 设计与边界逆向设计",
+      "description": "BA 进行 PRD 设计和边界逆向设计",
+      "responsibleRole": "BA",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.3"
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.5",
+      "taskId": "10.5_1785311243583_95g1a0",
+      "phase": "RequirementsAnalysis",
+      "name": "PRD 讲解",
+      "description": "BA 向 PM/DEV/SA 讲解 PRD",
+      "responsibleRole": "BA",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.4"
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.6",
+      "taskId": "10.6_1785311243583_om21xd",
+      "phase": "RequirementsAnalysis",
+      "name": "AI 会议纪要",
+      "description": "AI 通过通义听悟/chatGPT录音生成会议纪要",
+      "responsibleRole": "AI",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.5"
+      ],
+      "capabilities": [
+        {
+          "kind": "ai",
+          "assistant": "MEETING_MINUTES"
+        }
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.584Z",
+      "capabilityRuns": [
+        {
+          "kind": "ai",
+          "ref": "MEETING_MINUTES",
+          "ok": false,
+          "at": "2026-07-29T07:47:23.584Z",
+          "summary": "未配置 AIClient"
+        }
+      ]
+    },
+    {
+      "id": "10.7",
+      "taskId": "10.7_1785311243583_kq8mhw",
+      "phase": "RequirementsAnalysis",
+      "name": "PRD 阅读和功能点拆分",
+      "description": "SA 阅读 PRD 并拆分功能点",
+      "responsibleRole": "SA",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.5"
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.8",
+      "taskId": "10.8_1785311243583_ta2bqo",
+      "phase": "RequirementsAnalysis",
+      "name": "PRD 估时",
+      "description": "SA 对功能点进行估时（每子项 ≤2h）",
+      "responsibleRole": "SA",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.7"
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.9",
+      "taskId": "10.9_1785311243583_ald3gf",
+      "phase": "RequirementsAnalysis",
+      "name": "AI 需求分析",
+      "description": "AI 根据项目代码/wiki/思维导图进行需求拆解分析",
+      "responsibleRole": "SA",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.7"
+      ],
+      "capabilities": [
+        {
+          "kind": "ai",
+          "assistant": "REQUIREMENTS_ANALYSIS"
+        }
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.10",
+      "taskId": "10.10_1785311243583_q8cilt",
+      "phase": "RequirementsAnalysis",
+      "name": "AI PRD 估时提取",
+      "description": "AI 从 Excel 估时明细中汇总工时",
+      "responsibleRole": "AI",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.8"
+      ],
+      "capabilities": [
+        {
+          "kind": "ai",
+          "assistant": "EFFORT_ESTIMATION"
+        }
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.11",
+      "taskId": "10.11_1785311243583_dr8nma",
+      "phase": "RequirementsAnalysis",
+      "name": "PRD 估时同步",
+      "description": "SA 向 PM 和 DEV 同步估时结果",
+      "responsibleRole": "SA",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.10"
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    },
+    {
+      "id": "10.12",
+      "taskId": "10.12_1785311243583_xr7gxq",
+      "phase": "RequirementsAnalysis",
+      "name": "DEV 二次确认工时",
+      "description": "DEV 确认工时评估",
+      "responsibleRole": "DEV",
+      "status": "PENDING",
+      "dependsOn": [
+        "10.11"
+      ],
+      "artifactIds": [],
+      "createdAt": "2026-07-29T07:47:23.583Z",
+      "updatedAt": "2026-07-29T07:47:23.583Z"
+    }
+  ],
+  "checklists": {
+    "RequirementsAnalysis": {
+      "phase": "RequirementsAnalysis",
+      "items": []
+    }
+  },
+  "heinrich": {
+    "majorDefects": 0,
+    "minorDefects": 0,
+    "trivialDefects": 0,
+    "observations": [],
+    "triggerCounts": {
+      "RequirementsAnalysis": 0,
+      "Design": 0,
+      "Development": 0,
+      "Testing": 0,
+      "Deployment": 0,
+      "Maintenance": 0
+    }
+  },
+  "artifacts": [],
+  "metadata": {},
+  "aiGatingEnabled": false,
+  "aiGateResults": []
+}

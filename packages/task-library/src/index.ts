@@ -1,68 +1,59 @@
 /**
- * Task Library 包 —— 各阶段预定义的任务模板。
+ * Task Library 包 —— 从 spec 步骤生成运行态 StepRuntime。
  *
- * 将 phase.ts 中的 StageDef 转换为可执行的 Task 实例，
- * 并提供每个阶段的任务工厂函数。
+ * 将 spec 中的 StepSpec 转换为可执行的 StepRuntime 实例。
  */
 
-import type { Task } from "@octopus/core/task.js"
+import type { StepSpec } from "@octopus/core/spec.js"
+import { getSteps } from "@octopus/core/spec.js"
+import type { StepRuntime } from "@octopus/core/step.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { TaskId } from "@octopus/core/branded-ids.js"
-import type { StageDef } from "@octopus/core/phase.js"
-import { Phase, getStages } from "@octopus/core/phase.js"
+import { Phase } from "@octopus/core/phase.js"
+import { Role } from "@octopus/core/role.js"
 
-/** 任务创建参数 */
-export interface TaskTemplateParams {
-  projectId: string
-  stage: StageDef
-  phase: Phase
-}
-
-/** 从阶段步骤定义创建任务 */
-export function createTaskFromStage(params: TaskTemplateParams): Task {
-  const { stage, phase } = params
-  const timestamp = Date.now()
+/** 从步骤定义创建运行态步骤 */
+export function createStepFromSpec(phase: Phase, step: StepSpec): StepRuntime {
+  const now = new Date().toISOString()
   const random = Math.random().toString(36).slice(2, 8)
-
   return {
-    id: TaskId(`${stage.id}_${timestamp}_${random}`),
-    stageId: stage.id,
+    id: step.id,
+    taskId: TaskId(`${step.id}_${Date.now()}_${random}`),
     phase,
-    title: stage.name,
-    description: stage.description,
-    responsibleRole: stage.responsibleRoles[0] ?? stage.responsibleRoles[0]!,
+    name: step.name,
+    description: step.description,
+    responsibleRole: step.responsibleRoles[0] ?? Role.AI,
     status: TaskStatus.PENDING,
+    dependsOn: [...step.dependsOn],
+    ...(step.capabilities ? { capabilities: step.capabilities } : {}),
     artifactIds: [],
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
   }
 }
 
-/** 为一个阶段生成所有任务 */
-export function createTasksForPhase(projectId: string, phase: Phase): Task[] {
-  const stages = getStages(phase)
-  return stages.map((stage) => createTaskFromStage({ projectId, stage, phase }))
+/** 为一个阶段生成所有步骤 */
+export function createStepsForPhase(_projectId: string, phase: Phase): StepRuntime[] {
+  return getSteps(phase).map((step) => createStepFromSpec(phase, step))
 }
 
-/** 为所有阶段生成所有任务 */
-export function createAllTasks(projectId: string): Record<Phase, Task[]> {
-  const phases = Object.values(Phase)
-  const result = {} as Record<Phase, Task[]>
-
-  for (const phase of phases) {
-    result[phase] = createTasksForPhase(projectId, phase)
+/** 为所有阶段生成所有步骤 */
+export function createAllSteps(projectId: string): Record<Phase, StepRuntime[]> {
+  const result = {} as Record<Phase, StepRuntime[]>
+  for (const phase of Object.values(Phase)) {
+    result[phase] = createStepsForPhase(projectId, phase)
   }
-
   return result
 }
 
-/** 获取指定阶段中特定角色的任务 */
-export function getTasksByRole(tasks: Task[], roleName: string): Task[] {
-  return tasks.filter((t) => t.responsibleRole === roleName)
+/** 获取特定角色的步骤 */
+export function getStepsByRole(steps: StepRuntime[], roleName: string): StepRuntime[] {
+  return steps.filter((s) => s.responsibleRole === roleName)
 }
 
-/** 获取指定阶段中未完成的任务 */
-export function getPendingTasks(tasks: Task[]): Task[] {
-  return tasks.filter(
-    (t) => t.status === TaskStatus.PENDING || t.status === TaskStatus.IN_PROGRESS,
+/** 获取未完成的步骤 */
+export function getPendingSteps(steps: StepRuntime[]): StepRuntime[] {
+  return steps.filter(
+    (s) => s.status === TaskStatus.PENDING || s.status === TaskStatus.IN_PROGRESS,
   )
 }

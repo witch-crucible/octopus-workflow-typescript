@@ -34,7 +34,7 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
           ? (Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase()) ?? state.currentPhase)
           : state.currentPhase
 
-        const stages = Object.values(state.stages).filter((s) => s.phase === phase)
+        const stages = engine.getStageInfos(pid, phase)
 
         if (options?.json) {
           console.log(JSON.stringify({
@@ -75,8 +75,7 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
         const pid = resolveProjectId(engine, projectId)
         if (!pid) return
 
-        const state = engine.getState(pid)
-        const stage = state.stages[stageId]
+        const stage = engine.getStageInfo(pid, stageId)
 
         if (!stage) {
           console.error(`❌ 步骤不存在: ${stageId}`)
@@ -132,10 +131,10 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
           return
         }
 
-        const updated = engine.updateStageStatus(pid, stageId, normalized)
+        engine.updateStageStatus(pid, stageId, normalized)
 
         if (options?.json) {
-          const stage = updated.stages[stageId]
+          const stage = engine.getStageInfo(pid, stageId)
           console.log(JSON.stringify({
             projectId: pid,
             stageId,

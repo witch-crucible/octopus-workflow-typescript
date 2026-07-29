@@ -21,7 +21,7 @@ export function buildInitCommand(program: Command, engine: WorkflowEngine): void
             projectName: state.projectName,
             description: state.description,
             currentPhase: state.currentPhase,
-            taskCount: state.tasks.length,
+            taskCount: state.steps.length,
             createdAt: state.createdAt,
           }, null, 2))
           return
@@ -29,7 +29,7 @@ export function buildInitCommand(program: Command, engine: WorkflowEngine): void
         console.log(`✅ 项目已创建: ${state.projectName}`)
         console.log(`   项目 ID: ${state.projectId}`)
         console.log(`   当前阶段: ${state.currentPhase}`)
-        console.log(`   任务数: ${state.tasks.length}`)
+        console.log(`   任务数: ${state.steps.length}`)
       } catch (err) {
         console.error(`❌ 创建项目失败: ${(err as Error).message}`)
         process.exit(1)

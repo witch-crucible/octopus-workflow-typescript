@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFil
 import { join, dirname, isAbsolute, resolve } from "node:path"
 import type { WorkflowState } from "@octopus/core/workflow.js"
 import { ProjectId } from "@octopus/core/branded-ids.js"
-import { createEmptyState } from "@octopus/core/workflow.js"
+import { createEmptyState, migrateWorkflowState } from "@octopus/core/workflow.js"
 import { Phase } from "@octopus/core/phase.js"
 import { StoreError } from "@octopus/core/errors.js"
 
@@ -114,7 +114,8 @@ class JsonFileStateStore implements StateStore {
     const filePath = join(this.projectsDir, `${projectId}.json`)
     try {
       const raw = readFileSync(filePath, "utf-8")
-      return JSON.parse(raw) as WorkflowState
+      // 迁移旧版（v1: tasks[]+stages{}）状态到统一 steps 模型
+      return migrateWorkflowState(JSON.parse(raw))
     } catch (cause) {
       throw new StoreError("STORE_LOAD_FAILED", `无法加载项目 ${projectId}`, cause)
     }

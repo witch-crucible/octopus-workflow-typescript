@@ -37,7 +37,7 @@ describe("WorkflowEngine", () => {
     it("初始阶段生成12个任务", () => {
       const engine = createEngine()
       const state = engine.initProject("测试项目")
-      expect(state.tasks.length).toBeGreaterThanOrEqual(12)
+      expect(state.steps.length).toBeGreaterThanOrEqual(12)
     })
 
     it("初始化海因里希记录", () => {
@@ -101,9 +101,9 @@ describe("WorkflowEngine", () => {
     it("完成任务", () => {
       const engine = createEngine()
       const state = engine.initProject("complete_test")
-      const task = state.tasks[0]!
-      const updated = engine.completeTask(state.projectId, task.id)
-      const done = updated.tasks.find((t) => t.id === task.id)!
+      const task = engine.getTasks(state.projectId)[0]!
+      engine.completeTask(state.projectId, task.id)
+      const done = engine.getTasks(state.projectId).find((t) => t.id === task.id)!
       expect(done.status).toBe(TaskStatus.COMPLETED)
       expect(done.completedAt).toBeTruthy()
     })
@@ -224,7 +224,7 @@ describe("WorkflowEngine", () => {
       const engine = createEngine()
       const state = engine.initProject("artifact_test")
       const created = engine.createArtifact(state.projectId, {
-        type: ArtifactType.DOCUMENT,
+        type: ArtifactType.PRD,
         title: "产品需求文档",
         description: "v1",
         phase: Phase.REQUIREMENTS_ANALYSIS,
@@ -241,13 +241,13 @@ describe("WorkflowEngine", () => {
     it("设置任务状态并记录完成时间", () => {
       const engine = createEngine()
       const state = engine.initProject("set_status_test")
-      const task = state.tasks[0]!
-      const updated = engine.setTaskStatus(state.projectId, task.id, TaskStatus.IN_PROGRESS)
-      const found = updated.tasks.find((t) => t.id === task.id)!
+      const task = engine.getTasks(state.projectId)[0]!
+      engine.setTaskStatus(state.projectId, task.id, TaskStatus.IN_PROGRESS)
+      const found = engine.getTasks(state.projectId).find((t) => t.id === task.id)!
       expect(found.status).toBe(TaskStatus.IN_PROGRESS)
       expect(found.completedAt).toBeUndefined()
-      const completed = engine.setTaskStatus(state.projectId, task.id, TaskStatus.COMPLETED)
-      const done = completed.tasks.find((t) => t.id === task.id)!
+      engine.setTaskStatus(state.projectId, task.id, TaskStatus.COMPLETED)
+      const done = engine.getTasks(state.projectId).find((t) => t.id === task.id)!
       expect(done.status).toBe(TaskStatus.COMPLETED)
       expect(done.completedAt).toBeTruthy()
     })

@@ -1,0 +1,38 @@
+{
+  "name": "@octopus/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Octopus 工作流引擎的 macOS 桌面外壳（Electron）",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "pnpm build && electron .",
+    "dist:mac": "pnpm build && electron-builder --mac"
+  },
+  "dependencies": {
+    "@octopus/context": "workspace:*",
+    "@octopus/workflow-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.2.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.6.0"
+  },
+  "build": {
+    "appId": "com.octopus.workflow",
+    "productName": "Octopus Workflow",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "src/renderer/**/*"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    }
+  }
+}

@@ -10,12 +10,12 @@
  * - 前进前必须满足退出条件：所有任务已完成 + 清单已核验
  */
 
-import { createMachine } from "xstate"
 import type { WorkflowState, ProjectStatusSummary } from "@octopus/core/workflow.js"
-import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER, getPhaseDef } from "@octopus/core/phase.js"
+import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER } from "@octopus/core/phase.js"
 import type { Task, TaskFilter, TaskProgress } from "@octopus/core/task.js"
 import { TaskStatus } from "@octopus/core/task.js"
-import { StageStatus, StageProgress, StageInfo } from "@octopus/core/task.js"
+import { StageStatus } from "@octopus/core/task.js"
+import type { StageProgress, StageInfo } from "@octopus/core/task.js"
 import type { Checklist, ChecklistItem } from "@octopus/core/checklist.js"
 import { ChecklistItemStatus } from "@octopus/core/checklist.js"
 import type { HeinrichRecord, HeinrichObservation, QualityAssessment } from "@octopus/core/risk.js"
@@ -25,26 +25,20 @@ import type { ProjectId } from "@octopus/core/branded-ids.js"
 import { PhaseId, TaskId, ChecklistItemId, ObservationId, ArtifactId } from "@octopus/core/branded-ids.js"
 import { Role } from "@octopus/core/role.js"
 import { InvalidPhaseTransitionError, PhaseLockedError } from "@octopus/core/errors.js"
-import { createEmptyState } from "@octopus/core/workflow.js"
+import { createEmptyState, stepToTask, stepToStageInfo } from "@octopus/core/workflow.js"
+import type { StepRuntime } from "@octopus/core/step.js"
 import { createEmptyChecklist } from "@octopus/core/checklist.js"
 import type { StateStore } from "@octopus/context/index.js"
-import { createTasksForPhase } from "@octopus/task-library/index.js"
+import { createStateStore } from "@octopus/context/index.js"
+import type { OctopusConfig } from "@octopus/context/config.js"
+import { toAIClientConfig } from "@octopus/context/config.js"
+import { createStepsForPhase } from "@octopus/task-library/index.js"
 import type { AIClient } from "@octopus/agent-layer/index.js"
+import { createAIClient } from "@octopus/agent-layer/index.js"
 import type { AIEventHandler, AIEventPayload, AIGateResult } from "@octopus/core/agent.js"
-
-/** xstate v5 状态机定义 */
-const workflowMachine = createMachine({
-  id: "octopus-workflow",
-  initial: Phase.REQUIREMENTS_ANALYSIS,
-  states: {
-    [Phase.REQUIREMENTS_ANALYSIS]: { on: { ADVANCE: Phase.DESIGN } },
-    [Phase.DESIGN]: { on: { ADVANCE: Phase.DEVELOPMENT } },
-    [Phase.DEVELOPMENT]: { on: { ADVANCE: Phase.TESTING } },
-    [Phase.TESTING]: { on: { ADVANCE: Phase.DEPLOYMENT } },
-    [Phase.DEPLOYMENT]: { on: { ADVANCE: Phase.MAINTENANCE } },
-    [Phase.MAINTENANCE]: { type: "final" },
-  },
-})
+import type { IntegrationService } from "@octopus/integration/index.js"
+import { CapabilityRegistry } from "./capabilities.js"
+import type { CapabilityContext } from "./capabilities.js"
 
 /** 门控检查结果 */
 export interface GateCheckResult {
@@ -62,6 +56,8 @@ export interface WorkflowEngineConfig {
   aiGatingEnabled?: boolean
   /** 海因里希条数阈值 */
   heinrichThreshold?: number
+  /** 外部集成服务表（capability 的 integration handler 按 service 名解析） */
+  integrations?: Record<string, IntegrationService>
 }
 
 /**
@@ -73,6 +69,8 @@ export class WorkflowEngine {
   private readonly strictPermissions: boolean
   private readonly aiGatingEnabled: boolean
   private readonly heinrichThreshold: number
+  private readonly registry: CapabilityRegistry
+  private readonly integrations: Record<string, IntegrationService>
   private aiHandlers: Array<(event: {
     type: "onPhaseAdvance" | "onPhaseRollback"
     from: Phase
@@ -86,6 +84,56 @@ export class WorkflowEngine {
     this.strictPermissions = config.strictPermissions ?? false
     this.aiGatingEnabled = config.aiGatingEnabled ?? false
     this.heinrichThreshold = config.heinrichThreshold ?? 3
+    this.registry = new CapabilityRegistry()
+    this.integrations = config.integrations ?? {}
+  }
+
+  /** 暴露 capability 注册表以便注册自定义处理器 */
+  get capabilities(): CapabilityRegistry {
+    return this.registry
+  }
+
+  /**
+   * 分发某步骤声明的 capabilities（AI / 集成 / Heinrich）。
+   * 改 spec 步骤上的 capability 即可增删行为，无需改本方法。
+   */
+  async runStepCapabilities(projectId: string, stepId: string): Promise<WorkflowState> {
+    const state = this.getState(projectId)
+    const step = state.steps.find((s) => s.id === stepId)
+    if (!step) {
+      throw new Error(`步骤不存在: ${stepId}`)
+    }
+
+    const caps = step.capabilities ?? []
+    if (caps.length === 0) {
+      return state
+    }
+
+    const ctx: CapabilityContext = {
+      state,
+      step,
+      aiClient: this.aiClient,
+      integrations: this.integrations,
+    }
+    const runs = step.capabilityRuns ?? []
+    for (const ref of caps) {
+      const result = await this.registry.dispatch(ref, ctx)
+      runs.push({
+        kind: result.kind,
+        ref: result.ref,
+        ok: result.ok,
+        at: new Date().toISOString(),
+        ...(result.summary !== undefined ? { summary: result.summary } : {}),
+      })
+    }
+    step.capabilityRuns = runs
+    step.updatedAt = new Date().toISOString()
+
+    // capability 可能改变 Heinrich 条数，检查审计触发
+    this.checkHeinrichAuditTrigger(state, step.phase)
+
+    this.store.save(state)
+    return state
   }
 
   // ── 项目生命周期 ──
@@ -94,27 +142,10 @@ export class WorkflowEngine {
   initProject(name: string, description?: string): WorkflowState {
     const state = this.store.createProject(name, description)
 
-    // 为当前阶段（REQUIREMENTS）生成默认任务
-    const tasks = createTasksForPhase(state.projectId, state.currentPhase)
-    state.tasks = tasks
-    state.checklists[Phase.REQUIREMENTS_ANALYSIS] = createEmptyChecklist(Phase.REQUIREMENTS_ANALYSIS)
-
-    // 初始化海因里希记录
+    // 为当前阶段生成步骤（唯一真相源：tasks 与 stages 已统一为 steps）
+    state.steps = createStepsForPhase(state.projectId, state.currentPhase)
+    state.checklists[state.currentPhase] = createEmptyChecklist(state.currentPhase)
     state.heinrich = createEmptyHeinrichRecord()
-
-    // 初始化阶段步骤运行态
-    const phaseDef = getPhaseDef(state.currentPhase)
-    for (const stage of phaseDef.stages) {
-      state.stages[stage.id] = {
-        stageId: stage.id,
-        phase: state.currentPhase,
-        status: StageStatus.PENDING,
-        dependsOn: stage.dependsOn,
-        responsibleRole: stage.responsibleRoles[0] ?? Role.AI,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }
-    }
 
     this.store.save(state)
     return state
@@ -158,8 +189,8 @@ export class WorkflowEngine {
         minor: state.heinrich.minorDefects,
         trivial: state.heinrich.trivialDefects,
       },
-      totalTasks: state.tasks.length,
-      completedTasks: state.tasks.filter((t) => t.status === TaskStatus.COMPLETED).length,
+      totalTasks: state.steps.length,
+      completedTasks: state.steps.filter((s) => s.status === TaskStatus.COMPLETED).length,
       checklistStats: { total: totalChecklist, verified: verifiedChecklist, pending: pendingChecklist },
     }
   }
@@ -179,11 +210,12 @@ export class WorkflowEngine {
     this.aiHandlers.push(handler)
   }
 
-  /** 触发 AI 门控事件 */
+  /** 触发 AI 门控事件（同步门控；异步处理器暂不支持，跳过） */
   private emitAIEvent(payload: AIEventPayload): AIGateResult {
     for (const handler of this.aiHandlers) {
       const result = handler(payload)
-      if (result && !result.allowed) {
+      if (result instanceof Promise) continue
+      if (!result.allowed) {
         return result
       }
     }
@@ -192,41 +224,55 @@ export class WorkflowEngine {
 
   // ── Stage 生命周期 ──
 
-  /** 更新阶段步骤状态 */
+  /** 更新步骤状态（按步骤 id；status 沿用 StageStatus 值域，与 TaskStatus 等价） */
   updateStageStatus(projectId: string, stageId: string, status: StageStatus): WorkflowState {
     const state = this.getState(projectId)
-    const stage = state.stages[stageId]
+    const step = state.steps.find((s) => s.id === stageId)
 
-    if (!stage) {
+    if (!step) {
       throw new Error(`阶段步骤不存在: ${stageId}`)
     }
 
-    stage.status = status
-    stage.updatedAt = new Date().toISOString()
+    step.status = status as unknown as TaskStatus
+    step.updatedAt = new Date().toISOString()
     if (status === StageStatus.COMPLETED) {
-      stage.completedAt = new Date().toISOString()
+      step.completedAt = new Date().toISOString()
     }
 
     this.store.save(state)
     return state
   }
 
-  /** 检查阶段步骤依赖是否满足 */
+  /** 获取步骤运行态视图（StageInfo，从 steps 派生） */
+  getStageInfos(projectId: string, phase?: Phase): StageInfo[] {
+    const state = this.getState(projectId)
+    const steps = phase ? state.steps.filter((s) => s.phase === phase) : state.steps
+    return steps.map(stepToStageInfo)
+  }
+
+  /** 获取单个步骤运行态视图 */
+  getStageInfo(projectId: string, stageId: string): StageInfo | undefined {
+    const state = this.getState(projectId)
+    const step = state.steps.find((s) => s.id === stageId)
+    return step ? stepToStageInfo(step) : undefined
+  }
+
+  /** 检查步骤依赖是否满足（与任务门控读取同一 steps 真相源） */
   private checkStageDependencies(state: WorkflowState, phase: Phase): GateCheckResult {
     const reasons: string[] = []
-    const phaseStages = Object.values(state.stages).filter((s) => s.phase === phase)
+    const phaseSteps = state.steps.filter((s) => s.phase === phase)
 
-    for (const stage of phaseStages) {
-      if (stage.status === StageStatus.SKIPPED) continue
-      if (stage.dependsOn.length === 0) continue
+    for (const step of phaseSteps) {
+      if (step.status === TaskStatus.SKIPPED) continue
+      if (step.dependsOn.length === 0) continue
 
-      const unmet = stage.dependsOn.filter((depId) => {
-        const dep = state.stages[depId]
-        return !dep || dep.status !== StageStatus.COMPLETED
+      const unmet = step.dependsOn.filter((depId) => {
+        const dep = state.steps.find((s) => s.id === depId)
+        return !dep || dep.status !== TaskStatus.COMPLETED
       })
 
       if (unmet.length > 0) {
-        reasons.push(`阶段步骤 ${stage.stageId} 依赖未满足: ${unmet.join(", ")}`)
+        reasons.push(`阶段步骤 ${step.id} 依赖未满足: ${unmet.join(", ")}`)
       }
     }
 
@@ -236,13 +282,13 @@ export class WorkflowEngine {
   /** 获取阶段步骤进度 */
   getStageProgress(projectId: string, phase: Phase): StageProgress {
     const state = this.getState(projectId)
-    const phaseStages = Object.values(state.stages).filter((s) => s.phase === phase)
-    const total = phaseStages.length
-    const completed = phaseStages.filter((s) => s.status === StageStatus.COMPLETED).length
-    const inProgress = phaseStages.filter((s) => s.status === StageStatus.IN_PROGRESS).length
-    const blocked = phaseStages.filter((s) => s.status === StageStatus.BLOCKED).length
-    const pending = phaseStages.filter((s) => s.status === StageStatus.PENDING).length
-    const skipped = phaseStages.filter((s) => s.status === StageStatus.SKIPPED).length
+    const phaseSteps = state.steps.filter((s) => s.phase === phase)
+    const total = phaseSteps.length
+    const completed = phaseSteps.filter((s) => s.status === TaskStatus.COMPLETED).length
+    const inProgress = phaseSteps.filter((s) => s.status === TaskStatus.IN_PROGRESS).length
+    const blocked = phaseSteps.filter((s) => s.status === TaskStatus.BLOCKED).length
+    const pending = phaseSteps.filter((s) => s.status === TaskStatus.PENDING).length
+    const skipped = phaseSteps.filter((s) => s.status === TaskStatus.SKIPPED).length
 
     return {
       total,
@@ -265,11 +311,11 @@ export class WorkflowEngine {
       return { allowed: false, reasons: ["已是最终阶段，无法继续前进"] }
     }
 
-    // 2. 检查当前阶段所有任务是否已完成
-    const phaseTasks = state.tasks.filter((t) => t.phase === currentPhase)
-    const pendingTasks = phaseTasks.filter((t) => t.status !== TaskStatus.COMPLETED && t.status !== TaskStatus.SKIPPED)
-    if (pendingTasks.length > 0) {
-      reasons.push(`有 ${pendingTasks.length} 个任务未完成`)
+    // 2. 检查当前阶段所有步骤是否已完成
+    const phaseSteps = state.steps.filter((s) => s.phase === currentPhase)
+    const pendingSteps = phaseSteps.filter((s) => s.status !== TaskStatus.COMPLETED && s.status !== TaskStatus.SKIPPED)
+    if (pendingSteps.length > 0) {
+      reasons.push(`有 ${pendingSteps.length} 个任务未完成`)
     }
 
     // 3. 检查当前阶段清单是否已全部核验
@@ -285,7 +331,7 @@ export class WorkflowEngine {
   }
 
   /** 前进到下一阶段 */
-  async advancePhase(projectId: string, skipAiGating?: boolean): Promise<WorkflowState> {
+  advancePhase(projectId: string, skipAiGating?: boolean): WorkflowState {
     const state = this.getState(projectId)
     const gate = this.checkAdvanceGate(state)
 
@@ -317,7 +363,7 @@ export class WorkflowEngine {
         state.aiGateResults.push({
           phase: state.currentPhase,
           allowed: false,
-          reason: aiResult.reason,
+          ...(aiResult.reason !== undefined ? { reason: aiResult.reason } : {}),
           timestamp: new Date().toISOString(),
         })
         this.store.save(state)
@@ -337,9 +383,13 @@ export class WorkflowEngine {
     state.phaseStatus[next] = PhaseLock.ACTIVE
     state.currentPhase = next
 
-    // 生成下一阶段的任务
-    const nextTasks = createTasksForPhase(state.projectId, next)
-    state.tasks.push(...nextTasks)
+    // 生成下一阶段的步骤（唯一真相源）
+    const existingIds = new Set(state.steps.map((s) => s.id))
+    for (const step of createStepsForPhase(state.projectId, next)) {
+      if (!existingIds.has(step.id)) {
+        state.steps.push(step)
+      }
+    }
 
     // 初始化下一阶段的清单
     if (!state.checklists[next]) {
@@ -349,50 +399,14 @@ export class WorkflowEngine {
     // Checklist 继承
     this.inheritChecklist(state, state.currentPhase)
 
-    // 初始化下一阶段 Stage 运行态
-    const nextPhaseDef = getPhaseDef(next)
-    for (const stage of nextPhaseDef.stages) {
-      if (!state.stages[stage.id]) {
-        state.stages[stage.id] = {
-          stageId: stage.id,
-          phase: next,
-          status: StageStatus.PENDING,
-          dependsOn: stage.dependsOn,
-          responsibleRole: stage.responsibleRoles[0] ?? Role.AI,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }
-      }
-    }
-
     // 海因里希三角：阶段前进时记录条数触发计数
     state.heinrich.triggerCounts[next] = (state.heinrich.triggerCounts[next] ?? 0) + 1
 
     // Heinrich 条数审计触发
     this.checkHeinrichAuditTrigger(state, next)
 
-    // AI checklist 增量推荐（尽力而为，不阻塞）
-    if (this.aiClient) {
-      try {
-        const scope = `Phase transition from ${state.currentPhase} to ${next}`
-        const recommendation = await this.aiClient.recommendChecklistItems(scope)
-        const parsed = JSON.parse(recommendation.result ?? "[]") as Array<{ category: string; description: string }>
-        const target = state.checklists[next]
-        if (target && Array.isArray(parsed)) {
-          for (const item of parsed) {
-            target.items.push({
-              id: ChecklistItemId(`cl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-              category: item.category ?? "AI Recommended",
-              description: item.description,
-              status: ChecklistItemStatus.PENDING,
-              inherited: false,
-            })
-          }
-        }
-      } catch {
-        // AI 推荐失败不影响阶段前进
-      }
-    }
+    // 注：阶段前进时的 AI Checklist 增量推荐已迁移为 spec 步骤 capability，
+    // 由 runStepCapabilities 显式触发（见 Phase 3），此处不再内联异步调用。
 
     this.store.save(state)
     return state
@@ -425,7 +439,7 @@ export class WorkflowEngine {
         state.aiGateResults.push({
           phase: state.currentPhase,
           allowed: false,
-          reason: aiResult.reason,
+          ...(aiResult.reason !== undefined ? { reason: aiResult.reason } : {}),
           timestamp: new Date().toISOString(),
         })
         this.store.save(state)
@@ -467,10 +481,10 @@ export class WorkflowEngine {
 
   // ── 任务操作 ──
 
-  /** 获取任务列表 */
+  /** 获取任务列表（从 steps 派生 Task 视图） */
   getTasks(projectId: string, filter?: TaskFilter): Task[] {
     const state = this.getState(projectId)
-    let tasks = [...state.tasks]
+    let tasks = state.steps.map(stepToTask)
 
     if (filter?.phase) {
       tasks = tasks.filter((t) => t.phase === filter.phase)
@@ -488,21 +502,22 @@ export class WorkflowEngine {
     return tasks
   }
 
-  /** 完成任务 */
+  /** 完成任务（按 taskId 定位对应步骤） */
   completeTask(projectId: string, taskId: string, role?: Role): WorkflowState {
     const state = this.getState(projectId)
-    const task = state.tasks.find((t) => t.id === taskId)
+    const step = state.steps.find((s) => s.taskId === taskId)
 
-    if (!task) {
+    if (!step) {
       throw new Error(`任务不存在: ${taskId}`)
     }
 
     if (role) {
-      this.requireRole(projectId, taskId, role, task.responsibleRole)
+      this.requireRole(projectId, taskId, role, step.responsibleRole)
     }
 
-    task.status = TaskStatus.COMPLETED
-    task.completedAt = new Date().toISOString()
+    step.status = TaskStatus.COMPLETED
+    step.completedAt = new Date().toISOString()
+    step.updatedAt = new Date().toISOString()
 
     this.store.save(state)
     return state
@@ -511,15 +526,16 @@ export class WorkflowEngine {
   /** 设置任务状态 */
   setTaskStatus(projectId: string, taskId: string, status: TaskStatus): WorkflowState {
     const state = this.getState(projectId)
-    const task = state.tasks.find((t) => t.id === taskId)
+    const step = state.steps.find((s) => s.taskId === taskId)
 
-    if (!task) {
+    if (!step) {
       throw new Error(`任务不存在: ${taskId}`)
     }
 
-    task.status = status
+    step.status = status
+    step.updatedAt = new Date().toISOString()
     if (status === TaskStatus.COMPLETED) {
-      task.completedAt = new Date().toISOString()
+      step.completedAt = new Date().toISOString()
     }
 
     this.store.save(state)
@@ -528,13 +544,13 @@ export class WorkflowEngine {
 
   /** 获取某阶段任务进度 */
   getPhaseProgress(state: WorkflowState, phase: Phase): TaskProgress {
-    const tasks = state.tasks.filter((t) => t.phase === phase)
-    const total = tasks.length
-    const completed = tasks.filter((t) => t.status === TaskStatus.COMPLETED).length
-    const inProgress = tasks.filter((t) => t.status === TaskStatus.IN_PROGRESS).length
-    const blocked = tasks.filter((t) => t.status === TaskStatus.BLOCKED).length
-    const pending = tasks.filter((t) => t.status === TaskStatus.PENDING).length
-    const skipped = tasks.filter((t) => t.status === TaskStatus.SKIPPED).length
+    const steps = state.steps.filter((s) => s.phase === phase)
+    const total = steps.length
+    const completed = steps.filter((s) => s.status === TaskStatus.COMPLETED).length
+    const inProgress = steps.filter((s) => s.status === TaskStatus.IN_PROGRESS).length
+    const blocked = steps.filter((s) => s.status === TaskStatus.BLOCKED).length
+    const pending = steps.filter((s) => s.status === TaskStatus.PENDING).length
+    const skipped = steps.filter((s) => s.status === TaskStatus.SKIPPED).length
 
     return {
       total,
@@ -651,19 +667,25 @@ export class WorkflowEngine {
   private checkHeinrichAuditTrigger(state: WorkflowState, phase: Phase): void {
     const count = state.heinrich.triggerCounts[phase] ?? 0
     if (count >= this.heinrichThreshold) {
-      const auditTask: Task = {
-        id: TaskId(`heinrich_audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-        stageId: `heinrich.audit.${phase}`,
+      const now = new Date().toISOString()
+      const auditId = `heinrich.audit.${phase}`
+      // 幂等：同阶段审计步骤只创建一次
+      if (state.steps.some((s) => s.id === auditId)) return
+      const auditStep: StepRuntime = {
+        id: auditId,
+        taskId: TaskId(`heinrich_audit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
         phase,
-        title: `Heinrich 质量审计 - ${phase}`,
+        name: `Heinrich 质量审计 - ${phase}`,
         description: `阶段 ${phase} 的 Heinrich 条数已达到阈值 ${this.heinrichThreshold}，需进行质量评估。`,
         responsibleRole: Role.HEI,
         status: TaskStatus.PENDING,
+        dependsOn: [],
         artifactIds: [],
-        createdAt: new Date().toISOString(),
+        createdAt: now,
+        updatedAt: now,
       }
 
-      state.tasks.push(auditTask)
+      state.steps.push(auditStep)
     }
   }
 
@@ -873,4 +895,21 @@ export class WorkflowEngine {
 
     return artifacts
   }
+}
+
+/**
+ * 从配置创建 WorkflowEngine 实例。
+ *
+ * 组合根：装配 StateStore + AIClient。放在引擎包内以避免
+ * context 反向依赖 workflow-engine 造成的循环依赖。
+ */
+export function createWorkflowEngineFromConfig(config: OctopusConfig): WorkflowEngine {
+  const store = createStateStore({ storeDir: config.storeDir })
+  return new WorkflowEngine({
+    store,
+    aiClient: createAIClient(toAIClientConfig(config)),
+    strictPermissions: config.workflow.strictPermissions,
+    aiGatingEnabled: config.workflow.aiGatingEnabled,
+    heinrichThreshold: config.workflow.heinrichThreshold,
+  })
 }

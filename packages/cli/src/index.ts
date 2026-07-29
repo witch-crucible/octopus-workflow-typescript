@@ -16,7 +16,8 @@
  */
 
 import { Command } from "commander"
-import { loadConfig, createWorkflowEngineFromConfig } from "@octopus/context/index.js"
+import { loadConfig } from "@octopus/context/config.js"
+import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
 import { buildInitCommand } from "./commands/init.js"
 import { buildStatusCommand } from "./commands/status.js"
 import { buildPhaseCommands } from "./commands/phase.js"
@@ -24,6 +25,7 @@ import { buildTaskCommands } from "./commands/task.js"
 import { buildChecklistCommands } from "./commands/checklist.js"
 import { buildHeinrichCommands } from "./commands/heinrich.js"
 import { buildStageCommands } from "./commands/stage.js"
+import { buildStepCommands } from "./commands/step.js"
 import { buildAiCommands } from "./commands/ai.js"
 
 async function main(): Promise<void> {
@@ -45,6 +47,7 @@ async function main(): Promise<void> {
   buildChecklistCommands(program, engine)
   buildHeinrichCommands(program, engine)
   buildStageCommands(program, engine)
+  buildStepCommands(program, engine)
   buildAiCommands(program, engine)
 
   program.parse(process.argv)
