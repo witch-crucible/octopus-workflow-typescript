@@ -96,8 +96,9 @@ export class WorkflowEngine {
   /**
    * 分发某步骤声明的 capabilities（AI / 集成 / Heinrich）。
    * 改 spec 步骤上的 capability 即可增删行为，无需改本方法。
+   * @param input 可选显式输入：传给该步骤声明的 AI 模块；未提供时回退为“步骤名称：步骤描述”
    */
-  async runStepCapabilities(projectId: string, stepId: string): Promise<WorkflowState> {
+  async runStepCapabilities(projectId: string, stepId: string, input?: string): Promise<WorkflowState> {
     const state = this.getState(projectId)
     const step = state.steps.find((s) => s.id === stepId)
     if (!step) {
@@ -114,6 +115,7 @@ export class WorkflowEngine {
       step,
       aiClient: this.aiClient,
       integrations: this.integrations,
+      ...(input !== undefined ? { input } : {}),
     }
     const runs = step.capabilityRuns ?? []
     for (const ref of caps) {
