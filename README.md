@@ -12,7 +12,7 @@ Octopus 是一个 TypeScript 实现的 AI 辅助研发工作流引擎，将软�
 
 - 以统一的 Step 模型记录负责人、依赖、状态和产出，Task 与 Stage 是其派生视图。
 - 阶段推进前检查未完成步骤、Checklist 和步骤依赖，并支持回退。
-- 为步骤声明并调度 AI、外部集成和 Heinrich 质量能力。
+- 通过统一模块契约注册并调度 12 类 AI 助手，以及外部集成和 Heinrich 质量能力。
 - 按 `1:29:300` 记录和评估重大、轻微、未遂风险。
 - 使用本地 JSON 持久化状态，主要命令支持 `--json` 输出。
 
@@ -59,6 +59,18 @@ octopus phase advance
 
 阶段值为 `RequirementsAnalysis`、`Design`、`Development`、`Testing`、`Deployment`、`Maintenance`；步骤状态为 `PENDING`、`IN_PROGRESS`、`COMPLETED`、`BLOCKED`、`SKIPPED`。
 
+## AI 助手模块
+
+`@octopus/agent-layer` 将 12 类 AI 能力按统一的 `AIAssistantModule` 契约独立实现，并由注册表与 `AIAssistantType` 一一对应：
+
+- 会议纪要、需求分析、估时提取；
+- Setup Checklist 校验、技术方案审核、文档同步；
+- Checklist 增量推荐、Code Review、测试脚本生成、SQL 风险检测、发布风险评估、技术债务量化。
+
+`AIClient.callAssistant(type, input)` 保持原有调用方式；代码也可通过 `getAIAssistantModule()` 获取单个模块，或使用 `executeAIAssistantModule()` 独立执行。工作流根据 `packages/core/src/spec.ts` 中步骤声明的 AI capability 选择模块：普通结果写入 Artifact，Checklist 推荐结果解析后写入当前阶段清单。
+
+`WorkflowEngine.runStepCapabilities(projectId, stepId, input?)` 可向 AI 模块传入显式文本；省略时使用步骤名称和描述作为兼容性输入。CLI 的 `step run` 当前未开放该输入参数。
+
 ## 项目结构
 
 | 包 | 职责 |
@@ -67,7 +79,7 @@ octopus phase advance
 | `@octopus/workflow-engine` | 状态转换、门控和能力调度 |
 | `@octopus/task-library` | 从规格生成运行时步骤 |
 | `@octopus/context` | 配置与 `.octo/` 状态存储 |
-| `@octopus/agent-layer` | Claude CLI 客户端与 AI 助手 |
+| `@octopus/agent-layer` | Claude CLI 客户端、AI 助手模块与注册表 |
 | `@octopus/integration` | Git、Teambition、安全监控及外部集成契约 |
 | `@octopus/cli` | `octopus` 命令行入口 |
 | `@octopus/desktop` | macOS Electron 外壳，详见 [`packages/desktop/README.md`](packages/desktop/README.md) |
@@ -105,6 +117,7 @@ pnpm test
 ## 当前边界
 
 - CLI 的 `ai` 子命令目前仅输出接入提示；步骤上的 AI capability 由 `step run` 调用 Agent Layer。
+- AI 模块当前只接收调用方提供的单段文本，不会自动读取录音、Excel、代码仓库或外部文档平台。
 - SonarQube、Postman、监控等能力需要注册对应集成服务；默认 CLI 未注入这些实现。
 - 桌面端目前只支持列出、创建和查看项目。
 - 调整流程时应同步更新工作流规格及相关测试；README 不重复维护完整步骤清单。
