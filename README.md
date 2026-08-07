@@ -1,109 +1,84 @@
 # Octopus Workflow TypeScript
 
-Octopus 是一个 TypeScript 实现的 AI 辅助研发工作流引擎，将交付过程建模为可持久化、可检查的阶段与步骤：
+Octopus 是一个 TypeScript 实现的 AI 辅助研发工作流引擎，将软件交付建模为可持久化、可检查和可执行的六个阶段：
 
 ```text
 需求分析 → 设计 → 开发 → 测试 → 部署 → 维护
 ```
 
-项目以 [`packages/core/src/spec.ts`](packages/core/src/spec.ts) 为工作流定义，提供本地 CLI 和 macOS Electron 桌面端；CLI 状态默认保存在当前目录的 `.octo/`。
+工作流规格位于 `packages/core/src/spec.ts`，项目级定义保存在 `workflow.yaml`。项目提供 CLI 和 macOS Electron 桌面端。
 
 ## 快速开始
 
-要求 Node.js 20+、pnpm 9.15.0。AI 步骤还需要已安装并登录的 Claude CLI。
+需要 Node.js 20+、pnpm 9.15.0。执行 AI 节点还需要安装并登录 Claude CLI。
 
 ```bash
 pnpm install
 pnpm -r build
 
-node packages/cli/dist/index.js init "示例项目"
+node packages/cli/dist/index.js init "My Project" --root .
 node packages/cli/dist/index.js status
-node packages/cli/dist/index.js task list
+node packages/cli/dist/index.js node list
 ```
 
-下文以 `octopus` 代指 `node packages/cli/dist/index.js`。只有一个项目时，多数命令可省略 `projectId`。
+下文使用 `octopus` 代指 `node packages/cli/dist/index.js`。仅有一个项目时，多数命令可以省略 `projectId`。
 
 ## 常用命令
 
 | 命令 | 用途 |
 | --- | --- |
-| `octopus init <name>`、`octopus status` | 创建项目、查看状态 |
-| `octopus phase list/advance/rollback` | 查看、推进或回退阶段 |
-| `octopus task list/complete/set-status` | 查看和更新任务 |
-| `octopus stage list/update` | 查看和更新步骤视图 |
-| `octopus checklist show/add/check/remove` | 管理阶段清单 |
-| `octopus node create <nodeKey> <name>` | 使用英文 key 创建手动、命令、AI 或 Heinrich 任务节点 |
-| `octopus step run <stageId>` | 执行步骤声明的 AI、集成或质量能力 |
-| `octopus heinrich ...` | 记录和评估质量风险 |
+| `octopus init <name> --root <path>` | 初始化项目和工作流目录 |
+| `octopus status` | 查看项目和阶段进度 |
+| `octopus phase list/advance/rollback` | 管理阶段 |
+| `octopus task list/complete/set-status` | 管理任务 |
+| `octopus checklist show/add/check/remove` | 管理检查清单 |
+| `octopus node create/list/show/run/complete` | 创建和执行节点 |
+| `octopus workflow validate/sync/run/status` | 校验、同步和调度 DAG |
+| `octopus task export/import` | 导出或合并任务进度 |
+| `octopus monitor status/check/watch` | 查看运行记录和集成状态 |
 
 使用 `octopus --help` 或 `octopus <command> --help` 查看完整参数。
 
-创建一个生成技术文档、文档存在时继续扩展的 AI 节点：
+## 创建 AI 文档节点
+
+节点使用英文 kebab-case `key`；名称和描述也必须使用英文。`nodes` 不保存内部 ID，稳定映射统一维护在 `workflow.yaml` 的 `nodeIdMapping`。
 
 ```bash
-octopus init "My Project" --root .
-
 octopus node create generate-documentation "Generate Documentation" \
   --role AI \
   --depends-on requirements-analysis-and-brd-design \
   --type ai \
   --assistant DOCUMENT_SYNC \
-  --input "Generate complete technical documentation from the project source code; preserve valid existing content and extend changed sections" \
+  --input "Generate complete technical documentation from the project source code. Preserve valid existing content and extend changed sections." \
   --output documentation.md \
   --if-exists extend
 ```
 
-`workflow.yaml` 的 `nodes` 仅保存英文 `key`，内部 ID 由顶层 `nodeIdMapping`
-独立维护。节点工作目录为 `workflow/nodes/<nodeKey>/`；未来阶段的节点在推进到
-对应阶段时加入运行态。
+节点工作目录为 `workflow/nodes/<nodeKey>/`，公共文件目录为 `workflow/shared/`。未来阶段的节点会在流程推进到对应阶段时加入运行态。
 
-## 任务导入导出
+## 数据与配置
 
-```bash
-octopus task export [projectId] --output tasks.json
-octopus task import tasks.json [projectId]
-```
+- `workflow.yaml`：可版本化的节点、依赖、动作和 ID mapping。
+- `workflow/nodes/`：节点独立工作目录。
+- `.octo/state.sqlite`：项目状态、执行记录和事件。
+- `.octo/config.json`：可选本地配置。
 
-任务文件是版本化 JSON。导入按 `stageId` 合并状态、实际负责人、备注和完成时间；任一任务校验失败时不修改目标项目。导出默认不覆盖文件，可用 `--force` 覆盖；两条命令均支持 `--json`。
+环境变量 `OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT` 和 `OCTOPUS_AI_CLAUDE_PATH` 会覆盖文件配置。
 
-该文件用于传递任务进度，不是完整项目备份，不包含阶段锁、Checklist、Artifact 内容或 AI 门控结果。
-
-## 桌面端
+桌面端启动命令：
 
 ```bash
 pnpm --filter @octopus/desktop start
 ```
 
-桌面端支持创建和查看项目，并通过系统文件对话框导入、导出任务；数据保存在 Electron `userData/store`。任务编辑和阶段操作仍以 CLI 为主。
-
-## 配置与数据
-
-`.octo/config.json` 可覆盖默认配置，环境变量优先级更高：
-
-| 环境变量 | 用途 |
-| --- | --- |
-| `OCTOPUS_STORE_DIR` | 状态目录 |
-| `OCTOPUS_AI_MODEL` | Claude 模型 |
-| `OCTOPUS_AI_TIMEOUT` | AI 超时（毫秒） |
-| `OCTOPUS_AI_CLAUDE_PATH` | Claude CLI 路径 |
-
-核心包：
-
-- `@octopus/core`、`@octopus/task-library`、`@octopus/workflow-engine`：规格、步骤生成与状态机。
-- `@octopus/context`：配置与 `.octo/` JSON 持久化。
-- `@octopus/agent-layer`、`@octopus/integration`：AI 模块和外部集成。
-- `@octopus/cli`、`@octopus/desktop`：命令行与 Electron 入口。
-
-## 开发
+## 开发验证
 
 ```bash
-pnpm build       # TypeScript 类型检查，不生成 dist
-pnpm test
+pnpm build       # TypeScript 类型检查
+pnpm test        # Vitest 测试
+pnpm lint        # Biome 静态检查
+pnpm verify      # 依次执行 build、test、lint
 pnpm -r build    # 生成各包 dist
 ```
 
-## 当前边界
-
-- CLI 的 `ai` 子命令目前仅输出接入提示；步骤 AI 能力由 `step run` 调用。
-- SonarQube、Postman、监控等能力需要注册对应集成服务，默认 CLI 未注入实现。
-- 调整流程时应同步更新工作流规格及相关测试。
+SonarQube、Postman 和监控等动作需要注入对应集成服务；默认 CLI 不提供这些外部服务实现。
