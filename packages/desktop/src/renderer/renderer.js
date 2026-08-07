@@ -44,7 +44,50 @@ async function showStatus(id) {
       清单: ${s.checklistStats.verified}/${s.checklistStats.total} 已核验
     </p>
     <p>海因里希三角 — 重大: ${s.heinrichSummary.major} · 轻微: ${s.heinrichSummary.minor} · 未遂: ${s.heinrichSummary.trivial}</p>
+    <div class="row task-actions">
+      <button id="export-tasks">导出任务</button>
+      <button id="import-tasks">导入任务</button>
+    </div>
+    <p id="task-transfer-message" class="muted"></p>
   `
+
+  const exportButton = document.getElementById("export-tasks")
+  const importButton = document.getElementById("import-tasks")
+  const messageEl = document.getElementById("task-transfer-message")
+
+  exportButton.onclick = async () => {
+    exportButton.disabled = true
+    messageEl.textContent = "正在导出任务…"
+    try {
+      const result = await window.octopus.exportTasks(id)
+      messageEl.textContent = result.canceled
+        ? "已取消导出。"
+        : `已导出 ${result.taskCount} 个任务：${result.outputPath}`
+    } catch (error) {
+      messageEl.textContent = `导出失败：${error.message}`
+    } finally {
+      exportButton.disabled = false
+    }
+  }
+
+  importButton.onclick = async () => {
+    importButton.disabled = true
+    messageEl.textContent = "正在导入任务…"
+    try {
+      const result = await window.octopus.importTasks(id)
+      if (result.canceled) {
+        messageEl.textContent = "已取消导入。"
+        return
+      }
+      await showStatus(id)
+      document.getElementById("task-transfer-message").textContent =
+        `导入完成：匹配 ${result.matched}，更新 ${result.updated}，未变化 ${result.unchanged}`
+    } catch (error) {
+      messageEl.textContent = `导入失败：${error.message}`
+    } finally {
+      importButton.disabled = false
+    }
+  }
 }
 
 document.getElementById("create").onclick = async () => {

@@ -3,6 +3,7 @@ import { Phase, PhaseLock } from "@octopus/core/phase.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { Role } from "@octopus/core/role.js"
 import { ArtifactType } from "@octopus/core/artifact.js"
+import { TaskId } from "@octopus/core/branded-ids.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
 import { createStateStore } from "@octopus/context/index.js"
 import { WorkflowEngine } from "./index.js"
@@ -94,6 +95,116 @@ describe("WorkflowEngine", () => {
       for (const t of pmTasks) {
         expect(t.responsibleRole).toBe(Role.PM)
       }
+    })
+  })
+
+  describe("任务导入导出", () => {
+    it("导出版本化文档和全部任务字段", () => {
+      const engine = createEngine()
+      const state = engine.initProject("export_tasks_test")
+      const document = engine.exportTasks(state.projectId)
+
+      expect(document.format).toBe("octopus.tasks")
+      expect(document.version).toBe(1)
+      expect(document.sourceProject).toEqual({
+        projectId: state.projectId,
+        projectName: state.projectName,
+      })
+      expect(document.tasks).toHaveLength(state.steps.length)
+      expect(document.tasks[0]).toMatchObject({
+        taskId: state.steps[0]!.taskId,
+        stageId: state.steps[0]!.id,
+        assignedTo: null,
+        completedAt: null,
+        notes: null,
+      })
+    })
+
+    it("按 stageId 跨项目合并执行信息且保留目标规格字段", () => {
+      const engine = createEngine()
+      const source = engine.initProject("import_source_test")
+      const target = engine.initProject("import_target_test")
+      const document = engine.exportTasks(source.projectId)
+      const importedTask = document.tasks[0]!
+      const originalTarget = engine.getTasks(target.projectId).find((task) => task.stageId === importedTask.stageId)!
+      const completedAt = new Date().toISOString()
+
+      importedTask.taskId = TaskId("external_task_id")
+      importedTask.title = "不应覆盖的标题"
+      importedTask.description = "不应覆盖的描述"
+      importedTask.status = TaskStatus.COMPLETED
+      importedTask.assignedTo = "测试负责人"
+      importedTask.notes = "导入备注"
+      importedTask.completedAt = completedAt
+      document.tasks = [importedTask]
+
+      const result = engine.importTasks(target.projectId, document)
+      const imported = engine.getTasks(target.projectId).find((task) => task.stageId === importedTask.stageId)!
+
+      expect(result).toEqual({ projectId: target.projectId, matched: 1, updated: 1, unchanged: 0 })
+      expect(imported.id).toBe(originalTarget.id)
+      expect(imported.title).toBe(originalTarget.title)
+      expect(imported.description).toBe(originalTarget.description)
+      expect(imported.status).toBe(TaskStatus.COMPLETED)
+      expect(imported.assignedTo).toBe("测试负责人")
+      expect(imported.notes).toBe("导入备注")
+      expect(imported.completedAt).toBe(completedAt)
+    })
+
+    it("重复导入保持幂等并支持用 null 清除可选字段", () => {
+      const engine = createEngine()
+      const state = engine.initProject("import_idempotent_test")
+      const document = engine.exportTasks(state.projectId)
+      const task = document.tasks[0]!
+      document.tasks = [task]
+      task.status = TaskStatus.COMPLETED
+      task.assignedTo = "负责人"
+      task.notes = "备注"
+      task.completedAt = new Date().toISOString()
+
+      expect(engine.importTasks(state.projectId, document).updated).toBe(1)
+      expect(engine.importTasks(state.projectId, document)).toMatchObject({ updated: 0, unchanged: 1 })
+
+      task.status = TaskStatus.PENDING
+      task.assignedTo = null
+      task.notes = null
+      task.completedAt = null
+      expect(engine.importTasks(state.projectId, document).updated).toBe(1)
+
+      const cleared = engine.getTasks(state.projectId).find((item) => item.stageId === task.stageId)!
+      expect(cleared.status).toBe(TaskStatus.PENDING)
+      expect(cleared.assignedTo).toBeUndefined()
+      expect(cleared.notes).toBeUndefined()
+      expect(cleared.completedAt).toBeUndefined()
+    })
+
+    it("未知任务导致整批拒绝且目标状态不变", () => {
+      const engine = createEngine()
+      const state = engine.initProject("import_atomic_test")
+      const document = engine.exportTasks(state.projectId)
+      document.tasks[0]!.status = TaskStatus.COMPLETED
+      document.tasks[1]!.stageId = "unknown_stage"
+      const before = engine.getState(state.projectId)
+
+      expect(() => engine.importTasks(state.projectId, document)).toThrow("目标项目不存在任务 stageId: unknown_stage")
+      expect(engine.getState(state.projectId)).toEqual(before)
+    })
+
+    it("拒绝重复任务、未知版本和阶段不匹配", () => {
+      const engine = createEngine()
+      const state = engine.initProject("import_validation_test")
+      const duplicate = engine.exportTasks(state.projectId)
+      duplicate.tasks = [duplicate.tasks[0]!, { ...duplicate.tasks[0]! }]
+      expect(() => engine.importTasks(state.projectId, duplicate)).toThrow("包含重复的 stageId")
+
+      const unsupported = engine.exportTasks(state.projectId) as unknown as Record<string, unknown>
+      unsupported["version"] = 2
+      expect(() => engine.importTasks(state.projectId, unsupported)).toThrow("不支持的任务导入文件版本")
+
+      const mismatch = engine.exportTasks(state.projectId)
+      mismatch.tasks = [mismatch.tasks[0]!]
+      mismatch.tasks[0]!.phase = Phase.DESIGN
+      expect(() => engine.importTasks(state.projectId, mismatch)).toThrow("阶段不匹配")
     })
   })
 

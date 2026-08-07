@@ -3,7 +3,7 @@
 Octopus 工作流引擎的 **macOS 桌面外壳**（Electron）。
 
 复用与 CLI 相同的引擎入口（`@octopus/context` 的 `loadConfig` +
-`createWorkflowEngineFromConfig`），通过 IPC 向渲染进程暴露只读/创建能力。
+`createWorkflowEngineFromConfig`），通过 IPC 向渲染进程暴露项目和任务文件能力。
 项目状态持久化到 Electron 的 `userData/store` 目录。
 
 ## 开发
@@ -32,6 +32,8 @@ pnpm --filter @octopus/desktop dist:mac   # 输出 .dmg 到 packages/desktop/rel
 - 列出项目（`listProjects`）
 - 创建项目（`init`）
 - 查看项目状态：阶段进度、任务/清单统计、海因里希三角（`status`）
+- 通过系统文件对话框导出版本化任务 JSON（`exportTasks`）
+- 确认后按 `stageId` 合并导入任务进度（`importTasks`）
 
-其余 CLI 能力（阶段前进/回退、任务、清单、AI）尚未接入，可按相同的
+其余 CLI 能力（阶段前进/回退、任务编辑、清单、AI）尚未接入，可按相同的
 IPC 模式在 `main.ts` 中逐步扩展。

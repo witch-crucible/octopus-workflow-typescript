@@ -12,7 +12,13 @@
 
 import type { WorkflowState, ProjectStatusSummary } from "@octopus/core/workflow.js"
 import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER } from "@octopus/core/phase.js"
-import type { Task, TaskFilter, TaskProgress } from "@octopus/core/task.js"
+import type {
+  Task,
+  TaskExportDocument,
+  TaskFilter,
+  TaskImportResult,
+  TaskProgress,
+} from "@octopus/core/task.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { StageStatus } from "@octopus/core/task.js"
 import type { StageProgress, StageInfo } from "@octopus/core/task.js"
@@ -39,6 +45,92 @@ import type { AIEventHandler, AIEventPayload, AIGateResult } from "@octopus/core
 import type { IntegrationService } from "@octopus/integration/index.js"
 import { CapabilityRegistry } from "./capabilities.js"
 import type { CapabilityContext } from "./capabilities.js"
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !Number.isNaN(Date.parse(value))
+}
+
+function validateTaskExportDocument(document: unknown): TaskExportDocument {
+  if (!isRecord(document)) {
+    throw new Error("任务导入文件必须是 JSON 对象")
+  }
+  if (document["format"] !== "octopus.tasks") {
+    throw new Error("不支持的任务导入文件格式")
+  }
+  if (document["version"] !== 1) {
+    throw new Error(`不支持的任务导入文件版本: ${String(document["version"])}`)
+  }
+  if (!isIsoDate(document["exportedAt"])) {
+    throw new Error("任务导入文件的 exportedAt 无效")
+  }
+
+  const sourceProject = document["sourceProject"]
+  if (!isRecord(sourceProject)
+    || typeof sourceProject["projectId"] !== "string"
+    || sourceProject["projectId"].length === 0
+    || typeof sourceProject["projectName"] !== "string") {
+    throw new Error("任务导入文件的 sourceProject 无效")
+  }
+
+  const tasks = document["tasks"]
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    throw new Error("任务导入文件必须包含至少一条任务")
+  }
+
+  const seenStageIds = new Set<string>()
+  for (const [index, value] of tasks.entries()) {
+    if (!isRecord(value)) {
+      throw new Error(`任务导入文件第 ${index + 1} 条任务无效`)
+    }
+
+    const stageId = value["stageId"]
+    if (typeof stageId !== "string" || stageId.length === 0) {
+      throw new Error(`任务导入文件第 ${index + 1} 条任务缺少 stageId`)
+    }
+    if (seenStageIds.has(stageId)) {
+      throw new Error(`任务导入文件包含重复的 stageId: ${stageId}`)
+    }
+    seenStageIds.add(stageId)
+
+    if (typeof value["taskId"] !== "string" || value["taskId"].length === 0) {
+      throw new Error(`任务 ${stageId} 的 taskId 无效`)
+    }
+    if (!Object.values(Phase).includes(value["phase"] as Phase)) {
+      throw new Error(`任务 ${stageId} 的 phase 无效`)
+    }
+    if (typeof value["title"] !== "string" || typeof value["description"] !== "string") {
+      throw new Error(`任务 ${stageId} 的标题或描述无效`)
+    }
+    if (!Object.values(Role).includes(value["responsibleRole"] as Role)) {
+      throw new Error(`任务 ${stageId} 的 responsibleRole 无效`)
+    }
+    if (!Object.values(TaskStatus).includes(value["status"] as TaskStatus)) {
+      throw new Error(`任务 ${stageId} 的 status 无效`)
+    }
+    if (!Array.isArray(value["artifactIds"])
+      || !value["artifactIds"].every((id) => typeof id === "string")) {
+      throw new Error(`任务 ${stageId} 的 artifactIds 无效`)
+    }
+    if (value["assignedTo"] !== null && typeof value["assignedTo"] !== "string") {
+      throw new Error(`任务 ${stageId} 的 assignedTo 无效`)
+    }
+    if (!isIsoDate(value["createdAt"])) {
+      throw new Error(`任务 ${stageId} 的 createdAt 无效`)
+    }
+    if (value["completedAt"] !== null && !isIsoDate(value["completedAt"])) {
+      throw new Error(`任务 ${stageId} 的 completedAt 无效`)
+    }
+    if (value["notes"] !== null && typeof value["notes"] !== "string") {
+      throw new Error(`任务 ${stageId} 的 notes 无效`)
+    }
+  }
+
+  return document as unknown as TaskExportDocument
+}
 
 /** 门控检查结果 */
 export interface GateCheckResult {
@@ -502,6 +594,97 @@ export class WorkflowEngine {
     }
 
     return tasks
+  }
+
+  /** 导出项目中当前已经生成的全部任务 */
+  exportTasks(projectId: string): TaskExportDocument {
+    const state = this.getState(projectId)
+    return {
+      format: "octopus.tasks",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      sourceProject: {
+        projectId: state.projectId,
+        projectName: state.projectName,
+      },
+      tasks: state.steps.map((step) => {
+        const task = stepToTask(step)
+        return {
+          taskId: task.id,
+          stageId: task.stageId,
+          phase: task.phase,
+          title: task.title,
+          description: task.description,
+          responsibleRole: task.responsibleRole,
+          status: task.status,
+          artifactIds: task.artifactIds,
+          assignedTo: task.assignedTo ?? null,
+          createdAt: task.createdAt,
+          completedAt: task.completedAt ?? null,
+          notes: task.notes ?? null,
+        }
+      }),
+    }
+  }
+
+  /** 按 stageId 合并任务进度与执行信息 */
+  importTasks(projectId: string, document: unknown): TaskImportResult {
+    const imported = validateTaskExportDocument(document)
+    const state = this.getState(projectId)
+    const stepsById = new Map<string, StepRuntime>()
+
+    for (const step of state.steps) {
+      if (stepsById.has(step.id)) {
+        throw new Error(`目标项目包含重复的 stageId: ${step.id}`)
+      }
+      stepsById.set(step.id, step)
+    }
+
+    const matches = imported.tasks.map((task) => {
+      const step = stepsById.get(task.stageId)
+      if (!step) {
+        throw new Error(`目标项目不存在任务 stageId: ${task.stageId}`)
+      }
+      if (step.phase !== task.phase) {
+        throw new Error(`任务 ${task.stageId} 的阶段不匹配: ${task.phase} != ${step.phase}`)
+      }
+      return { task, step }
+    })
+
+    let updated = 0
+    const importedAt = new Date().toISOString()
+    for (const { task, step } of matches) {
+      const assignedTo = step.assignedTo ?? null
+      const notes = step.notes ?? null
+      const completedAt = step.completedAt ?? null
+      if (step.status === task.status
+        && assignedTo === task.assignedTo
+        && notes === task.notes
+        && completedAt === task.completedAt) {
+        continue
+      }
+
+      step.status = task.status
+      if (task.assignedTo === null) delete step.assignedTo
+      else step.assignedTo = task.assignedTo
+      if (task.notes === null) delete step.notes
+      else step.notes = task.notes
+      if (task.completedAt === null) delete step.completedAt
+      else step.completedAt = task.completedAt
+      step.updatedAt = importedAt
+      updated++
+    }
+
+    if (updated > 0) {
+      this.store.save(state)
+    }
+
+    return {
+      projectId: state.projectId,
+      matched: matches.length,
+      updated,
+      unchanged: matches.length - updated,
+    }
   }
 
   /** 完成任务（按 taskId 定位对应步骤） */

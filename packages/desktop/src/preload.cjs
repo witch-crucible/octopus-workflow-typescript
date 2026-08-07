@@ -5,4 +5,6 @@ contextBridge.exposeInMainWorld("octopus", {
   listProjects: () => ipcRenderer.invoke("octopus:listProjects"),
   init: (name, description) => ipcRenderer.invoke("octopus:init", name, description),
   status: (projectId) => ipcRenderer.invoke("octopus:status", projectId),
+  exportTasks: (projectId) => ipcRenderer.invoke("octopus:exportTasks", projectId),
+  importTasks: (projectId) => ipcRenderer.invoke("octopus:importTasks", projectId),
 })
