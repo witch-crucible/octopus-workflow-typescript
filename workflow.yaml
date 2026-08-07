@@ -1,0 +1,574 @@
+version: 1
+name: Octopus Software Delivery
+nodes:
+  - id: '10.1'
+    phase: RequirementsAnalysis
+    name: 需求分析和 BRD 设计
+    description: PM 进行需求分析，完成 BRD 设计
+    responsibleRoles:
+      - PM
+    dependsOn: []
+    actions:
+      - type: manual
+  - id: '10.2'
+    phase: RequirementsAnalysis
+    name: BRD 讲解
+    description: PM 向 BA 讲解 BRD
+    responsibleRoles:
+      - PM
+      - BA
+    dependsOn:
+      - '10.1'
+    actions:
+      - type: manual
+  - id: '10.3'
+    phase: RequirementsAnalysis
+    name: 需求调研
+    description: SA 进行技术调研，评估可行性和预计时间/成本
+    responsibleRoles:
+      - SA
+    dependsOn:
+      - '10.2'
+    actions:
+      - type: manual
+  - id: '10.4'
+    phase: RequirementsAnalysis
+    name: PRD 设计与边界逆向设计
+    description: BA 进行 PRD 设计和边界逆向设计
+    responsibleRoles:
+      - BA
+    dependsOn:
+      - '10.3'
+    actions:
+      - type: manual
+  - id: '10.5'
+    phase: RequirementsAnalysis
+    name: PRD 讲解
+    description: BA 向 PM/DEV/SA 讲解 PRD
+    responsibleRoles:
+      - BA
+      - PM
+      - DEV
+      - SA
+    dependsOn:
+      - '10.4'
+    actions:
+      - type: manual
+  - id: '10.6'
+    phase: RequirementsAnalysis
+    name: AI 会议纪要
+    description: AI 通过通义听悟/chatGPT录音生成会议纪要
+    responsibleRoles:
+      - AI
+    dependsOn:
+      - '10.5'
+    actions:
+      - type: ai
+        assistant: MEETING_MINUTES
+  - id: '10.7'
+    phase: RequirementsAnalysis
+    name: PRD 阅读和功能点拆分
+    description: SA 阅读 PRD 并拆分功能点
+    responsibleRoles:
+      - SA
+    dependsOn:
+      - '10.5'
+    actions:
+      - type: manual
+  - id: '10.8'
+    phase: RequirementsAnalysis
+    name: PRD 估时
+    description: SA 对功能点进行估时（每子项 ≤2h）
+    responsibleRoles:
+      - SA
+    dependsOn:
+      - '10.7'
+    actions:
+      - type: manual
+  - id: '10.9'
+    phase: RequirementsAnalysis
+    name: AI 需求分析
+    description: AI 根据项目代码/wiki/思维导图进行需求拆解分析
+    responsibleRoles:
+      - SA
+      - AI
+    dependsOn:
+      - '10.7'
+    actions:
+      - type: ai
+        assistant: REQUIREMENTS_ANALYSIS
+  - id: '10.10'
+    phase: RequirementsAnalysis
+    name: AI PRD 估时提取
+    description: AI 从 Excel 估时明细中汇总工时
+    responsibleRoles:
+      - AI
+    dependsOn:
+      - '10.8'
+    actions:
+      - type: ai
+        assistant: EFFORT_ESTIMATION
+  - id: '10.11'
+    phase: RequirementsAnalysis
+    name: PRD 估时同步
+    description: SA 向 PM 和 DEV 同步估时结果
+    responsibleRoles:
+      - SA
+      - PM
+      - DEV
+    dependsOn:
+      - '10.10'
+    actions:
+      - type: manual
+  - id: '10.12'
+    phase: RequirementsAnalysis
+    name: DEV 二次确认工时
+    description: DEV 确认工时评估
+    responsibleRoles:
+      - DEV
+    dependsOn:
+      - '10.11'
+    actions:
+      - type: manual
+  - id: '20.1'
+    phase: Design
+    name: 需求排期
+    description: PM 进行需求排期
+    responsibleRoles:
+      - PM
+    dependsOn: []
+    actions:
+      - type: manual
+  - id: '20.2'
+    phase: Design
+    name: Kick Off 评审
+    description: 需求评审会议，含录音和 AI 总结
+    responsibleRoles:
+      - PM
+      - BA
+      - SA
+      - DEV
+      - QA
+    dependsOn:
+      - '20.1'
+    actions:
+      - type: manual
+  - id: 20.2a
+    phase: Design
+    name: AI 会议录音总结
+    description: AI 总结会议录音
+    responsibleRoles:
+      - AI
+    dependsOn:
+      - '20.2'
+    actions:
+      - type: ai
+        assistant: MEETING_MINUTES
+  - id: '20.3'
+    phase: Design
+    name: BA 需求讲解
+    description: BA 向 PM/SA/DEV/QA 讲解需求
+    responsibleRoles:
+      - BA
+      - PM
+      - SA
+      - DEV
+      - QA
+    dependsOn:
+      - '20.2'
+    actions:
+      - type: manual
+  - id: '20.4'
+    phase: Design
+    name: DEV PRD 复述
+    description: DEV 复述 PRD 理解，反馈问题给 SA/BA
+    responsibleRoles:
+      - DEV
+      - SA
+      - BA
+    dependsOn:
+      - '20.3'
+    actions:
+      - type: manual
+  - id: '20.5'
+    phase: Design
+    name: PM TB 任务拆分
+    description: PM 拆分 TB 任务（每任务 ≤4h）
+    responsibleRoles:
+      - PM
+    dependsOn:
+      - '20.4'
+    actions:
+      - type: integration
+        service: teambition
+        operation: splitTasks
+  - id: '20.6'
+    phase: Design
+    name: DEV 需求影响范围评估
+    description: DEV 评估需求影响范围，反馈给 SA/QA
+    responsibleRoles:
+      - DEV
+      - SA
+      - QA
+    dependsOn:
+      - '20.5'
+    actions:
+      - type: manual
+  - id: '20.7'
+    phase: Design
+    name: 前后端沟通会议
+    description: DEV 前后端沟通实现方案，产出会议纪要
+    responsibleRoles:
+      - DEV
+    dependsOn:
+      - '20.6'
+    actions:
+      - type: manual
+  - id: '20.8'
+    phase: Design
+    name: 技术方案编写
+    description: DEV 编写前端和后端技术方案（API/ER/流程图/PDL）
+    responsibleRoles:
+      - DEV
+    dependsOn:
+      - '20.7'
+    actions:
+      - type: manual
+  - id: '30.1'
+    phase: Development
+    name: 技术方案合并和估时核验
+    description: DEV 合并技术方案并核验估时
+    responsibleRoles:
+      - DEV
+    dependsOn: []
+    actions:
+      - type: manual
+  - id: '30.2'
+    phase: Development
+    name: AI Setup Checklist 校验
+    description: AI 自动校验域名/Nginx/PHP/支付等配置
+    responsibleRoles:
+      - SA
+      - AI
+    dependsOn:
+      - '30.1'
+    actions:
+      - type: ai
+        assistant: SETUP_CHECKLIST_CHECK
+  - id: '30.3'
+    phase: Development
+    name: 技术方案审核链
+    description: DEV→SA→BA→PM 多级技术方案审核
+    responsibleRoles:
+      - DEV
+      - SA
+      - BA
+      - PM
+    dependsOn:
+      - '30.1'
+    actions:
+      - type: manual
+  - id: '30.4'
+    phase: Development
+    name: AI 技术方案审核
+    description: AI 进行架构合理性评分、安全漏洞预扫描、性能瓶颈预判
+    responsibleRoles:
+      - AI
+    dependsOn:
+      - '30.3'
+    actions:
+      - type: ai
+        assistant: TECH_DESIGN_REVIEW
+  - id: '30.5'
+    phase: Development
+    name: 测试用例编写与评审
+    description: QA 编写测试用例并组织评审
+    responsibleRoles:
+      - QA
+      - DEV
+      - SA
+      - PM
+    dependsOn:
+      - '30.4'
+    actions:
+      - type: manual
+  - id: '30.6'
+    phase: Development
+    name: 数据结构与接口设计
+    description: DEV 进行数据结构设计、接口设计、界面设计
+    responsibleRoles:
+      - DEV
+      - SA
+    dependsOn:
+      - '30.5'
+    actions:
+      - type: manual
+  - id: '30.7'
+    phase: Development
+    name: 功能开发（AB Test）
+    description: DEV 实现功能开发，构建对应主任务分支
+    responsibleRoles:
+      - DEV
+    dependsOn:
+      - '30.6'
+    actions:
+      - type: heinrich
+        delta: 1
+  - id: '30.8'
+    phase: Development
+    name: 记录 Checklist 和联调
+    description: DEV 更新 Checklist 并完成联调
+    responsibleRoles:
+      - DEV
+    dependsOn:
+      - '30.7'
+    actions:
+      - type: manual
+  - id: '30.9'
+    phase: Development
+    name: 环境确认与 AI 文档生成
+    description: SA 确认环境就绪，AI 生成技术文档；文档存在时在原内容基础上扩展
+    responsibleRoles:
+      - SA
+      - AI
+    dependsOn:
+      - '30.8'
+    actions:
+      - type: ai
+        assistant: DOCUMENT_SYNC
+        input: 根据当前项目代码和变更生成完整技术文档；如果已有文档，请保留有效内容并扩展变更部分。只输出完整 Markdown 文档。
+        outputFile: documentation.md
+        ifExists: extend
+  - id: '30.10'
+    phase: Development
+    name: 自测和代码质量检查
+    description: DEV 自测（产出自我测试表）→ Sonar → 漏洞扫描 → CodeCheck
+    responsibleRoles:
+      - DEV
+    dependsOn:
+      - '30.9'
+    actions:
+      - type: integration
+        service: sonar
+        operation: runScan
+      - type: heinrich
+        delta: 1
+  - id: '30.11'
+    phase: Development
+    name: 每周功能演示
+    description: SA 进行每周功能演示和代码质量检查
+    responsibleRoles:
+      - SA
+      - DEV
+    dependsOn:
+      - '30.10'
+    actions:
+      - type: manual
+  - id: '40.1'
+    phase: Testing
+    name: 核验冒烟演示
+    description: DEV 向 QA 核验冒烟演示
+    responsibleRoles:
+      - DEV
+      - QA
+    dependsOn: []
+    actions:
+      - type: heinrich
+        delta: 1
+  - id: '40.2'
+    phase: Testing
+    name: 功能测试与性能测试
+    description: QA 进行功能测试和性能测试
+    responsibleRoles:
+      - QA
+    dependsOn:
+      - '40.1'
+    actions:
+      - type: manual
+  - id: '40.3'
+    phase: Testing
+    name: UAT 用例与用户验收
+    description: QA 准备 UAT 用例，OP 进行 UAT
+    responsibleRoles:
+      - QA
+      - OP
+    dependsOn:
+      - '40.2'
+    actions:
+      - type: manual
+  - id: '40.4'
+    phase: Testing
+    name: 创建发布计划
+    description: OP 创建发布计划（至少提前 3 天）
+    responsibleRoles:
+      - OP
+    dependsOn:
+      - '40.3'
+    actions:
+      - type: manual
+  - id: '50.1'
+    phase: Deployment
+    name: Setup 部署
+    description: SA 进行环境部署（域名/CDN/WAF/SLB/ECS 等全套配置）
+    responsibleRoles:
+      - SA
+    dependsOn: []
+    actions:
+      - type: manual
+  - id: '50.2'
+    phase: Deployment
+    name: 分支合并
+    description: SA 合并分支
+    responsibleRoles:
+      - SA
+      - DEV
+    dependsOn:
+      - '50.1'
+    actions:
+      - type: integration
+        service: git
+        operation: mergeBranches
+      - type: heinrich
+        delta: 1
+  - id: '50.3'
+    phase: Deployment
+    name: AI Checklist 增量推荐和多方评审
+    description: AI 推荐增量 Checklist，SA/BA/DEV/PM/QA 多方评审
+    responsibleRoles:
+      - SA
+      - BA
+      - DEV
+      - PM
+      - QA
+      - AI
+    dependsOn:
+      - '50.2'
+    actions:
+      - type: ai
+        assistant: CHECKLIST_RECOMMENDATION
+  - id: '50.4'
+    phase: Deployment
+    name: Sonar 检查和 Code Review
+    description: SA 运行 Sonar，DEV 进行 Code Review
+    responsibleRoles:
+      - SA
+      - DEV
+    dependsOn:
+      - '50.3'
+    actions:
+      - type: integration
+        service: sonar
+        operation: runScan
+      - type: heinrich
+        delta: 1
+  - id: '50.5'
+    phase: Deployment
+    name: AI 智能 Code Review
+    description: AI 生成 UML 时序图/CFG，进行变更风险评分
+    responsibleRoles:
+      - AI
+    dependsOn:
+      - '50.4'
+    actions:
+      - type: ai
+        assistant: CODE_REVIEW
+  - id: '50.6'
+    phase: Deployment
+    name: Postman 运行与 AI 测试脚本
+    description: SA 运行 Postman，AI 生成自动化测试脚本
+    responsibleRoles:
+      - SA
+      - AI
+    dependsOn:
+      - '50.5'
+    actions:
+      - type: integration
+        service: postman
+        operation: runCollection
+      - type: ai
+        assistant: TEST_SCRIPT_GENERATION
+      - type: heinrich
+        delta: 1
+  - id: '50.7'
+    phase: Deployment
+    name: SQL 执行与 AI 风险检测
+    description: SA/DEV 执行 SQL，AI 进行 SQL 风险检测（缺索引/锁表/不可回滚）
+    responsibleRoles:
+      - SA
+      - DEV
+      - AI
+    dependsOn:
+      - '50.6'
+    actions:
+      - type: ai
+        assistant: SQL_RISK_CHECK
+      - type: heinrich
+        delta: 1
+  - id: '50.8'
+    phase: Deployment
+    name: Magento 发布与 AI 风险评估
+    description: SA 执行发布，AI 进行发布风险预评估
+    responsibleRoles:
+      - SA
+      - AI
+    dependsOn:
+      - '50.7'
+    actions:
+      - type: ai
+        assistant: RELEASE_RISK_ASSESSMENT
+  - id: '50.9'
+    phase: Deployment
+    name: 回归测试
+    description: QA 进行回归测试
+    responsibleRoles:
+      - QA
+    dependsOn:
+      - '50.8'
+    actions:
+      - type: manual
+  - id: '50.10'
+    phase: Deployment
+    name: AB 有效性验证和分支合并
+    description: PM 验证 AB Test 有效性，合并 Prod 分支到 Dev
+    responsibleRoles:
+      - PM
+    dependsOn:
+      - '50.9'
+    actions:
+      - type: manual
+  - id: '60.1'
+    phase: Maintenance
+    name: AI 技术债务量化
+    description: AI 量化技术债务（代码复杂度/重复率/依赖老化评分，生成还债优先级列表）
+    responsibleRoles:
+      - AI
+    dependsOn: []
+    actions:
+      - type: ai
+        assistant: TECH_DEBT_QUANTIFICATION
+  - id: '60.2'
+    phase: Maintenance
+    name: 监控服务
+    description: DEV 监控服务（1d/1w/1y）
+    responsibleRoles:
+      - DEV
+    dependsOn:
+      - '60.1'
+    actions:
+      - type: integration
+        service: monitoring
+        operation: registerAlert
+  - id: 10.doc
+    phase: RequirementsAnalysis
+    name: AI 生成文档
+    description: ''
+    responsibleRoles:
+      - AI
+    dependsOn:
+      - '10.1'
+    actions:
+      - type: ai
+        assistant: DOCUMENT_SYNC
+        input: 根据项目代码生成完整技术文档
+        outputFile: documentation.md
+        ifExists: extend

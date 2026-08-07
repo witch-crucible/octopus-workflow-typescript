@@ -36,10 +36,18 @@ import type { StepRuntime } from "@octopus/core/step.js"
 import { createEmptyChecklist } from "@octopus/core/checklist.js"
 import type { StateStore } from "@octopus/context/index.js"
 import { createStateStore } from "@octopus/context/index.js"
-import { initializeWorkflowFile, loadWorkflowDefinition } from "@octopus/context/workflow.js"
+import {
+  appendWorkflowNode,
+  initializeWorkflowFile,
+  loadWorkflowDefinition,
+} from "@octopus/context/workflow.js"
 import type { OctopusConfig } from "@octopus/context/config.js"
 import { toAIClientConfig } from "@octopus/context/config.js"
-import { createStepsForPhase, createStepsFromDefinition } from "@octopus/task-library/index.js"
+import {
+  createStepFromNode,
+  createStepsForPhase,
+  createStepsFromDefinition,
+} from "@octopus/task-library/index.js"
 import type { AIClient } from "@octopus/agent-layer/index.js"
 import { createAIClient } from "@octopus/agent-layer/index.js"
 import type { AIEventHandler, AIEventPayload, AIGateResult } from "@octopus/core/agent.js"
@@ -47,7 +55,12 @@ import type { IntegrationService } from "@octopus/integration/index.js"
 import { CapabilityRegistry } from "./capabilities.js"
 import type { CapabilityContext } from "./capabilities.js"
 import { NodeExecutionService } from "./execution.js"
-import type { IntegrationHealth, NodeRun, WorkflowExecutionSnapshot } from "@octopus/core/execution.js"
+import type {
+  IntegrationHealth,
+  NodeRun,
+  WorkflowExecutionSnapshot,
+  WorkflowNodeSpec,
+} from "@octopus/core/execution.js"
 import type { RunNodeOptions, RunWorkflowOptions } from "./execution.js"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -156,6 +169,14 @@ export interface WorkflowEngineConfig {
   integrations?: Record<string, IntegrationService>
 }
 
+/** 创建节点后的配置及运行态结果。 */
+export interface CreateNodeResult {
+  readonly projectId: string
+  readonly node: WorkflowNodeSpec
+  readonly activated: boolean
+  readonly workspacePath: string
+}
+
 /**
  * 工作流引擎 —— 所有阶段/任务/清单/风险/制品操作的统一入口。
  */
@@ -204,6 +225,50 @@ export class WorkflowEngine {
   /** 自动并行运行所有 READY 节点。 */
   runWorkflow(projectId: string, options?: RunWorkflowOptions): Promise<WorkflowExecutionSnapshot> {
     return this.nodeExecution.runWorkflow(projectId, options)
+  }
+
+  /**
+   * 创建项目级节点。
+   *
+   * 当前阶段节点会立即加入运行态；未来阶段节点只写入定义，在阶段推进时激活。
+   */
+  createNode(projectId: string, node: WorkflowNodeSpec): CreateNodeResult {
+    const state = this.getState(projectId)
+    if (!state.projectRoot) throw new Error(`项目 ${projectId} 未配置源码根目录，请重新 init --root`)
+    if (state.steps.some((step) => step.id === node.id)) throw new Error(`节点已存在: ${node.id}`)
+
+    const currentPhaseIndex = getPhaseIndex(state.currentPhase)
+    const nodePhaseIndex = getPhaseIndex(node.phase)
+    if (nodePhaseIndex < currentPhaseIndex) {
+      throw new Error(`不能向已完成阶段 ${node.phase} 创建节点`)
+    }
+
+    const definition = loadWorkflowDefinition(state.projectRoot)
+    const nodesById = new Map(definition.nodes.map((candidate) => [candidate.id, candidate]))
+    for (const dependencyId of node.dependsOn) {
+      const dependency = nodesById.get(dependencyId)
+      if (!dependency) throw new Error(`节点 ${node.id} 依赖不存在: ${dependencyId}`)
+      if (getPhaseIndex(dependency.phase) > nodePhaseIndex) {
+        throw new Error(`节点 ${node.id} 不能依赖后续阶段节点 ${dependencyId}`)
+      }
+    }
+
+    const workspace = appendWorkflowNode(state.projectRoot, node)
+    const activated = node.phase === state.currentPhase
+    if (activated) {
+      this.store.update(projectId, (current) => {
+        if (current.steps.some((step) => step.id === node.id)) throw new Error(`节点已存在: ${node.id}`)
+        current.steps.push(createStepFromNode(projectId, node))
+        return current
+      })
+    }
+
+    return {
+      projectId,
+      node,
+      activated,
+      workspacePath: workspace.nodePath(node.id),
+    }
   }
 
   /** 检查已注入的集成并持久化健康度。 */

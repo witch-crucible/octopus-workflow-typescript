@@ -2,19 +2,23 @@
  * CLI 命令验证测试
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { Command } from "commander"
 import { buildInitCommand } from "./commands/init.js"
 import { buildStatusCommand } from "./commands/status.js"
 import { buildPhaseCommands } from "./commands/phase.js"
 import { buildAiCommands } from "./commands/ai.js"
 import { buildTaskCommands } from "./commands/task.js"
+import { buildNodeCommands } from "./commands/node.js"
 import { createStateStore } from "@octopus/context/index.js"
 import { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 import { TaskStatus } from "@octopus/core/task.js"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 const TEST_STORE_DIR = ".octo_cli_test"
+const temporaryProjectRoots: string[] = []
 
 function createEngine() {
   return new WorkflowEngine({
@@ -32,6 +36,12 @@ describe("CLI 命令验证", () => {
       }
     } catch {
       // ignore
+    }
+  })
+
+  afterEach(() => {
+    for (const directory of temporaryProjectRoots.splice(0)) {
+      rmSync(directory, { recursive: true, force: true })
     }
   })
 
@@ -218,6 +228,56 @@ describe("CLI 命令验证", () => {
 
     consoleErrorSpy.mockRestore()
     exitSpy.mockRestore()
+  })
+
+  it("node create 创建可立即使用的 AI 文档节点", () => {
+    const engine = createEngine()
+    const projectRoot = mkdtempSync(join(tmpdir(), "octopus-cli-node-"))
+    temporaryProjectRoots.push(projectRoot)
+    const state = engine.initProject("节点创建测试", undefined, projectRoot)
+    const program = new Command()
+    buildNodeCommands(program, engine)
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    program.parse([
+      "node",
+      "octopus",
+      "node",
+      "create",
+      "10.doc",
+      "AI 生成文档",
+      state.projectId,
+      "--role",
+      "AI",
+      "--depends-on",
+      "10.1",
+      "--type",
+      "ai",
+      "--assistant",
+      "DOCUMENT_SYNC",
+      "--input",
+      "生成技术文档",
+      "--output",
+      "documentation.md",
+      "--if-exists",
+      "extend",
+      "--json",
+    ])
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    const created = engine.getState(state.projectId).steps.find((step) => step.id === "10.doc")
+    expect(created?.responsibleRole).toBe("AI")
+    expect(created?.actions).toEqual([expect.objectContaining({
+      type: "ai",
+      outputFile: "documentation.md",
+      ifExists: "extend",
+    })])
+    expect(existsSync(`${projectRoot}/workflow/nodes/10.doc`)).toBe(true)
+    expect(readFileSync(`${projectRoot}/workflow.yaml`, "utf8")).toContain("10.doc")
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
   })
 
   it("ai ask --json 应输出 JSON 格式", () => {

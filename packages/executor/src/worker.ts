@@ -15,6 +15,7 @@ import { TaskStatus } from "@octopus/core/task.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
 import { ObservationId } from "@octopus/core/branded-ids.js"
 import { createAIClient } from "@octopus/agent-layer/index.js"
+import { prepareAIOutput, writeAIOutput } from "./ai-output.js"
 
 interface WorkerArgs {
   storeDir: string
@@ -62,7 +63,7 @@ async function main(): Promise<void> {
       if (cancelled) throw new WorkerFailure("CANCELED", "运行已取消")
       executionStore.updateRun(args.runId, { currentAction: index, heartbeatAt: new Date().toISOString() })
       appendEvent(args, "ACTION_STARTED", { index, type: action.type })
-      await executeAction(action, {
+      const result = await executeAction(action, {
         args,
         nodePath,
         stateStore,
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
         stderrPath: run.stderrPath,
         assignChild: (processHandle) => { child = processHandle },
       })
-      appendEvent(args, "ACTION_FINISHED", { index, type: action.type })
+      appendEvent(args, "ACTION_FINISHED", { index, type: action.type, ...result })
     }
     executionStore.updateRun(args.runId, {
       status: "SUCCEEDED",
@@ -127,17 +128,25 @@ interface ActionContext {
   assignChild: (child: ReturnType<typeof spawn>) => void
 }
 
-async function executeAction(action: NodeAction, context: ActionContext): Promise<void> {
+async function executeAction(
+  action: NodeAction,
+  context: ActionContext,
+): Promise<Record<string, unknown>> {
   if (action.type === "manual") throw new WorkerFailure("FAILED", action.instructions ?? "手动节点不能由 worker 执行")
   if (action.type === "command") {
     await executeCommand(action, context)
-    return
+    return {}
   }
   if (action.type === "ai") {
+    const prepared = prepareAIOutput(action, context.nodePath)
     const client = createAIClient(context.config.ai)
-    const result = await client.callAssistant(action.assistant, action.input ?? "")
-    appendEvent(context.args, "ACTION_FINISHED", { type: "ai", summary: result.result?.slice(0, 500) ?? "" })
-    return
+    const response = await client.callAssistant(action.assistant, prepared.input)
+    if (prepared.outputPath) writeAIOutput(prepared.outputPath, response.result)
+    return {
+      summary: response.result.slice(0, 500),
+      ...(action.outputFile !== undefined ? { outputFile: action.outputFile } : {}),
+      extended: prepared.extended,
+    }
   }
   if (action.type === "heinrich") {
     context.stateStore.update(context.stateProjectId, (state) => {
@@ -151,7 +160,7 @@ async function executeAction(action: NodeAction, context: ActionContext): Promis
       })
       return state
     })
-    return
+    return {}
   }
   throw new WorkerFailure("FAILED", `未注册集成动作: ${action.service}.${action.operation}`)
 }

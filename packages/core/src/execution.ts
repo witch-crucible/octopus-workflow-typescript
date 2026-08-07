@@ -21,7 +21,15 @@ export type NodeAction =
       readonly env?: Readonly<Record<string, string>>
       readonly timeoutMs?: number
     }
-  | { readonly type: "ai"; readonly assistant: AIAssistantType; readonly input?: string }
+  | {
+      readonly type: "ai"
+      readonly assistant: AIAssistantType
+      readonly input?: string
+      /** AI 结果相对于节点工作目录的输出文件。 */
+      readonly outputFile?: string
+      /** 输出文件已存在时覆盖或基于原内容扩展。 */
+      readonly ifExists?: "overwrite" | "extend"
+    }
   | {
       readonly type: "integration"
       readonly service: string

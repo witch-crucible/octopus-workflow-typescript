@@ -25,7 +25,13 @@ import type { HeinrichLevel } from "./risk.js"
  */
 export type CapabilityRef =
   /** AI 辅助：调用 agent-layer 的对应助手 */
-  | { readonly kind: "ai"; readonly assistant: AIAssistantType }
+  | {
+      readonly kind: "ai"
+      readonly assistant: AIAssistantType
+      readonly input?: string
+      readonly outputFile?: string
+      readonly ifExists?: "overwrite" | "extend"
+    }
   /** 外部集成：调用注册的 IntegrationService（如 sonar/postman） */
   | { readonly kind: "integration"; readonly service: string; readonly op: string }
   /** Heinrich 标记：完成步骤时增加对应条数 */
@@ -52,7 +58,10 @@ export interface WorkflowSpec {
 }
 
 /** 便捷构造 AI capability */
-const ai = (assistant: AIAssistantType): CapabilityRef => ({ kind: "ai", assistant })
+const ai = (
+  assistant: AIAssistantType,
+  options: Omit<Extract<CapabilityRef, { kind: "ai" }>, "kind" | "assistant"> = {},
+): CapabilityRef => ({ kind: "ai", assistant, ...options })
 /** 便捷构造集成 capability */
 const svc = (service: string, op: string): CapabilityRef => ({ kind: "integration", service, op })
 /** 便捷构造 Heinrich capability */
@@ -118,7 +127,18 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
         { id: "30.6", name: "数据结构与接口设计", description: "DEV 进行数据结构设计、接口设计、界面设计", responsibleRoles: [Role.DEV, Role.SA], dependsOn: ["30.5"] },
         { id: "30.7", name: "功能开发（AB Test）", description: "DEV 实现功能开发，构建对应主任务分支", responsibleRoles: [Role.DEV], dependsOn: ["30.6"], capabilities: [hei(1)] },
         { id: "30.8", name: "记录 Checklist 和联调", description: "DEV 更新 Checklist 并完成联调", responsibleRoles: [Role.DEV], dependsOn: ["30.7"] },
-        { id: "30.9", name: "环境确认与 AI 文档同步", description: "SA 确认环境就绪，AI 同步更新技术文档", responsibleRoles: [Role.SA, Role.AI], dependsOn: ["30.8"], capabilities: [ai(AIAssistantType.DOCUMENT_SYNC)] },
+        {
+          id: "30.9",
+          name: "环境确认与 AI 文档生成",
+          description: "SA 确认环境就绪，AI 生成技术文档；文档存在时在原内容基础上扩展",
+          responsibleRoles: [Role.SA, Role.AI],
+          dependsOn: ["30.8"],
+          capabilities: [ai(AIAssistantType.DOCUMENT_SYNC, {
+            input: "根据当前项目代码和变更生成完整技术文档；如果已有文档，请保留有效内容并扩展变更部分。只输出完整 Markdown 文档。",
+            outputFile: "documentation.md",
+            ifExists: "extend",
+          })],
+        },
         { id: "30.10", name: "自测和代码质量检查", description: "DEV 自测（产出自我测试表）→ Sonar → 漏洞扫描 → CodeCheck", responsibleRoles: [Role.DEV], dependsOn: ["30.9"], capabilities: [svc("sonar", "runScan"), hei(1)] },
         { id: "30.11", name: "每周功能演示", description: "SA 进行每周功能演示和代码质量检查", responsibleRoles: [Role.SA, Role.DEV], dependsOn: ["30.10"] },
       ],

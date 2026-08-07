@@ -5,7 +5,7 @@
  * 与 workflow/nodes/<nodeId>，避免每个调用方重复推导路径。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { dump, load } from "js-yaml"
 import { z } from "zod"
@@ -26,7 +26,13 @@ const actionSchema = z.discriminatedUnion("type", [
     env: z.record(z.string()).optional(),
     timeoutMs: z.number().int().positive().optional(),
   }),
-  z.object({ type: z.literal("ai"), assistant: z.string().min(1), input: z.string().optional() }),
+  z.object({
+    type: z.literal("ai"),
+    assistant: z.string().min(1),
+    input: z.string().optional(),
+    outputFile: z.string().min(1).optional(),
+    ifExists: z.enum(["overwrite", "extend"]).optional(),
+  }),
   z.object({
     type: z.literal("integration"),
     service: z.string().min(1),
@@ -96,7 +102,15 @@ export function definitionFromBuiltInSpec(): WorkflowDefinition {
       responsibleRoles: step.responsibleRoles,
       dependsOn: step.dependsOn,
       actions: step.capabilities?.map((capability): NodeAction => {
-        if (capability.kind === "ai") return { type: "ai", assistant: capability.assistant }
+        if (capability.kind === "ai") {
+          return {
+            type: "ai",
+            assistant: capability.assistant,
+            ...(capability.input !== undefined ? { input: capability.input } : {}),
+            ...(capability.outputFile !== undefined ? { outputFile: capability.outputFile } : {}),
+            ...(capability.ifExists !== undefined ? { ifExists: capability.ifExists } : {}),
+          }
+        }
         if (capability.kind === "integration") {
           return { type: "integration", service: capability.service, operation: capability.op }
         }
@@ -120,7 +134,12 @@ export function loadWorkflowDefinition(projectRoot: string): WorkflowDefinition 
     throw new Error(`无法解析 ${workspace.workflowFile}: ${(cause as Error).message}`)
   }
 
-  const result = definitionSchema.safeParse(parsed)
+  return validateWorkflowDefinition(parsed)
+}
+
+/** 严格校验工作流定义，同时检测重复节点、缺失依赖和依赖环。 */
+export function validateWorkflowDefinition(value: unknown): WorkflowDefinition {
+  const result = definitionSchema.safeParse(value)
   if (!result.success) {
     throw new Error(`workflow.yaml 校验失败: ${result.error.issues.map((issue) => issue.message).join("; ")}`)
   }
@@ -139,6 +158,33 @@ export function loadWorkflowDefinition(projectRoot: string): WorkflowDefinition 
   return definition
 }
 
+/** 原子写入经过校验的工作流定义。 */
+export function saveWorkflowDefinition(
+  projectRoot: string,
+  definition: WorkflowDefinition,
+): WorkflowDefinition {
+  const validated = validateWorkflowDefinition(definition)
+  const workspace = getWorkflowWorkspace(projectRoot)
+  const temporaryFile = `${workspace.workflowFile}.${process.pid}.tmp`
+  writeFileSync(temporaryFile, dump(validated), "utf8")
+  renameSync(temporaryFile, workspace.workflowFile)
+  return validated
+}
+
+/** 将节点追加到项目工作流，并同步对应工作目录。 */
+export function appendWorkflowNode(
+  projectRoot: string,
+  node: WorkflowNodeSpec,
+): WorkflowWorkspace {
+  const definition = loadWorkflowDefinition(projectRoot)
+  const next: WorkflowDefinition = {
+    ...definition,
+    nodes: [...definition.nodes, node],
+  }
+  saveWorkflowDefinition(projectRoot, next)
+  return syncWorkflowWorkspace(projectRoot, next)
+}
+
 /** 创建缺失的公共目录和节点目录，并返回实际布局。 */
 export function syncWorkflowWorkspace(projectRoot: string, definition = loadWorkflowDefinition(projectRoot)): WorkflowWorkspace {
   const workspace = getWorkflowWorkspace(projectRoot)
@@ -150,6 +196,7 @@ export function syncWorkflowWorkspace(projectRoot: string, definition = loadWork
 /** 初始化工作流文件；已有文件绝不覆盖。 */
 export function initializeWorkflowFile(projectRoot: string): WorkflowWorkspace {
   const workspace = getWorkflowWorkspace(projectRoot)
+  mkdirSync(workspace.projectRoot, { recursive: true })
   if (!existsSync(workspace.workflowFile)) {
     writeFileSync(workspace.workflowFile, dump(definitionFromBuiltInSpec()), "utf8")
   }

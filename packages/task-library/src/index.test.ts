@@ -30,6 +30,17 @@ describe("createStepsForPhase", () => {
       expect(step.responsibleRole).toBeTruthy()
     }
   })
+
+  it("文档生成节点配置为存在时扩展文档", () => {
+    const step = createStepsForPhase("proj_test", Phase.DEVELOPMENT)
+      .find((candidate) => candidate.id === "30.9")
+    expect(step?.actions).toEqual([expect.objectContaining({
+      type: "ai",
+      assistant: "DOCUMENT_SYNC",
+      outputFile: "documentation.md",
+      ifExists: "extend",
+    })])
+  })
 })
 
 describe("createAllSteps", () => {

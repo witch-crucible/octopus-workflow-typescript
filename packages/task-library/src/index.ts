@@ -62,7 +62,15 @@ export function createStepsFromDefinition(projectId: string, definition: Workflo
 }
 
 function capabilityToAction(capability: CapabilityRef): NodeAction {
-  if (capability.kind === "ai") return { type: "ai", assistant: capability.assistant }
+  if (capability.kind === "ai") {
+    return {
+      type: "ai",
+      assistant: capability.assistant,
+      ...(capability.input !== undefined ? { input: capability.input } : {}),
+      ...(capability.outputFile !== undefined ? { outputFile: capability.outputFile } : {}),
+      ...(capability.ifExists !== undefined ? { ifExists: capability.ifExists } : {}),
+    }
+  }
   if (capability.kind === "integration") {
     return { type: "integration", service: capability.service, operation: capability.op }
   }
