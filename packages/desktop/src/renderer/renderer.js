@@ -38,6 +38,7 @@ async function showProject(id) {
   if (selectedNode) await showNode(selectedNode)
 }
 
+<<<<<<< HEAD
 function renderSummary() {
   const active = currentSnapshot.activeRuns.length
   summaryEl.innerHTML = [
@@ -47,6 +48,73 @@ function renderSummary() {
   statusEl.textContent = currentSnapshot.schedulerStatus
   statusEl.className = `badge ${currentSnapshot.schedulerStatus === "BLOCKED" ? "bad" : currentSnapshot.schedulerStatus === "COMPLETED" ? "good" : "warn"}`
   document.getElementById("lastUpdate").textContent = `更新于 ${new Date().toLocaleTimeString()}`
+=======
+async function showStatus(id) {
+  document.querySelectorAll(".project").forEach((el) => {
+    el.classList.toggle("active", el.textContent === id)
+  })
+  const s = await window.octopus.status(id)
+  const phases = s.phaseProgress
+    .map((p) => {
+      const pct = p.progress.percent
+      return `<tr><td>${esc(p.phase)}</td><td class="muted">${esc(p.lock)}</td>
+        <td><span class="bar"><span style="width:${pct}%"></span></span> ${pct}%</td></tr>`
+    })
+    .join("")
+  contentEl.innerHTML = `
+    <h2>${esc(s.projectName)}</h2>
+    <p class="muted">ID: ${esc(s.projectId)} · 当前阶段: ${esc(s.currentPhase)}</p>
+    <table>${phases}</table>
+    <p style="margin-top:16px">
+      任务: ${s.completedTasks}/${s.totalTasks} 已完成 &nbsp;·&nbsp;
+      清单: ${s.checklistStats.verified}/${s.checklistStats.total} 已核验
+    </p>
+    <p>海因里希三角 — 重大: ${s.heinrichSummary.major} · 轻微: ${s.heinrichSummary.minor} · 未遂: ${s.heinrichSummary.trivial}</p>
+    <div class="row task-actions">
+      <button id="export-tasks">导出任务</button>
+      <button id="import-tasks">导入任务</button>
+    </div>
+    <p id="task-transfer-message" class="muted"></p>
+  `
+
+  const exportButton = document.getElementById("export-tasks")
+  const importButton = document.getElementById("import-tasks")
+  const messageEl = document.getElementById("task-transfer-message")
+
+  exportButton.onclick = async () => {
+    exportButton.disabled = true
+    messageEl.textContent = "正在导出任务…"
+    try {
+      const result = await window.octopus.exportTasks(id)
+      messageEl.textContent = result.canceled
+        ? "已取消导出。"
+        : `已导出 ${result.taskCount} 个任务：${result.outputPath}`
+    } catch (error) {
+      messageEl.textContent = `导出失败：${error.message}`
+    } finally {
+      exportButton.disabled = false
+    }
+  }
+
+  importButton.onclick = async () => {
+    importButton.disabled = true
+    messageEl.textContent = "正在导入任务…"
+    try {
+      const result = await window.octopus.importTasks(id)
+      if (result.canceled) {
+        messageEl.textContent = "已取消导入。"
+        return
+      }
+      await showStatus(id)
+      document.getElementById("task-transfer-message").textContent =
+        `导入完成：匹配 ${result.matched}，更新 ${result.updated}，未变化 ${result.unchanged}`
+    } catch (error) {
+      messageEl.textContent = `导入失败：${error.message}`
+    } finally {
+      importButton.disabled = false
+    }
+  }
+>>>>>>> 8ba2f013f71b55a7531bf6e5cdb68be78a910ba2
 }
 
 function metric(value, label) { return `<div class="metric"><strong>${escapeHtml(value)}</strong><small>${escapeHtml(label)}</small></div>` }

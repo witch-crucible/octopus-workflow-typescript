@@ -23,6 +23,8 @@ export interface CapabilityContext {
   step: StepRuntime
   aiClient?: AIClient | undefined
   integrations: Record<string, IntegrationService>
+  /** 显式输入：仅 AI 能力消费；未提供时回退为“步骤名称：步骤描述” */
+  input?: string
 }
 
 /** capability 分发结果 */
@@ -46,7 +48,7 @@ const aiHandler: CapabilityHandler = async (ref, ctx) => {
   if (!ctx.aiClient) {
     return { kind: "ai", ref: label, ok: false, summary: "未配置 AIClient" }
   }
-  const input = `${ctx.step.name}：${ctx.step.description}`
+  const input = ctx.input ?? `${ctx.step.name}：${ctx.step.description}`
   const res = await ctx.aiClient.callAssistant(ref.assistant, input)
   const text = res.result ?? ""
 

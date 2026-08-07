@@ -8,8 +8,11 @@ import { buildInitCommand } from "./commands/init.js"
 import { buildStatusCommand } from "./commands/status.js"
 import { buildPhaseCommands } from "./commands/phase.js"
 import { buildAiCommands } from "./commands/ai.js"
+import { buildTaskCommands } from "./commands/task.js"
 import { createStateStore } from "@octopus/context/index.js"
 import { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { TaskStatus } from "@octopus/core/task.js"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 
 const TEST_STORE_DIR = ".octo_cli_test"
 
@@ -116,6 +119,105 @@ describe("CLI 命令验证", () => {
 
     consoleLogSpy.mockRestore()
     consoleErrorSpy.mockRestore()
+  })
+
+  it("task export/import 应通过文件跨项目合并任务进度", () => {
+    const engine = createEngine()
+    const source = engine.initProject("导出源项目")
+    const target = engine.initProject("导入目标项目")
+    const sourceTask = engine.getTasks(source.projectId)[0]!
+    engine.setTaskStatus(source.projectId, sourceTask.id, TaskStatus.COMPLETED)
+    const exportPath = `${TEST_STORE_DIR}/tasks.json`
+
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    const exportProgram = new Command()
+    buildTaskCommands(exportProgram, engine)
+    exportProgram.parse([
+      "node",
+      "octopus",
+      "task",
+      "export",
+      source.projectId,
+      "--output",
+      exportPath,
+      "--json",
+    ])
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    expect(existsSync(exportPath)).toBe(true)
+    expect(JSON.parse(readFileSync(exportPath, "utf-8"))).toMatchObject({
+      format: "octopus.tasks",
+      version: 1,
+    })
+
+    const importProgram = new Command()
+    buildTaskCommands(importProgram, engine)
+    importProgram.parse(["node", "octopus", "task", "import", exportPath, target.projectId, "--json"])
+
+    const imported = engine.getTasks(target.projectId).find((task) => task.stageId === sourceTask.stageId)!
+    expect(imported.status).toBe(TaskStatus.COMPLETED)
+    const result = JSON.parse(consoleLogSpy.mock.calls.at(-1)?.[0])
+    expect(result).toMatchObject({ projectId: target.projectId, updated: 1 })
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("task export 默认拒绝覆盖，--force 允许覆盖", () => {
+    const engine = createEngine()
+    const state = engine.initProject("覆盖测试项目")
+    const exportPath = `${TEST_STORE_DIR}/existing.json`
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    const firstProgram = new Command()
+    buildTaskCommands(firstProgram, engine)
+    firstProgram.parse(["node", "octopus", "task", "export", state.projectId, "-o", exportPath])
+
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit")
+    })
+    const secondProgram = new Command()
+    buildTaskCommands(secondProgram, engine)
+    expect(() => {
+      secondProgram.parse(["node", "octopus", "task", "export", state.projectId, "-o", exportPath])
+    }).toThrow("process.exit")
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("导出文件已存在"))
+    exitSpy.mockRestore()
+
+    const forceProgram = new Command()
+    buildTaskCommands(forceProgram, engine)
+    forceProgram.parse(["node", "octopus", "task", "export", state.projectId, "-o", exportPath, "--force"])
+    expect(existsSync(exportPath)).toBe(true)
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("task import 拒绝非法 JSON 且不修改项目", () => {
+    const engine = createEngine()
+    const state = engine.initProject("非法导入测试项目")
+    const importPath = `${TEST_STORE_DIR}/invalid.json`
+    writeFileSync(importPath, "{ invalid", "utf-8")
+    const before = engine.getState(state.projectId)
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit")
+    })
+
+    const program = new Command()
+    buildTaskCommands(program, engine)
+    expect(() => {
+      program.parse(["node", "octopus", "task", "import", importPath, state.projectId])
+    }).toThrow("process.exit")
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("导入任务失败"))
+    expect(engine.getState(state.projectId)).toEqual(before)
+
+    consoleErrorSpy.mockRestore()
+    exitSpy.mockRestore()
   })
 
   it("ai ask --json 应输出 JSON 格式", () => {

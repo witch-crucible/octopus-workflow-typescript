@@ -4,8 +4,12 @@
  * 子命令:
  *   list [phase] [projectId]       — 列出任务
  *   complete <taskId> [projectId]  — 完成任务
+ *   export [projectId]             — 导出任务 JSON 文件
+ *   import <file> [projectId]      — 合并导入任务 JSON 文件
  */
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 import { Phase } from "@octopus/core/phase.js"
@@ -165,6 +169,74 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
         console.log(`✅ 任务状态已更新: ${taskId} → ${taskStatus}`)
       } catch (err) {
         console.error(`❌ ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  // ── task export ──
+  taskCmd
+    .command("export")
+    .description("将项目任务导出为版本化 JSON 文件")
+    .argument("[projectId]", "项目 ID")
+    .requiredOption("-o, --output <file>", "导出文件路径")
+    .option("--force", "覆盖已存在的文件")
+    .option("--json", "以 JSON 格式输出结果")
+    .action((projectId: string | undefined, options: { output: string; force?: boolean; json?: boolean }) => {
+      try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
+
+        const outputPath = resolve(options.output)
+        if (!options.force && existsSync(outputPath)) {
+          throw new Error(`导出文件已存在: ${outputPath}；如需覆盖请使用 --force`)
+        }
+
+        const document = engine.exportTasks(pid)
+        writeFileSync(outputPath, `${JSON.stringify(document, null, 2)}\n`, {
+          encoding: "utf-8",
+          flag: options.force ? "w" : "wx",
+        })
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            projectId: document.sourceProject.projectId,
+            outputPath,
+            taskCount: document.tasks.length,
+          }, null, 2))
+          return
+        }
+
+        console.log(`✅ 已导出 ${document.tasks.length} 个任务: ${outputPath}`)
+      } catch (err) {
+        console.error(`❌ 导出任务失败: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  // ── task import ──
+  taskCmd
+    .command("import")
+    .description("从版本化 JSON 文件合并任务进度")
+    .argument("<file>", "导入文件路径")
+    .argument("[projectId]", "项目 ID")
+    .option("--json", "以 JSON 格式输出结果")
+    .action((file: string, projectId?: string, options?: { json?: boolean }) => {
+      try {
+        const pid = resolveProjectId(engine, projectId)
+        if (!pid) return
+
+        const inputPath = resolve(file)
+        const document = JSON.parse(readFileSync(inputPath, "utf-8")) as unknown
+        const result = engine.importTasks(pid, document)
+
+        if (options?.json) {
+          console.log(JSON.stringify({ ...result, inputPath }, null, 2))
+          return
+        }
+
+        console.log(`✅ 任务导入完成: 匹配 ${result.matched}，更新 ${result.updated}，未变化 ${result.unchanged}`)
+      } catch (err) {
+        console.error(`❌ 导入任务失败: ${(err as Error).message}`)
         process.exit(1)
       }
     })

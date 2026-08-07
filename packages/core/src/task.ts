@@ -4,7 +4,7 @@
  * 每个任务对应一个阶段步骤（Stage）的实际执行实例。
  */
 
-import type { TaskId, ArtifactId } from "./branded-ids.js"
+import type { TaskId, ArtifactId, ProjectId } from "./branded-ids.js"
 import { Role } from "./role.js"
 import { Phase } from "./phase.js"
 
@@ -108,6 +108,42 @@ export interface TaskProgress {
   percent: number
 }
 
+/** 任务导出文件中的单条任务记录 */
+export interface TaskExportEntry {
+  taskId: TaskId
+  stageId: string
+  phase: Phase
+  title: string
+  description: string
+  responsibleRole: Role
+  status: TaskStatus
+  artifactIds: ArtifactId[]
+  assignedTo: string | null
+  createdAt: string
+  completedAt: string | null
+  notes: string | null
+}
+
+/** 版本化任务导出文件 */
+export interface TaskExportDocument {
+  format: "octopus.tasks"
+  version: 1
+  exportedAt: string
+  sourceProject: {
+    projectId: ProjectId
+    projectName: string
+  }
+  tasks: TaskExportEntry[]
+}
+
+/** 合并导入结果 */
+export interface TaskImportResult {
+  projectId: ProjectId
+  matched: number
+  updated: number
+  unchanged: number
+}
+
 /** 阶段步骤运行时信息 */
 export interface StageInfo {
   /** 步骤定义 ID */
@@ -141,4 +177,3 @@ export interface StageProgress {
   /** 完成百分比 0-100 */
   percent: number
 }
-

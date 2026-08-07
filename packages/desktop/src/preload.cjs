@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("octopus", {
   listProjects: () => ipcRenderer.invoke("octopus:listProjects"),
   init: (name, description, projectRoot) => ipcRenderer.invoke("octopus:init", name, description, projectRoot),
   status: (projectId) => ipcRenderer.invoke("octopus:status", projectId),
+<<<<<<< HEAD
   snapshot: (projectId) => ipcRenderer.invoke("octopus:snapshot", projectId),
   state: (projectId) => ipcRenderer.invoke("octopus:state", projectId),
   runNode: (projectId, nodeId, force) => ipcRenderer.invoke("octopus:runNode", projectId, nodeId, force),
@@ -16,4 +17,8 @@ contextBridge.exposeInMainWorld("octopus", {
   events: (projectId, sequence) => ipcRenderer.invoke("octopus:events", projectId, sequence),
   health: () => ipcRenderer.invoke("octopus:health"),
   openNodeDirectory: (projectId, nodeId) => ipcRenderer.invoke("octopus:openNodeDirectory", projectId, nodeId),
+=======
+  exportTasks: (projectId) => ipcRenderer.invoke("octopus:exportTasks", projectId),
+  importTasks: (projectId) => ipcRenderer.invoke("octopus:importTasks", projectId),
+>>>>>>> 8ba2f013f71b55a7531bf6e5cdb68be78a910ba2
 })

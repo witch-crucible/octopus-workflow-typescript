@@ -5,9 +5,14 @@
  * 项目状态持久化到 Electron 的 userData 目录，避免污染工作目录。
  */
 
-import { join, dirname } from "node:path"
+import { readFileSync, writeFileSync } from "node:fs"
+import { join, dirname, basename } from "node:path"
 import { fileURLToPath } from "node:url"
+<<<<<<< HEAD
 import { app, BrowserWindow, ipcMain, shell, Notification } from "electron"
+=======
+import { app, BrowserWindow, dialog, ipcMain } from "electron"
+>>>>>>> 8ba2f013f71b55a7531bf6e5cdb68be78a910ba2
 import { loadConfig } from "@octopus/context/config.js"
 import { getWorkflowWorkspace } from "@octopus/context/workflow.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
@@ -36,6 +41,7 @@ function registerIpc(): void {
   })
 
   ipcMain.handle("octopus:status", (_e, projectId: string) => engine.getProjectStatus(projectId))
+<<<<<<< HEAD
   ipcMain.handle("octopus:snapshot", (_e, projectId: string) => engine.getExecutionSnapshot(projectId))
   ipcMain.handle("octopus:state", (_e, projectId: string) => engine.getState(projectId))
   ipcMain.handle("octopus:runNode", (_e, projectId: string, nodeId: string, force?: boolean) => engine.runNode(projectId, nodeId, force === undefined ? {} : { force }))
@@ -54,6 +60,58 @@ function registerIpc(): void {
     if (!state.projectRoot) throw new Error("项目没有源码根目录")
     const path = getWorkflowWorkspace(state.projectRoot).nodePath(nodeId)
     return shell.openPath(path)
+=======
+
+  ipcMain.handle("octopus:exportTasks", async (_e, projectId: string) => {
+    const document = engine.exportTasks(projectId)
+    const selected = await dialog.showSaveDialog({
+      title: "导出任务",
+      defaultPath: `${projectId}-tasks.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    })
+    if (selected.canceled || !selected.filePath) {
+      return { canceled: true }
+    }
+
+    writeFileSync(selected.filePath, `${JSON.stringify(document, null, 2)}\n`, "utf-8")
+    return {
+      canceled: false,
+      outputPath: selected.filePath,
+      taskCount: document.tasks.length,
+    }
+  })
+
+  ipcMain.handle("octopus:importTasks", async (_e, projectId: string) => {
+    const selected = await dialog.showOpenDialog({
+      title: "导入任务",
+      properties: ["openFile"],
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    })
+    const inputPath = selected.filePaths[0]
+    if (selected.canceled || !inputPath) {
+      return { canceled: true }
+    }
+
+    const confirmation = await dialog.showMessageBox({
+      type: "warning",
+      title: "确认导入任务",
+      message: `将 ${basename(inputPath)} 的任务进度合并到项目 ${projectId}？`,
+      detail: "导入会更新匹配任务的状态、实际负责人、备注和完成时间。",
+      buttons: ["取消", "导入"],
+      defaultId: 1,
+      cancelId: 0,
+    })
+    if (confirmation.response !== 1) {
+      return { canceled: true }
+    }
+
+    const document = JSON.parse(readFileSync(inputPath, "utf-8")) as unknown
+    return {
+      canceled: false,
+      inputPath,
+      ...engine.importTasks(projectId, document),
+    }
+>>>>>>> 8ba2f013f71b55a7531bf6e5cdb68be78a910ba2
   })
 }
 
