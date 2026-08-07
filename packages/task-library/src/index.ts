@@ -36,18 +36,29 @@ export function createStepFromSpec(phase: Phase, step: StepSpec): StepRuntime {
 }
 
 /** 从 workflow.yaml 节点创建运行态步骤。 */
-export function createStepFromNode(projectId: string, node: WorkflowNodeSpec): StepRuntime {
+export function createStepFromNode(
+  projectId: string,
+  node: WorkflowNodeSpec,
+  definition: WorkflowDefinition,
+): StepRuntime {
   const now = new Date().toISOString()
   const random = Math.random().toString(36).slice(2, 8)
+  const nodeId = definition.nodeIdMapping[node.key]
+  if (!nodeId) throw new Error(`节点 ${node.key} 缺少内部 ID 映射`)
+  const dependencyIds = node.dependsOn.map((dependencyKey) => {
+    const dependencyId = definition.nodeIdMapping[dependencyKey]
+    if (!dependencyId) throw new Error(`节点 ${node.key} 的依赖缺少内部 ID 映射: ${dependencyKey}`)
+    return dependencyId
+  })
   return {
-    id: node.id,
-    taskId: TaskId(`${node.id}_${Date.now()}_${random}`),
+    id: nodeId,
+    taskId: TaskId(`${nodeId}_${Date.now()}_${random}`),
     phase: node.phase,
     name: node.name,
     description: node.description,
     responsibleRole: node.responsibleRoles[0] ?? Role.AI,
     status: TaskStatus.PENDING,
-    dependsOn: [...node.dependsOn],
+    dependsOn: dependencyIds,
     actions: node.actions,
     artifactIds: [],
     createdAt: now,
@@ -58,7 +69,9 @@ export function createStepFromNode(projectId: string, node: WorkflowNodeSpec): S
 
 /** 从项目工作流定义生成指定阶段的步骤。 */
 export function createStepsFromDefinition(projectId: string, definition: WorkflowDefinition, phase: Phase): StepRuntime[] {
-  return definition.nodes.filter((node) => node.phase === phase).map((node) => createStepFromNode(projectId, node))
+  return definition.nodes
+    .filter((node) => node.phase === phase)
+    .map((node) => createStepFromNode(projectId, node, definition))
 }
 
 function capabilityToAction(capability: CapabilityRef): NodeAction {

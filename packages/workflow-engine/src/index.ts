@@ -40,6 +40,8 @@ import {
   appendWorkflowNode,
   initializeWorkflowFile,
   loadWorkflowDefinition,
+  resolveWorkflowNodeId,
+  resolveWorkflowNodeKey,
 } from "@octopus/context/workflow.js"
 import type { OctopusConfig } from "@octopus/context/config.js"
 import { toAIClientConfig } from "@octopus/context/config.js"
@@ -218,8 +220,27 @@ export class WorkflowEngine {
   }
 
   /** 独立运行一个节点。 */
-  runNode(projectId: string, nodeId: string, options?: RunNodeOptions): NodeRun {
-    return this.nodeExecution.runNode(projectId, nodeId, options)
+  runNode(projectId: string, nodeKey: string, options?: RunNodeOptions): NodeRun {
+    return this.nodeExecution.runNode(projectId, this.resolveNodeId(projectId, nodeKey), options)
+  }
+
+  /** 使用英文节点键完成手动节点。 */
+  completeManualNode(projectId: string, nodeKey: string, force = false): WorkflowState {
+    return this.nodeExecution.completeManualNode(projectId, this.resolveNodeId(projectId, nodeKey), force)
+  }
+
+  /** 将英文节点键解析为内部运行态 ID。 */
+  resolveNodeId(projectId: string, nodeKey: string): string {
+    const state = this.getState(projectId)
+    if (!state.projectRoot) throw new Error(`项目 ${projectId} 未配置源码根目录，请重新 init --root`)
+    return resolveWorkflowNodeId(loadWorkflowDefinition(state.projectRoot), nodeKey)
+  }
+
+  /** 将内部运行态 ID 反查为英文节点键。 */
+  resolveNodeKey(projectId: string, nodeId: string): string {
+    const state = this.getState(projectId)
+    if (!state.projectRoot) throw new Error(`项目 ${projectId} 未配置源码根目录，请重新 init --root`)
+    return resolveWorkflowNodeKey(loadWorkflowDefinition(state.projectRoot), nodeId)
   }
 
   /** 自动并行运行所有 READY 节点。 */
@@ -235,7 +256,6 @@ export class WorkflowEngine {
   createNode(projectId: string, node: WorkflowNodeSpec): CreateNodeResult {
     const state = this.getState(projectId)
     if (!state.projectRoot) throw new Error(`项目 ${projectId} 未配置源码根目录，请重新 init --root`)
-    if (state.steps.some((step) => step.id === node.id)) throw new Error(`节点已存在: ${node.id}`)
 
     const currentPhaseIndex = getPhaseIndex(state.currentPhase)
     const nodePhaseIndex = getPhaseIndex(node.phase)
@@ -244,21 +264,22 @@ export class WorkflowEngine {
     }
 
     const definition = loadWorkflowDefinition(state.projectRoot)
-    const nodesById = new Map(definition.nodes.map((candidate) => [candidate.id, candidate]))
-    for (const dependencyId of node.dependsOn) {
-      const dependency = nodesById.get(dependencyId)
-      if (!dependency) throw new Error(`节点 ${node.id} 依赖不存在: ${dependencyId}`)
+    const nodesByKey = new Map(definition.nodes.map((candidate) => [candidate.key, candidate]))
+    if (nodesByKey.has(node.key)) throw new Error(`节点已存在: ${node.key}`)
+    for (const dependencyKey of node.dependsOn) {
+      const dependency = nodesByKey.get(dependencyKey)
+      if (!dependency) throw new Error(`节点 ${node.key} 依赖不存在: ${dependencyKey}`)
       if (getPhaseIndex(dependency.phase) > nodePhaseIndex) {
-        throw new Error(`节点 ${node.id} 不能依赖后续阶段节点 ${dependencyId}`)
+        throw new Error(`节点 ${node.key} 不能依赖后续阶段节点 ${dependencyKey}`)
       }
     }
 
-    const workspace = appendWorkflowNode(state.projectRoot, node)
+    const appended = appendWorkflowNode(state.projectRoot, node)
     const activated = node.phase === state.currentPhase
     if (activated) {
       this.store.update(projectId, (current) => {
-        if (current.steps.some((step) => step.id === node.id)) throw new Error(`节点已存在: ${node.id}`)
-        current.steps.push(createStepFromNode(projectId, node))
+        if (current.steps.some((step) => step.id === appended.nodeId)) throw new Error(`节点已存在: ${node.key}`)
+        current.steps.push(createStepFromNode(projectId, node, appended.definition))
         return current
       })
     }
@@ -267,7 +288,7 @@ export class WorkflowEngine {
       projectId,
       node,
       activated,
-      workspacePath: workspace.nodePath(node.id),
+      workspacePath: appended.workspace.nodePath(node.key),
     }
   }
 

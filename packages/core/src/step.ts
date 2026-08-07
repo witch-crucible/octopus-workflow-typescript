@@ -19,7 +19,7 @@ export { TaskStatus as StepStatus }
 
 /** 步骤运行态（唯一真相源） */
 export interface StepRuntime {
-  /** 步骤定义 ID（如 "10.1"，与 spec 步骤 id 对应） */
+  /** 内部运行态 ID；面向用户的英文 key 通过工作流映射解析。 */
   id: string
   /** 稳定任务 ID（派生 Task 视图使用） */
   taskId: TaskId
@@ -33,7 +33,7 @@ export interface StepRuntime {
   responsibleRole: Role
   /** 当前状态 */
   status: TaskStatus
-  /** 前置步骤 ID 列表 */
+  /** 前置步骤内部 ID 列表 */
   dependsOn: string[]
   /** 声明式能力（来自 spec，Phase 3 由 CapabilityRegistry 分发） */
   capabilities?: readonly CapabilityRef[]

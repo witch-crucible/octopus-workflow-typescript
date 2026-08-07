@@ -11,6 +11,12 @@ import { Phase } from "@octopus/core/phase.js"
 import { Role } from "@octopus/core/role.js"
 import { AIAssistantType } from "@octopus/core/agent.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
+import {
+  definitionFromBuiltInSpec,
+  loadWorkflowDefinition,
+  resolveWorkflowNodeId,
+  resolveWorkflowNodeKey,
+} from "@octopus/context/workflow.js"
 
 interface CreateNodeOptions {
   description?: string
@@ -40,13 +46,13 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
 
   node.command("create")
     .description("创建任务节点并写入项目工作流")
-    .argument("<nodeId>", "节点 ID")
+    .argument("<nodeKey>", "英文节点 key（kebab-case）")
     .argument("<name>", "节点名称")
     .argument("[projectId]", "项目 ID")
     .option("--description <text>", "节点描述")
     .option("--phase <phase>", "所属阶段，默认当前阶段")
     .option("--role <role>", "负责角色，可重复", collect, [])
-    .option("--depends-on <nodeId>", "前置节点，可重复", collect, [])
+    .option("--depends-on <nodeKey>", "前置节点英文 key，可重复", collect, [])
     .option("--type <type>", "动作类型：manual、command、ai、heinrich", "manual")
     .option("--instructions <text>", "手动节点操作说明")
     .option("--executable <path>", "命令节点可执行文件")
@@ -59,7 +65,7 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
     .option("--delta <count>", "Heinrich 计数增量")
     .option("--level <level>", "Heinrich 等级：MAJOR、MINOR、TRIVIAL")
     .option("--json", "以 JSON 输出")
-    .action((nodeId: string, name: string, projectId: string | undefined, options: CreateNodeOptions) => {
+    .action((nodeKey: string, name: string, projectId: string | undefined, options: CreateNodeOptions) => {
       try {
         const pid = resolveProjectId(engine, projectId)
         if (!pid) return
@@ -69,7 +75,7 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
           ? options.role.map((role) => parseEnumValue(Role, role, "角色"))
           : [Role.DEV]
         const spec: WorkflowNodeSpec = {
-          id: nodeId,
+          key: nodeKey,
           phase,
           name,
           description: options.description ?? "",
@@ -83,7 +89,7 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
           return
         }
         const activation = result.activated ? "已加入当前阶段" : "将在对应阶段激活"
-        console.log(`✅ 节点 ${nodeId} 已创建（${activation}）`)
+        console.log(`✅ 节点 ${nodeKey} 已创建（${activation}）`)
         console.log(`   工作目录: ${result.workspacePath}`)
       } catch (error) {
         console.error(`❌ 创建节点失败: ${(error as Error).message}`)
@@ -100,65 +106,100 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
       if (!pid) return
       const state = engine.getState(pid)
       const snapshot = engine.getExecutionSnapshot(pid)
+      const definition = state.projectRoot ? loadWorkflowDefinition(state.projectRoot) : definitionFromBuiltInSpec()
+      const keyForId = (nodeId: string): string => resolveWorkflowNodeKey(definition, nodeId)
       const rows = state.steps.map((step) => ({
-        id: step.id,
+        key: keyForId(step.id),
         name: step.name,
         phase: step.phase,
         status: step.status,
         statusLabel: TASK_STATUS_LABELS[step.status],
         current: snapshot.currentNodeIds.includes(step.id),
         ready: snapshot.readyNodeIds.includes(step.id),
-        workspace: state.projectRoot ? `${state.projectRoot}/workflow/nodes/${step.id}` : undefined,
+        workspace: state.projectRoot ? `${state.projectRoot}/workflow/nodes/${keyForId(step.id)}` : undefined,
       }))
       if (options.json) {
-        console.log(JSON.stringify({ projectId: pid, snapshot, nodes: rows }, null, 2))
+        console.log(JSON.stringify({
+          projectId: pid,
+          snapshot: {
+            currentNodeKeys: snapshot.currentNodeIds.map(keyForId),
+            readyNodeKeys: snapshot.readyNodeIds.map(keyForId),
+            waitingNodeKeys: snapshot.waitingNodeIds.map(keyForId),
+            schedulerStatus: snapshot.schedulerStatus,
+            updatedAt: snapshot.updatedAt,
+          },
+          nodes: rows,
+        }, null, 2))
         return
       }
-      console.log(`\n📍 节点 (${rows.length}) · 当前: ${snapshot.currentNodeIds.join(", ") || "无"}`)
+      console.log(`\n📍 节点 (${rows.length}) · 当前: ${snapshot.currentNodeIds.map(keyForId).join(", ") || "无"}`)
       for (const row of rows) {
         const marker = row.current ? "▶" : row.ready ? "◇" : " "
-        console.log(` ${marker} ${row.id.padEnd(8)} [${row.statusLabel}] ${row.name}`)
+        console.log(` ${marker} ${row.key.padEnd(40)} [${row.statusLabel}] ${row.name}`)
       }
       console.log()
     })
 
   node.command("show")
     .description("查看节点详情和运行历史")
-    .argument("<nodeId>", "节点 ID")
+    .argument("<nodeKey>", "英文节点 key")
     .argument("[projectId]", "项目 ID")
     .option("--json", "以 JSON 输出")
-    .action((nodeId: string, projectId: string | undefined, options: { json?: boolean }) => {
+    .action((nodeKey: string, projectId: string | undefined, options: { json?: boolean }) => {
       const pid = resolveProjectId(engine, projectId)
       if (!pid) return
       const state = engine.getState(pid)
+      const definition = state.projectRoot ? loadWorkflowDefinition(state.projectRoot) : definitionFromBuiltInSpec()
+      const nodeId = resolveWorkflowNodeId(definition, nodeKey)
       const step = state.steps.find((candidate) => candidate.id === nodeId)
-      if (!step) throw new Error(`节点不存在: ${nodeId}`)
-      const data = { projectId: pid, node: step, runs: engine.execution.listRuns(pid, nodeId) }
+      if (!step) throw new Error(`节点尚未激活: ${nodeKey}`)
+      const data = {
+        projectId: pid,
+        node: {
+          key: nodeKey,
+          phase: step.phase,
+          name: step.name,
+          description: step.description,
+          responsibleRole: step.responsibleRole,
+          status: step.status,
+          dependsOn: step.dependsOn.map((dependencyId) => resolveWorkflowNodeKey(definition, dependencyId)),
+          actions: step.actions,
+          artifactIds: step.artifactIds,
+          assignedTo: step.assignedTo,
+          createdAt: step.createdAt,
+          updatedAt: step.updatedAt,
+          completedAt: step.completedAt,
+          notes: step.notes,
+          capabilityRuns: step.capabilityRuns,
+        },
+        runs: engine.execution.listRuns(pid, nodeId).map(({ nodeId: _nodeId, ...run }) => ({ ...run, nodeKey })),
+      }
       if (options.json) {
         console.log(JSON.stringify(data, null, 2))
         return
       }
-      console.log(`\n📌 ${step.id} ${step.name}`)
+      console.log(`\n📌 ${nodeKey} ${step.name}`)
       console.log(`   状态: ${TASK_STATUS_LABELS[step.status]}`)
-      console.log(`   依赖: ${step.dependsOn.join(", ") || "无"}`)
+      console.log(`   依赖: ${data.node.dependsOn.join(", ") || "无"}`)
       console.log(`   运行次数: ${data.runs.length}`)
-      if (state.projectRoot) console.log(`   工作目录: ${state.projectRoot}/workflow/nodes/${step.id}`)
+      if (state.projectRoot) console.log(`   工作目录: ${state.projectRoot}/workflow/nodes/${nodeKey}`)
       console.log()
     })
 
   node.command("run")
     .description("独立运行一个节点")
-    .argument("<nodeId>", "节点 ID")
+    .argument("<nodeKey>", "英文节点 key")
     .argument("[projectId]", "项目 ID")
     .option("--force", "忽略未完成依赖并记录审计")
     .option("--json", "以 JSON 输出")
-    .action((nodeId: string, projectId: string | undefined, options: { force?: boolean; json?: boolean }) => {
+    .action((nodeKey: string, projectId: string | undefined, options: { force?: boolean; json?: boolean }) => {
       try {
         const pid = resolveProjectId(engine, projectId)
         if (!pid) return
-        const run = engine.runNode(pid, nodeId, options.force === undefined ? {} : { force: options.force })
-        if (options.json) console.log(JSON.stringify(run, null, 2))
-        else console.log(`✅ 节点 ${nodeId} 已启动: ${run.id} (PID ${run.pid ?? "pending"})`)
+        const run = engine.runNode(pid, nodeKey, options.force === undefined ? {} : { force: options.force })
+        const { nodeId: _nodeId, ...publicRun } = run
+        if (options.json) console.log(JSON.stringify({ ...publicRun, nodeKey }, null, 2))
+        else console.log(`✅ 节点 ${nodeKey} 已启动: ${run.id} (PID ${run.pid ?? "pending"})`)
       } catch (error) {
         console.error(`❌ 节点运行失败: ${(error as Error).message}`)
         process.exitCode = 1
@@ -167,15 +208,15 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
 
   node.command("complete")
     .description("完成手动节点")
-    .argument("<nodeId>", "节点 ID")
+    .argument("<nodeKey>", "英文节点 key")
     .argument("[projectId]", "项目 ID")
     .option("--force", "忽略未完成依赖")
-    .action((nodeId: string, projectId: string | undefined, options: { force?: boolean }) => {
+    .action((nodeKey: string, projectId: string | undefined, options: { force?: boolean }) => {
       try {
         const pid = resolveProjectId(engine, projectId)
         if (!pid) return
-        engine.execution.completeManualNode(pid, nodeId, options.force === true)
-        console.log(`✅ 手动节点 ${nodeId} 已完成`)
+        engine.completeManualNode(pid, nodeKey, options.force === true)
+        console.log(`✅ 手动节点 ${nodeKey} 已完成`)
       } catch (error) {
         console.error(`❌ 节点完成失败: ${(error as Error).message}`)
         process.exitCode = 1

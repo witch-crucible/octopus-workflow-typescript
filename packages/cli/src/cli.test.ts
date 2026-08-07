@@ -16,6 +16,7 @@ import { TaskStatus } from "@octopus/core/task.js"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { loadWorkflowDefinition } from "@octopus/context/workflow.js"
 
 const TEST_STORE_DIR = ".octo_cli_test"
 const temporaryProjectRoots: string[] = []
@@ -49,12 +50,14 @@ describe("CLI 命令验证", () => {
     const engine = createEngine()
     const program = new Command()
     buildInitCommand(program, engine)
+    const projectRoot = mkdtempSync(join(tmpdir(), "octopus-cli-init-"))
+    temporaryProjectRoots.push(projectRoot)
 
     // 模拟命令行参数
     const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
-    program.parse(["node", "octopus", "init", "测试项目", "-d", "测试描述"])
+    program.parse(["node", "octopus", "init", "测试项目", "-d", "测试描述", "--root", projectRoot])
 
     expect(consoleErrorSpy).not.toHaveBeenCalled()
     consoleLogSpy.mockRestore()
@@ -65,11 +68,13 @@ describe("CLI 命令验证", () => {
     const engine = createEngine()
     const program = new Command()
     buildInitCommand(program, engine)
+    const projectRoot = mkdtempSync(join(tmpdir(), "octopus-cli-json-init-"))
+    temporaryProjectRoots.push(projectRoot)
 
     const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
 
-    program.parse(["node", "octopus", "init", "JSON测试项目", "--json"])
+    program.parse(["node", "octopus", "init", "JSON测试项目", "--root", projectRoot, "--json"])
 
     expect(consoleErrorSpy).not.toHaveBeenCalled()
     const jsonOutput = consoleLogSpy.mock.calls[0]?.[0]
@@ -245,19 +250,19 @@ describe("CLI 命令验证", () => {
       "octopus",
       "node",
       "create",
-      "10.doc",
-      "AI 生成文档",
+      "generate-documentation",
+      "Generate Documentation",
       state.projectId,
       "--role",
       "AI",
       "--depends-on",
-      "10.1",
+      "requirements-analysis-and-brd-design",
       "--type",
       "ai",
       "--assistant",
       "DOCUMENT_SYNC",
       "--input",
-      "生成技术文档",
+      "Generate complete technical documentation from the project source code",
       "--output",
       "documentation.md",
       "--if-exists",
@@ -266,15 +271,19 @@ describe("CLI 命令验证", () => {
     ])
 
     expect(consoleErrorSpy).not.toHaveBeenCalled()
-    const created = engine.getState(state.projectId).steps.find((step) => step.id === "10.doc")
+    const definition = loadWorkflowDefinition(projectRoot)
+    const internalId = definition.nodeIdMapping["generate-documentation"]
+    const created = engine.getState(state.projectId).steps.find((step) => step.id === internalId)
     expect(created?.responsibleRole).toBe("AI")
     expect(created?.actions).toEqual([expect.objectContaining({
       type: "ai",
       outputFile: "documentation.md",
       ifExists: "extend",
     })])
-    expect(existsSync(`${projectRoot}/workflow/nodes/10.doc`)).toBe(true)
-    expect(readFileSync(`${projectRoot}/workflow.yaml`, "utf8")).toContain("10.doc")
+    expect(existsSync(`${projectRoot}/workflow/nodes/generate-documentation`)).toBe(true)
+    const workflowYaml = readFileSync(`${projectRoot}/workflow.yaml`, "utf8")
+    expect(workflowYaml).toContain("generate-documentation")
+    expect(workflowYaml).not.toContain("  - id:")
 
     consoleLogSpy.mockRestore()
     consoleErrorSpy.mockRestore()

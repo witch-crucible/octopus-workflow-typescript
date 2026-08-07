@@ -9,6 +9,7 @@ import { closeSync, openSync, mkdirSync } from "node:fs"
 import { spawn } from "node:child_process"
 import { loadConfig } from "@octopus/context/config.js"
 import { createStateStore, loadWorkflowDefinition, syncWorkflowWorkspace } from "@octopus/context/index.js"
+import { resolveWorkflowNodeKey } from "@octopus/context/workflow.js"
 import { createExecutionStore } from "@octopus/context/execution.js"
 import type { NodeAction, NodeRunStatus, WorkflowEvent } from "@octopus/core/execution.js"
 import { TaskStatus } from "@octopus/core/task.js"
@@ -34,8 +35,9 @@ async function main(): Promise<void> {
   if (!step) throw new Error(`节点不存在: ${run.nodeId}`)
 
   const projectRoot = state.projectRoot ?? process.cwd()
-  const workspace = syncWorkflowWorkspace(projectRoot, loadWorkflowDefinition(projectRoot))
-  const nodePath = workspace.nodePath(step.id)
+  const definition = loadWorkflowDefinition(projectRoot)
+  const workspace = syncWorkflowWorkspace(projectRoot, definition)
+  const nodePath = workspace.nodePath(resolveWorkflowNodeKey(definition, step.id))
   const config = loadConfig(args.storeDir)
   const actions = step.actions ?? [{ type: "manual" as const }]
   const heartbeat = setInterval(() => {

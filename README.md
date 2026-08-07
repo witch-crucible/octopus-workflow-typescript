@@ -32,7 +32,7 @@ node packages/cli/dist/index.js task list
 | `octopus task list/complete/set-status` | 查看和更新任务 |
 | `octopus stage list/update` | 查看和更新步骤视图 |
 | `octopus checklist show/add/check/remove` | 管理阶段清单 |
-| `octopus node create <nodeId> <name>` | 创建手动、命令、AI 或 Heinrich 任务节点 |
+| `octopus node create <nodeKey> <name>` | 使用英文 key 创建手动、命令、AI 或 Heinrich 任务节点 |
 | `octopus step run <stageId>` | 执行步骤声明的 AI、集成或质量能力 |
 | `octopus heinrich ...` | 记录和评估质量风险 |
 
@@ -41,18 +41,21 @@ node packages/cli/dist/index.js task list
 创建一个生成技术文档、文档存在时继续扩展的 AI 节点：
 
 ```bash
-octopus node create 10.doc "AI 生成文档" \
+octopus init "My Project" --root .
+
+octopus node create generate-documentation "Generate Documentation" \
   --role AI \
-  --depends-on 10.1 \
+  --depends-on requirements-analysis-and-brd-design \
   --type ai \
   --assistant DOCUMENT_SYNC \
-  --input "根据项目代码生成完整技术文档；已有文档时保留有效内容并扩展变更部分" \
+  --input "Generate complete technical documentation from the project source code; preserve valid existing content and extend changed sections" \
   --output documentation.md \
   --if-exists extend
 ```
 
-节点会同时写入 `workflow.yaml` 和当前项目状态，工作目录为
-`workflow/nodes/<nodeId>/`。未来阶段的节点在推进到对应阶段时加入运行态。
+`workflow.yaml` 的 `nodes` 仅保存英文 `key`，内部 ID 由顶层 `nodeIdMapping`
+独立维护。节点工作目录为 `workflow/nodes/<nodeKey>/`；未来阶段的节点在推进到
+对应阶段时加入运行态。
 
 ## 任务导入导出
 

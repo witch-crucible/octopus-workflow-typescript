@@ -9,7 +9,11 @@ import { mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 import type { StateStore } from "@octopus/context/index.js"
 import { createExecutionStore } from "@octopus/context/execution.js"
-import { loadWorkflowDefinition, syncWorkflowWorkspace } from "@octopus/context/workflow.js"
+import {
+  loadWorkflowDefinition,
+  resolveWorkflowNodeKey,
+  syncWorkflowWorkspace,
+} from "@octopus/context/workflow.js"
 import { launchWorker, terminateWorker } from "@octopus/executor/index.js"
 import type { IntegrationHealth, NodeRun, WorkflowEvent, WorkflowExecutionSnapshot } from "@octopus/core/execution.js"
 import { TaskStatus } from "@octopus/core/task.js"
@@ -101,6 +105,7 @@ export class NodeExecutionService {
     if (!projectRoot) throw new Error(`项目 ${projectId} 未配置源码根目录，请重新 init --root`)
     const definition = loadWorkflowDefinition(projectRoot)
     const workspace = syncWorkflowWorkspace(projectRoot, definition)
+    const nodeKey = resolveWorkflowNodeKey(definition, nodeId)
     const runDir = join(this.storeDir, "runs", projectId, nodeId.replaceAll("/", "_"))
     mkdirSync(runDir, { recursive: true })
     const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -117,11 +122,11 @@ export class NodeExecutionService {
       if (target) {
         target.status = TaskStatus.IN_PROGRESS
         target.updatedAt = new Date().toISOString()
-        target.notes = `workspace=${workspace.nodePath(nodeId)}`
+        target.notes = `workspace=${workspace.nodePath(nodeKey)}`
       }
       return current
     })
-    this.appendEvent(projectId, run, "RUN_QUEUED", { forced: run.forced, workspace: workspace.nodePath(nodeId) })
+    this.appendEvent(projectId, run, "RUN_QUEUED", { forced: run.forced, workspace: workspace.nodePath(nodeKey) })
     const startedAt = new Date().toISOString()
     this.executions.updateRun(run.id, { status: "RUNNING", startedAt, heartbeatAt: startedAt })
     let pid: number

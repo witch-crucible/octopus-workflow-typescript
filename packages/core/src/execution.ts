@@ -40,7 +40,8 @@ export type NodeAction =
 
 /** 工作流节点定义。 */
 export interface WorkflowNodeSpec {
-  readonly id: string
+  /** 面向用户的英文节点键；内部 ID 由工作流映射维护。 */
+  readonly key: string
   readonly phase: Phase
   readonly name: string
   readonly description: string
@@ -51,8 +52,10 @@ export interface WorkflowNodeSpec {
 
 /** 工作流文件的顶层定义。 */
 export interface WorkflowDefinition {
-  readonly version: 1
+  readonly version: 2
   readonly name: string
+  /** 英文节点键到内部运行态 ID 的稳定映射。 */
+  readonly nodeIdMapping: Readonly<Record<string, string>>
   readonly nodes: readonly WorkflowNodeSpec[]
 }
 

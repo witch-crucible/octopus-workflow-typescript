@@ -1,148 +1,200 @@
-version: 1
+version: 2
 name: Octopus Software Delivery
+nodeIdMapping:
+  requirements-analysis-and-brd-design: '10.1'
+  brd-walkthrough: '10.2'
+  requirements-research: '10.3'
+  prd-design-and-boundary-analysis: '10.4'
+  prd-walkthrough: '10.5'
+  ai-meeting-minutes: '10.6'
+  prd-review-and-feature-breakdown: '10.7'
+  prd-effort-estimation: '10.8'
+  ai-requirements-analysis: '10.9'
+  ai-effort-summary: '10.10'
+  effort-estimate-sync: '10.11'
+  developer-effort-confirmation: '10.12'
+  requirements-scheduling: '20.1'
+  kickoff-review: '20.2'
+  ai-kickoff-summary: 20.2a
+  requirements-walkthrough: '20.3'
+  developer-prd-recap: '20.4'
+  teambition-task-breakdown: '20.5'
+  impact-scope-assessment: '20.6'
+  frontend-backend-alignment: '20.7'
+  technical-design-authoring: '20.8'
+  technical-design-consolidation: '30.1'
+  ai-setup-checklist-validation: '30.2'
+  technical-design-review-chain: '30.3'
+  ai-technical-design-review: '30.4'
+  test-case-design-and-review: '30.5'
+  data-and-api-design: '30.6'
+  feature-development: '30.7'
+  checklist-update-and-integration: '30.8'
+  environment-validation-and-documentation: '30.9'
+  self-test-and-code-quality: '30.10'
+  weekly-feature-demo: '30.11'
+  smoke-demo-validation: '40.1'
+  functional-and-performance-testing: '40.2'
+  uat-and-user-acceptance: '40.3'
+  release-plan-creation: '40.4'
+  environment-deployment: '50.1'
+  branch-merge: '50.2'
+  ai-checklist-recommendation: '50.3'
+  sonar-and-code-review: '50.4'
+  ai-code-review: '50.5'
+  postman-and-test-script-generation: '50.6'
+  sql-execution-and-risk-check: '50.7'
+  magento-release-risk-assessment: '50.8'
+  regression-testing: '50.9'
+  ab-validation-and-branch-merge: '50.10'
+  ai-technical-debt-quantification: '60.1'
+  service-monitoring: '60.2'
+  generate-documentation: 10.doc
 nodes:
-  - id: '10.1'
+  - key: requirements-analysis-and-brd-design
     phase: RequirementsAnalysis
-    name: 需求分析和 BRD 设计
-    description: PM 进行需求分析，完成 BRD 设计
+    name: Requirements Analysis and BRD Design
+    description: PM analyzes requirements and completes the BRD
     responsibleRoles:
       - PM
     dependsOn: []
     actions:
       - type: manual
-  - id: '10.2'
+  - key: brd-walkthrough
     phase: RequirementsAnalysis
-    name: BRD 讲解
-    description: PM 向 BA 讲解 BRD
+    name: BRD Walkthrough
+    description: PM walks BA through the BRD
     responsibleRoles:
       - PM
       - BA
     dependsOn:
-      - '10.1'
+      - requirements-analysis-and-brd-design
     actions:
       - type: manual
-  - id: '10.3'
+  - key: requirements-research
     phase: RequirementsAnalysis
-    name: 需求调研
-    description: SA 进行技术调研，评估可行性和预计时间/成本
+    name: Requirements Research
+    description: SA researches technical feasibility, delivery time, and cost
     responsibleRoles:
       - SA
     dependsOn:
-      - '10.2'
+      - brd-walkthrough
     actions:
       - type: manual
-  - id: '10.4'
+  - key: prd-design-and-boundary-analysis
     phase: RequirementsAnalysis
-    name: PRD 设计与边界逆向设计
-    description: BA 进行 PRD 设计和边界逆向设计
+    name: PRD and Boundary Design
+    description: BA designs the PRD and validates boundary cases
     responsibleRoles:
       - BA
     dependsOn:
-      - '10.3'
+      - requirements-research
     actions:
       - type: manual
-  - id: '10.5'
+  - key: prd-walkthrough
     phase: RequirementsAnalysis
-    name: PRD 讲解
-    description: BA 向 PM/DEV/SA 讲解 PRD
+    name: PRD Walkthrough
+    description: BA walks PM, DEV, and SA through the PRD
     responsibleRoles:
       - BA
       - PM
       - DEV
       - SA
     dependsOn:
-      - '10.4'
+      - prd-design-and-boundary-analysis
     actions:
       - type: manual
-  - id: '10.6'
+  - key: ai-meeting-minutes
     phase: RequirementsAnalysis
-    name: AI 会议纪要
-    description: AI 通过通义听悟/chatGPT录音生成会议纪要
+    name: AI Meeting Minutes
+    description: AI generates meeting minutes from the recorded discussion
     responsibleRoles:
       - AI
     dependsOn:
-      - '10.5'
+      - prd-walkthrough
     actions:
       - type: ai
         assistant: MEETING_MINUTES
-  - id: '10.7'
+  - key: prd-review-and-feature-breakdown
     phase: RequirementsAnalysis
-    name: PRD 阅读和功能点拆分
-    description: SA 阅读 PRD 并拆分功能点
+    name: PRD Review and Feature Breakdown
+    description: SA reviews the PRD and breaks it into feature units
     responsibleRoles:
       - SA
     dependsOn:
-      - '10.5'
+      - prd-walkthrough
     actions:
       - type: manual
-  - id: '10.8'
+  - key: prd-effort-estimation
     phase: RequirementsAnalysis
-    name: PRD 估时
-    description: SA 对功能点进行估时（每子项 ≤2h）
+    name: PRD Effort Estimation
+    description: SA estimates each feature unit at no more than two hours
     responsibleRoles:
       - SA
     dependsOn:
-      - '10.7'
+      - prd-review-and-feature-breakdown
     actions:
       - type: manual
-  - id: '10.9'
+  - key: ai-requirements-analysis
     phase: RequirementsAnalysis
-    name: AI 需求分析
-    description: AI 根据项目代码/wiki/思维导图进行需求拆解分析
+    name: AI Requirements Analysis
+    description: >-
+      AI analyzes and decomposes requirements using project code, wiki pages,
+      and mind maps
     responsibleRoles:
       - SA
       - AI
     dependsOn:
-      - '10.7'
+      - prd-review-and-feature-breakdown
     actions:
       - type: ai
         assistant: REQUIREMENTS_ANALYSIS
-  - id: '10.10'
+  - key: ai-effort-summary
     phase: RequirementsAnalysis
-    name: AI PRD 估时提取
-    description: AI 从 Excel 估时明细中汇总工时
+    name: AI Effort Summary
+    description: AI summarizes effort from the detailed Excel estimate
     responsibleRoles:
       - AI
     dependsOn:
-      - '10.8'
+      - prd-effort-estimation
     actions:
       - type: ai
         assistant: EFFORT_ESTIMATION
-  - id: '10.11'
+  - key: effort-estimate-sync
     phase: RequirementsAnalysis
-    name: PRD 估时同步
-    description: SA 向 PM 和 DEV 同步估时结果
+    name: Effort Estimate Sync
+    description: SA shares the effort estimate with PM and DEV
     responsibleRoles:
       - SA
       - PM
       - DEV
     dependsOn:
-      - '10.10'
+      - ai-effort-summary
     actions:
       - type: manual
-  - id: '10.12'
+  - key: developer-effort-confirmation
     phase: RequirementsAnalysis
-    name: DEV 二次确认工时
-    description: DEV 确认工时评估
+    name: Developer Effort Confirmation
+    description: DEV confirms the effort estimate
     responsibleRoles:
       - DEV
     dependsOn:
-      - '10.11'
+      - effort-estimate-sync
     actions:
       - type: manual
-  - id: '20.1'
+  - key: requirements-scheduling
     phase: Design
-    name: 需求排期
-    description: PM 进行需求排期
+    name: Requirements Scheduling
+    description: PM schedules the approved requirements
     responsibleRoles:
       - PM
     dependsOn: []
     actions:
       - type: manual
-  - id: '20.2'
+  - key: kickoff-review
     phase: Design
-    name: Kick Off 评审
-    description: 需求评审会议，含录音和 AI 总结
+    name: Kickoff Review
+    description: The team reviews requirements with a recording and AI summary
     responsibleRoles:
       - PM
       - BA
@@ -150,24 +202,24 @@ nodes:
       - DEV
       - QA
     dependsOn:
-      - '20.1'
+      - requirements-scheduling
     actions:
       - type: manual
-  - id: 20.2a
+  - key: ai-kickoff-summary
     phase: Design
-    name: AI 会议录音总结
-    description: AI 总结会议录音
+    name: AI Kickoff Summary
+    description: AI summarizes the kickoff recording
     responsibleRoles:
       - AI
     dependsOn:
-      - '20.2'
+      - kickoff-review
     actions:
       - type: ai
         assistant: MEETING_MINUTES
-  - id: '20.3'
+  - key: requirements-walkthrough
     phase: Design
-    name: BA 需求讲解
-    description: BA 向 PM/SA/DEV/QA 讲解需求
+    name: Requirements Walkthrough
+    description: BA explains the requirements to PM, SA, DEV, and QA
     responsibleRoles:
       - BA
       - PM
@@ -175,199 +227,210 @@ nodes:
       - DEV
       - QA
     dependsOn:
-      - '20.2'
+      - kickoff-review
     actions:
       - type: manual
-  - id: '20.4'
+  - key: developer-prd-recap
     phase: Design
-    name: DEV PRD 复述
-    description: DEV 复述 PRD 理解，反馈问题给 SA/BA
+    name: Developer PRD Recap
+    description: DEV restates the PRD understanding and reports questions to SA and BA
     responsibleRoles:
       - DEV
       - SA
       - BA
     dependsOn:
-      - '20.3'
+      - requirements-walkthrough
     actions:
       - type: manual
-  - id: '20.5'
+  - key: teambition-task-breakdown
     phase: Design
-    name: PM TB 任务拆分
-    description: PM 拆分 TB 任务（每任务 ≤4h）
+    name: Teambition Task Breakdown
+    description: PM splits the work into Teambition tasks of no more than four hours
     responsibleRoles:
       - PM
     dependsOn:
-      - '20.4'
+      - developer-prd-recap
     actions:
       - type: integration
         service: teambition
         operation: splitTasks
-  - id: '20.6'
+  - key: impact-scope-assessment
     phase: Design
-    name: DEV 需求影响范围评估
-    description: DEV 评估需求影响范围，反馈给 SA/QA
+    name: Impact Scope Assessment
+    description: DEV assesses the affected scope and shares it with SA and QA
     responsibleRoles:
       - DEV
       - SA
       - QA
     dependsOn:
-      - '20.5'
+      - teambition-task-breakdown
     actions:
       - type: manual
-  - id: '20.7'
+  - key: frontend-backend-alignment
     phase: Design
-    name: 前后端沟通会议
-    description: DEV 前后端沟通实现方案，产出会议纪要
+    name: Frontend and Backend Alignment
+    description: >-
+      DEV aligns frontend and backend implementation plans and records the
+      decisions
     responsibleRoles:
       - DEV
     dependsOn:
-      - '20.6'
+      - impact-scope-assessment
     actions:
       - type: manual
-  - id: '20.8'
+  - key: technical-design-authoring
     phase: Design
-    name: 技术方案编写
-    description: DEV 编写前端和后端技术方案（API/ER/流程图/PDL）
+    name: Technical Design Authoring
+    description: >-
+      DEV documents frontend and backend designs, including APIs, ER models,
+      flows, and PDL
     responsibleRoles:
       - DEV
     dependsOn:
-      - '20.7'
+      - frontend-backend-alignment
     actions:
       - type: manual
-  - id: '30.1'
+  - key: technical-design-consolidation
     phase: Development
-    name: 技术方案合并和估时核验
-    description: DEV 合并技术方案并核验估时
+    name: Technical Design Consolidation
+    description: DEV consolidates the technical design and verifies the estimate
     responsibleRoles:
       - DEV
     dependsOn: []
     actions:
       - type: manual
-  - id: '30.2'
+  - key: ai-setup-checklist-validation
     phase: Development
-    name: AI Setup Checklist 校验
-    description: AI 自动校验域名/Nginx/PHP/支付等配置
+    name: AI Setup Checklist Validation
+    description: AI validates domain, Nginx, PHP, payment, and related setup
     responsibleRoles:
       - SA
       - AI
     dependsOn:
-      - '30.1'
+      - technical-design-consolidation
     actions:
       - type: ai
         assistant: SETUP_CHECKLIST_CHECK
-  - id: '30.3'
+  - key: technical-design-review-chain
     phase: Development
-    name: 技术方案审核链
-    description: DEV→SA→BA→PM 多级技术方案审核
+    name: Technical Design Review Chain
+    description: DEV, SA, BA, and PM review the technical design in sequence
     responsibleRoles:
       - DEV
       - SA
       - BA
       - PM
     dependsOn:
-      - '30.1'
+      - technical-design-consolidation
     actions:
       - type: manual
-  - id: '30.4'
+  - key: ai-technical-design-review
     phase: Development
-    name: AI 技术方案审核
-    description: AI 进行架构合理性评分、安全漏洞预扫描、性能瓶颈预判
+    name: AI Technical Design Review
+    description: AI scores architecture quality and predicts security and performance risks
     responsibleRoles:
       - AI
     dependsOn:
-      - '30.3'
+      - technical-design-review-chain
     actions:
       - type: ai
         assistant: TECH_DESIGN_REVIEW
-  - id: '30.5'
+  - key: test-case-design-and-review
     phase: Development
-    name: 测试用例编写与评审
-    description: QA 编写测试用例并组织评审
+    name: Test Case Design and Review
+    description: QA writes test cases and organizes their review
     responsibleRoles:
       - QA
       - DEV
       - SA
       - PM
     dependsOn:
-      - '30.4'
+      - ai-technical-design-review
     actions:
       - type: manual
-  - id: '30.6'
+  - key: data-and-api-design
     phase: Development
-    name: 数据结构与接口设计
-    description: DEV 进行数据结构设计、接口设计、界面设计
+    name: Data and API Design
+    description: DEV designs data structures, APIs, and user interfaces
     responsibleRoles:
       - DEV
       - SA
     dependsOn:
-      - '30.5'
+      - test-case-design-and-review
     actions:
       - type: manual
-  - id: '30.7'
+  - key: feature-development
     phase: Development
-    name: 功能开发（AB Test）
-    description: DEV 实现功能开发，构建对应主任务分支
+    name: Feature Development
+    description: DEV implements the feature and creates its main task branch
     responsibleRoles:
       - DEV
     dependsOn:
-      - '30.6'
+      - data-and-api-design
     actions:
       - type: heinrich
         delta: 1
-  - id: '30.8'
+  - key: checklist-update-and-integration
     phase: Development
-    name: 记录 Checklist 和联调
-    description: DEV 更新 Checklist 并完成联调
+    name: Checklist Update and Integration
+    description: DEV updates the checklist and completes integration testing
     responsibleRoles:
       - DEV
     dependsOn:
-      - '30.7'
+      - feature-development
     actions:
       - type: manual
-  - id: '30.9'
+  - key: environment-validation-and-documentation
     phase: Development
-    name: 环境确认与 AI 文档生成
-    description: SA 确认环境就绪，AI 生成技术文档；文档存在时在原内容基础上扩展
+    name: Environment Validation and AI Documentation
+    description: >-
+      SA confirms the environment and AI generates or extends the technical
+      documentation
     responsibleRoles:
       - SA
       - AI
     dependsOn:
-      - '30.8'
+      - checklist-update-and-integration
     actions:
       - type: ai
         assistant: DOCUMENT_SYNC
-        input: 根据当前项目代码和变更生成完整技术文档；如果已有文档，请保留有效内容并扩展变更部分。只输出完整 Markdown 文档。
+        input: >-
+          Generate complete technical documentation from the current project
+          code and changes. Preserve valid existing content and extend changed
+          sections. Return only the complete Markdown document.
         outputFile: documentation.md
         ifExists: extend
-  - id: '30.10'
+  - key: self-test-and-code-quality
     phase: Development
-    name: 自测和代码质量检查
-    description: DEV 自测（产出自我测试表）→ Sonar → 漏洞扫描 → CodeCheck
+    name: Self-Test and Code Quality
+    description: >-
+      DEV completes self-testing, Sonar analysis, vulnerability scanning, and
+      CodeCheck
     responsibleRoles:
       - DEV
     dependsOn:
-      - '30.9'
+      - environment-validation-and-documentation
     actions:
       - type: integration
         service: sonar
         operation: runScan
       - type: heinrich
         delta: 1
-  - id: '30.11'
+  - key: weekly-feature-demo
     phase: Development
-    name: 每周功能演示
-    description: SA 进行每周功能演示和代码质量检查
+    name: Weekly Feature Demo
+    description: SA runs the weekly feature demo and code quality review
     responsibleRoles:
       - SA
       - DEV
     dependsOn:
-      - '30.10'
+      - self-test-and-code-quality
     actions:
       - type: manual
-  - id: '40.1'
+  - key: smoke-demo-validation
     phase: Testing
-    name: 核验冒烟演示
-    description: DEV 向 QA 核验冒烟演示
+    name: Smoke Demo Validation
+    description: DEV validates the smoke demo with QA
     responsibleRoles:
       - DEV
       - QA
@@ -375,65 +438,67 @@ nodes:
     actions:
       - type: heinrich
         delta: 1
-  - id: '40.2'
+  - key: functional-and-performance-testing
     phase: Testing
-    name: 功能测试与性能测试
-    description: QA 进行功能测试和性能测试
+    name: Functional and Performance Testing
+    description: QA performs functional and performance testing
     responsibleRoles:
       - QA
     dependsOn:
-      - '40.1'
+      - smoke-demo-validation
     actions:
       - type: manual
-  - id: '40.3'
+  - key: uat-and-user-acceptance
     phase: Testing
-    name: UAT 用例与用户验收
-    description: QA 准备 UAT 用例，OP 进行 UAT
+    name: UAT and User Acceptance
+    description: QA prepares UAT cases and OP performs user acceptance testing
     responsibleRoles:
       - QA
       - OP
     dependsOn:
-      - '40.2'
+      - functional-and-performance-testing
     actions:
       - type: manual
-  - id: '40.4'
+  - key: release-plan-creation
     phase: Testing
-    name: 创建发布计划
-    description: OP 创建发布计划（至少提前 3 天）
+    name: Release Plan Creation
+    description: OP creates the release plan at least three days in advance
     responsibleRoles:
       - OP
     dependsOn:
-      - '40.3'
+      - uat-and-user-acceptance
     actions:
       - type: manual
-  - id: '50.1'
+  - key: environment-deployment
     phase: Deployment
-    name: Setup 部署
-    description: SA 进行环境部署（域名/CDN/WAF/SLB/ECS 等全套配置）
+    name: Environment Deployment
+    description: >-
+      SA deploys the complete domain, CDN, WAF, SLB, ECS, and related
+      environment configuration
     responsibleRoles:
       - SA
     dependsOn: []
     actions:
       - type: manual
-  - id: '50.2'
+  - key: branch-merge
     phase: Deployment
-    name: 分支合并
-    description: SA 合并分支
+    name: Branch Merge
+    description: SA merges the release branches
     responsibleRoles:
       - SA
       - DEV
     dependsOn:
-      - '50.1'
+      - environment-deployment
     actions:
       - type: integration
         service: git
         operation: mergeBranches
       - type: heinrich
         delta: 1
-  - id: '50.3'
+  - key: ai-checklist-recommendation
     phase: Deployment
-    name: AI Checklist 增量推荐和多方评审
-    description: AI 推荐增量 Checklist，SA/BA/DEV/PM/QA 多方评审
+    name: AI Checklist Recommendation
+    description: AI recommends checklist additions for review by SA, BA, DEV, PM, and QA
     responsibleRoles:
       - SA
       - BA
@@ -442,45 +507,47 @@ nodes:
       - QA
       - AI
     dependsOn:
-      - '50.2'
+      - branch-merge
     actions:
       - type: ai
         assistant: CHECKLIST_RECOMMENDATION
-  - id: '50.4'
+  - key: sonar-and-code-review
     phase: Deployment
-    name: Sonar 检查和 Code Review
-    description: SA 运行 Sonar，DEV 进行 Code Review
+    name: Sonar and Code Review
+    description: SA runs Sonar and DEV performs code review
     responsibleRoles:
       - SA
       - DEV
     dependsOn:
-      - '50.3'
+      - ai-checklist-recommendation
     actions:
       - type: integration
         service: sonar
         operation: runScan
       - type: heinrich
         delta: 1
-  - id: '50.5'
+  - key: ai-code-review
     phase: Deployment
-    name: AI 智能 Code Review
-    description: AI 生成 UML 时序图/CFG，进行变更风险评分
+    name: AI Code Review
+    description: >-
+      AI generates UML sequence diagrams and control-flow graphs, then scores
+      change risk
     responsibleRoles:
       - AI
     dependsOn:
-      - '50.4'
+      - sonar-and-code-review
     actions:
       - type: ai
         assistant: CODE_REVIEW
-  - id: '50.6'
+  - key: postman-and-test-script-generation
     phase: Deployment
-    name: Postman 运行与 AI 测试脚本
-    description: SA 运行 Postman，AI 生成自动化测试脚本
+    name: Postman and Test Script Generation
+    description: SA runs Postman and AI generates automated test scripts
     responsibleRoles:
       - SA
       - AI
     dependsOn:
-      - '50.5'
+      - ai-code-review
     actions:
       - type: integration
         service: postman
@@ -489,86 +556,92 @@ nodes:
         assistant: TEST_SCRIPT_GENERATION
       - type: heinrich
         delta: 1
-  - id: '50.7'
+  - key: sql-execution-and-risk-check
     phase: Deployment
-    name: SQL 执行与 AI 风险检测
-    description: SA/DEV 执行 SQL，AI 进行 SQL 风险检测（缺索引/锁表/不可回滚）
+    name: SQL Execution and Risk Check
+    description: >-
+      SA and DEV execute SQL while AI detects missing indexes, table locks, and
+      non-reversible changes
     responsibleRoles:
       - SA
       - DEV
       - AI
     dependsOn:
-      - '50.6'
+      - postman-and-test-script-generation
     actions:
       - type: ai
         assistant: SQL_RISK_CHECK
       - type: heinrich
         delta: 1
-  - id: '50.8'
+  - key: magento-release-risk-assessment
     phase: Deployment
-    name: Magento 发布与 AI 风险评估
-    description: SA 执行发布，AI 进行发布风险预评估
+    name: Magento Release Risk Assessment
+    description: SA performs the release and AI assesses release risk in advance
     responsibleRoles:
       - SA
       - AI
     dependsOn:
-      - '50.7'
+      - sql-execution-and-risk-check
     actions:
       - type: ai
         assistant: RELEASE_RISK_ASSESSMENT
-  - id: '50.9'
+  - key: regression-testing
     phase: Deployment
-    name: 回归测试
-    description: QA 进行回归测试
+    name: Regression Testing
+    description: QA performs regression testing
     responsibleRoles:
       - QA
     dependsOn:
-      - '50.8'
+      - magento-release-risk-assessment
     actions:
       - type: manual
-  - id: '50.10'
+  - key: ab-validation-and-branch-merge
     phase: Deployment
-    name: AB 有效性验证和分支合并
-    description: PM 验证 AB Test 有效性，合并 Prod 分支到 Dev
+    name: AB Validation and Branch Merge
+    description: >-
+      PM validates the AB test and merges the production branch back into
+      development
     responsibleRoles:
       - PM
     dependsOn:
-      - '50.9'
+      - regression-testing
     actions:
       - type: manual
-  - id: '60.1'
+  - key: ai-technical-debt-quantification
     phase: Maintenance
-    name: AI 技术债务量化
-    description: AI 量化技术债务（代码复杂度/重复率/依赖老化评分，生成还债优先级列表）
+    name: AI Technical Debt Quantification
+    description: >-
+      AI scores code complexity, duplication, and dependency age to prioritize
+      technical debt
     responsibleRoles:
       - AI
     dependsOn: []
     actions:
       - type: ai
         assistant: TECH_DEBT_QUANTIFICATION
-  - id: '60.2'
+  - key: service-monitoring
     phase: Maintenance
-    name: 监控服务
-    description: DEV 监控服务（1d/1w/1y）
+    name: Service Monitoring
+    description: DEV monitors the service across daily, weekly, and yearly windows
     responsibleRoles:
       - DEV
     dependsOn:
-      - '60.1'
+      - ai-technical-debt-quantification
     actions:
       - type: integration
         service: monitoring
         operation: registerAlert
-  - id: 10.doc
+  - key: generate-documentation
     phase: RequirementsAnalysis
-    name: AI 生成文档
-    description: ''
+    name: Generate Documentation
+    description: Generate or extend complete technical documentation from the project source code
     responsibleRoles:
       - AI
     dependsOn:
-      - '10.1'
+      - requirements-analysis-and-brd-design
     actions:
       - type: ai
         assistant: DOCUMENT_SYNC
-        input: 根据项目代码生成完整技术文档
+        input: Generate complete technical documentation from the project source code. Preserve valid existing content and extend changed sections.
         outputFile: documentation.md
         ifExists: extend

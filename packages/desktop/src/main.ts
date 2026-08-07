@@ -8,11 +8,7 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import { join, dirname, basename } from "node:path"
 import { fileURLToPath } from "node:url"
-<<<<<<< HEAD
-import { app, BrowserWindow, ipcMain, shell, Notification } from "electron"
-=======
-import { app, BrowserWindow, dialog, ipcMain } from "electron"
->>>>>>> 8ba2f013f71b55a7531bf6e5cdb68be78a910ba2
+import { app, BrowserWindow, dialog, ipcMain, shell, Notification } from "electron"
 import { loadConfig } from "@octopus/context/config.js"
 import { getWorkflowWorkspace } from "@octopus/context/workflow.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
@@ -41,10 +37,9 @@ function registerIpc(): void {
   })
 
   ipcMain.handle("octopus:status", (_e, projectId: string) => engine.getProjectStatus(projectId))
-<<<<<<< HEAD
   ipcMain.handle("octopus:snapshot", (_e, projectId: string) => engine.getExecutionSnapshot(projectId))
   ipcMain.handle("octopus:state", (_e, projectId: string) => engine.getState(projectId))
-  ipcMain.handle("octopus:runNode", (_e, projectId: string, nodeId: string, force?: boolean) => engine.runNode(projectId, nodeId, force === undefined ? {} : { force }))
+  ipcMain.handle("octopus:runNode", (_e, projectId: string, nodeId: string, force?: boolean) => engine.execution.runNode(projectId, nodeId, force === undefined ? {} : { force }))
   ipcMain.handle("octopus:runWorkflow", (_e, projectId: string, force?: boolean, maxParallel?: number) => engine.runWorkflow(projectId, {
     ...(force === undefined ? {} : { force }),
     ...(maxParallel === undefined ? {} : { maxParallel }),
@@ -58,9 +53,9 @@ function registerIpc(): void {
   ipcMain.handle("octopus:openNodeDirectory", async (_e, projectId: string, nodeId: string) => {
     const state = engine.getState(projectId)
     if (!state.projectRoot) throw new Error("项目没有源码根目录")
-    const path = getWorkflowWorkspace(state.projectRoot).nodePath(nodeId)
+    const path = getWorkflowWorkspace(state.projectRoot).nodePath(engine.resolveNodeKey(projectId, nodeId))
     return shell.openPath(path)
-=======
+  })
 
   ipcMain.handle("octopus:exportTasks", async (_e, projectId: string) => {
     const document = engine.exportTasks(projectId)
@@ -111,7 +106,6 @@ function registerIpc(): void {
       inputPath,
       ...engine.importTasks(projectId, document),
     }
->>>>>>> 8ba2f013f71b55a7531bf6e5cdb68be78a910ba2
   })
 }
 

@@ -2,9 +2,10 @@
  * 项目工作流文件与节点工作目录管理。
  *
  * workflow.yaml 是项目级可版本化配置；运行时目录固定为 workflow/shared
- * 与 workflow/nodes/<nodeId>，避免每个调用方重复推导路径。
+ * 与 workflow/nodes/<nodeKey>，避免每个调用方重复推导路径。
  */
 
+import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { dump, load } from "js-yaml"
@@ -16,6 +17,60 @@ import { Role } from "@octopus/core/role.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
 
 const WORKFLOW_FILE = "workflow.yaml"
+const NODE_KEY_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
+const ENGLISH_NODE_TEXT_PATTERN = /^[\x20-\x7E]+$/
+
+/** 内置步骤 ID 到英文节点键的唯一映射。 */
+const BUILT_IN_NODE_KEY_BY_ID: Readonly<Record<string, string>> = {
+  "10.1": "requirements-analysis-and-brd-design",
+  "10.2": "brd-walkthrough",
+  "10.3": "requirements-research",
+  "10.4": "prd-design-and-boundary-analysis",
+  "10.5": "prd-walkthrough",
+  "10.6": "ai-meeting-minutes",
+  "10.7": "prd-review-and-feature-breakdown",
+  "10.8": "prd-effort-estimation",
+  "10.9": "ai-requirements-analysis",
+  "10.10": "ai-effort-summary",
+  "10.11": "effort-estimate-sync",
+  "10.12": "developer-effort-confirmation",
+  "20.1": "requirements-scheduling",
+  "20.2": "kickoff-review",
+  "20.2a": "ai-kickoff-summary",
+  "20.3": "requirements-walkthrough",
+  "20.4": "developer-prd-recap",
+  "20.5": "teambition-task-breakdown",
+  "20.6": "impact-scope-assessment",
+  "20.7": "frontend-backend-alignment",
+  "20.8": "technical-design-authoring",
+  "30.1": "technical-design-consolidation",
+  "30.2": "ai-setup-checklist-validation",
+  "30.3": "technical-design-review-chain",
+  "30.4": "ai-technical-design-review",
+  "30.5": "test-case-design-and-review",
+  "30.6": "data-and-api-design",
+  "30.7": "feature-development",
+  "30.8": "checklist-update-and-integration",
+  "30.9": "environment-validation-and-documentation",
+  "30.10": "self-test-and-code-quality",
+  "30.11": "weekly-feature-demo",
+  "40.1": "smoke-demo-validation",
+  "40.2": "functional-and-performance-testing",
+  "40.3": "uat-and-user-acceptance",
+  "40.4": "release-plan-creation",
+  "50.1": "environment-deployment",
+  "50.2": "branch-merge",
+  "50.3": "ai-checklist-recommendation",
+  "50.4": "sonar-and-code-review",
+  "50.5": "ai-code-review",
+  "50.6": "postman-and-test-script-generation",
+  "50.7": "sql-execution-and-risk-check",
+  "50.8": "magento-release-risk-assessment",
+  "50.9": "regression-testing",
+  "50.10": "ab-validation-and-branch-merge",
+  "60.1": "ai-technical-debt-quantification",
+  "60.2": "service-monitoring",
+}
 
 const actionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("manual"), instructions: z.string().optional() }),
@@ -43,36 +98,37 @@ const actionSchema = z.discriminatedUnion("type", [
 ])
 
 const nodeSchema = z.object({
-  id: z.string().min(1),
+  key: z.string().regex(NODE_KEY_PATTERN, "节点 key 必须是英文 kebab-case"),
   phase: z.nativeEnum(Phase),
-  name: z.string().min(1),
-  description: z.string().default(""),
+  name: z.string().min(1).regex(ENGLISH_NODE_TEXT_PATTERN, "节点 name 必须使用英文"),
+  description: z.string().default("").refine(
+    (value) => value.length === 0 || ENGLISH_NODE_TEXT_PATTERN.test(value),
+    "节点 description 必须使用英文",
+  ),
   responsibleRoles: z.array(z.nativeEnum(Role)).min(1),
   dependsOn: z.array(z.string()).default([]),
   actions: z.array(actionSchema).default([]),
-})
+}).strict()
 
 const definitionSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   name: z.string().min(1),
+  nodeIdMapping: z.record(z.string().min(1)),
   nodes: z.array(nodeSchema).min(1),
-})
+}).strict()
 
 export interface WorkflowWorkspace {
   readonly projectRoot: string
   readonly workflowFile: string
   readonly sharedPath: string
   readonly nodesPath: string
-  nodePath(nodeId: string): string
+  nodePath(nodeKey: string): string
 }
 
-/** 将节点 id 转换为稳定且不会越界的目录名。 */
-export function nodeDirectoryName(nodeId: string): string {
-  const normalized = nodeId.trim().replaceAll(/[^a-zA-Z0-9._-]/g, "_")
-  if (!normalized || normalized === "." || normalized === "..") {
-    throw new Error(`节点 ID 无法生成目录名: ${nodeId}`)
-  }
-  return normalized
+/** 校验并返回可直接作为目录名的英文节点键。 */
+export function nodeDirectoryName(nodeKey: string): string {
+  if (!NODE_KEY_PATTERN.test(nodeKey)) throw new Error(`节点 key 必须是英文 kebab-case: ${nodeKey}`)
+  return nodeKey
 }
 
 /** 获取项目工作目录布局。 */
@@ -84,23 +140,30 @@ export function getWorkflowWorkspace(projectRoot: string): WorkflowWorkspace {
     workflowFile: join(root, WORKFLOW_FILE),
     sharedPath: join(root, "workflow", "shared"),
     nodesPath,
-    nodePath: (nodeId: string) => join(nodesPath, nodeDirectoryName(nodeId)),
+    nodePath: (nodeKey: string) => join(nodesPath, nodeDirectoryName(nodeKey)),
   }
 }
 
 /** 将现有内置规格转换为可执行工作流。 */
 export function definitionFromBuiltInSpec(): WorkflowDefinition {
   const spec = getWorkflowSpec()
+  const steps = spec.phases.flatMap((phase) => phase.steps.map((step) => ({ phase, step })))
+  const keyForId = (id: string): string => {
+    const key = BUILT_IN_NODE_KEY_BY_ID[id]
+    if (!key) throw new Error(`内置节点缺少英文 key 映射: ${id}`)
+    return key
+  }
   return {
-    version: 1,
+    version: 2,
     name: "Octopus Software Delivery",
-    nodes: spec.phases.flatMap((phase) => phase.steps.map((step): WorkflowNodeSpec => ({
-      id: step.id,
+    nodeIdMapping: Object.fromEntries(steps.map(({ step }) => [keyForId(step.id), step.id])),
+    nodes: steps.map(({ phase, step }): WorkflowNodeSpec => ({
+      key: keyForId(step.id),
       phase: phase.phase,
       name: step.name,
       description: step.description,
       responsibleRoles: step.responsibleRoles,
-      dependsOn: step.dependsOn,
+      dependsOn: step.dependsOn.map(keyForId),
       actions: step.capabilities?.map((capability): NodeAction => {
         if (capability.kind === "ai") {
           return {
@@ -118,7 +181,7 @@ export function definitionFromBuiltInSpec(): WorkflowDefinition {
           ? { type: "heinrich", delta: capability.delta }
           : { type: "heinrich", delta: capability.delta, level: capability.level }
       }) ?? [{ type: "manual" }],
-    }))),
+    })),
   }
 }
 
@@ -144,14 +207,23 @@ export function validateWorkflowDefinition(value: unknown): WorkflowDefinition {
     throw new Error(`workflow.yaml 校验失败: ${result.error.issues.map((issue) => issue.message).join("; ")}`)
   }
   const definition = result.data as unknown as WorkflowDefinition
-  const ids = new Set<string>()
+  const keys = new Set<string>()
   for (const node of definition.nodes) {
-    if (ids.has(node.id)) throw new Error(`工作流节点 ID 重复: ${node.id}`)
-    ids.add(node.id)
+    if (keys.has(node.key)) throw new Error(`工作流节点 key 重复: ${node.key}`)
+    keys.add(node.key)
+  }
+  const mappingKeys = Object.keys(definition.nodeIdMapping)
+  const mappedIds = Object.values(definition.nodeIdMapping)
+  if (new Set(mappedIds).size !== mappedIds.length) throw new Error("nodeIdMapping 包含重复内部 ID")
+  for (const key of keys) {
+    if (!definition.nodeIdMapping[key]) throw new Error(`节点 ${key} 缺少内部 ID 映射`)
+  }
+  for (const key of mappingKeys) {
+    if (!keys.has(key)) throw new Error(`nodeIdMapping 包含未知节点: ${key}`)
   }
   for (const node of definition.nodes) {
     for (const dependency of node.dependsOn) {
-      if (!ids.has(dependency)) throw new Error(`节点 ${node.id} 依赖不存在: ${dependency}`)
+      if (!keys.has(dependency)) throw new Error(`节点 ${node.key} 依赖不存在: ${dependency}`)
     }
   }
   assertAcyclic(definition.nodes)
@@ -175,21 +247,37 @@ export function saveWorkflowDefinition(
 export function appendWorkflowNode(
   projectRoot: string,
   node: WorkflowNodeSpec,
-): WorkflowWorkspace {
+): { readonly definition: WorkflowDefinition; readonly nodeId: string; readonly workspace: WorkflowWorkspace } {
   const definition = loadWorkflowDefinition(projectRoot)
+  const nodeId = `node-${randomUUID()}`
   const next: WorkflowDefinition = {
     ...definition,
+    nodeIdMapping: { ...definition.nodeIdMapping, [node.key]: nodeId },
     nodes: [...definition.nodes, node],
   }
   saveWorkflowDefinition(projectRoot, next)
-  return syncWorkflowWorkspace(projectRoot, next)
+  return { definition: next, nodeId, workspace: syncWorkflowWorkspace(projectRoot, next) }
+}
+
+/** 使用英文节点键解析内部运行态 ID。 */
+export function resolveWorkflowNodeId(definition: WorkflowDefinition, nodeKey: string): string {
+  const nodeId = definition.nodeIdMapping[nodeKey]
+  if (!nodeId) throw new Error(`节点不存在: ${nodeKey}`)
+  return nodeId
+}
+
+/** 使用内部运行态 ID 反查英文节点键。 */
+export function resolveWorkflowNodeKey(definition: WorkflowDefinition, nodeId: string): string {
+  const entry = Object.entries(definition.nodeIdMapping).find(([, mappedId]) => mappedId === nodeId)
+  if (!entry) throw new Error(`内部节点 ID 未映射: ${nodeId}`)
+  return entry[0]
 }
 
 /** 创建缺失的公共目录和节点目录，并返回实际布局。 */
 export function syncWorkflowWorkspace(projectRoot: string, definition = loadWorkflowDefinition(projectRoot)): WorkflowWorkspace {
   const workspace = getWorkflowWorkspace(projectRoot)
   mkdirSync(workspace.sharedPath, { recursive: true })
-  for (const node of definition.nodes) mkdirSync(workspace.nodePath(node.id), { recursive: true })
+  for (const node of definition.nodes) mkdirSync(workspace.nodePath(node.key), { recursive: true })
   return workspace
 }
 
@@ -204,18 +292,18 @@ export function initializeWorkflowFile(projectRoot: string): WorkflowWorkspace {
 }
 
 function assertAcyclic(nodes: readonly WorkflowNodeSpec[]): void {
-  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const byKey = new Map(nodes.map((node) => [node.key, node]))
   const visiting = new Set<string>()
   const visited = new Set<string>()
   const visit = (id: string): void => {
     if (visiting.has(id)) throw new Error(`工作流依赖存在环: ${id}`)
     if (visited.has(id)) return
     visiting.add(id)
-    const node = byId.get(id)
+    const node = byKey.get(id)
     if (!node) throw new Error(`依赖节点不存在: ${id}`)
     for (const dependency of node.dependsOn) visit(dependency)
     visiting.delete(id)
     visited.add(id)
   }
-  for (const node of nodes) visit(node.id)
+  for (const node of nodes) visit(node.key)
 }

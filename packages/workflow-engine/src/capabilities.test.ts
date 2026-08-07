@@ -92,7 +92,7 @@ describe("runStepCapabilities 显式输入", () => {
     expect(after.artifacts.some((a) => a.content === "MOCK 显式输入")).toBe(true)
   })
 
-  it("不传输入时回退为步骤名称与描述（旧调用兼容）", async () => {
+  it("不传输入时使用英文步骤名称与描述", async () => {
     const { client, inputs } = fakeAIClient("ok")
     const engine = new WorkflowEngine({
       store: createStateStore({ storeDir: TEST_STORE_DIR }),
@@ -101,7 +101,7 @@ describe("runStepCapabilities 显式输入", () => {
     const state = engine.initProject("cap_fallback")
     await engine.runStepCapabilities(state.projectId, "10.6")
 
-    expect(inputs).toEqual(["AI 会议纪要：AI 通过通义听悟/chatGPT录音生成会议纪要"])
+    expect(inputs).toEqual(["AI Meeting Minutes：AI generates meeting minutes from the recorded discussion"])
   })
 
   it("Integration 能力不消费显式输入，Heinrich 行为不变", async () => {
