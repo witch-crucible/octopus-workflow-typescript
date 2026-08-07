@@ -11,6 +11,7 @@ import type { TaskId, ArtifactId } from "./branded-ids.js"
 import type { Role } from "./role.js"
 import type { Phase } from "./phase.js"
 import type { CapabilityRef } from "./spec.js"
+import type { NodeAction } from "./execution.js"
 import { TaskStatus } from "./task.js"
 
 /** 步骤状态 —— 复用 TaskStatus 值域（PENDING/IN_PROGRESS/COMPLETED/BLOCKED/SKIPPED） */
@@ -36,6 +37,8 @@ export interface StepRuntime {
   dependsOn: string[]
   /** 声明式能力（来自 spec，Phase 3 由 CapabilityRegistry 分发） */
   capabilities?: readonly CapabilityRef[]
+  /** 可执行动作序列；旧 capability 会在生成运行态时转换为动作。 */
+  actions?: readonly NodeAction[]
   /** 关联制品 ID 列表 */
   artifactIds: ArtifactId[]
   /** 实际负责人（可选） */

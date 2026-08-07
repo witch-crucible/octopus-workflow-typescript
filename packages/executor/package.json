@@ -1,5 +1,5 @@
 {
-  "name": "@octopus/workflow-engine",
+  "name": "@octopus/executor",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,12 +10,9 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@octopus/core": "workspace:*",
-    "@octopus/task-library": "workspace:*",
-    "@octopus/context": "workspace:*",
     "@octopus/agent-layer": "workspace:*",
-    "@octopus/integration": "workspace:*",
-    "@octopus/executor": "workspace:*"
+    "@octopus/context": "workspace:*",
+    "@octopus/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.2.0",

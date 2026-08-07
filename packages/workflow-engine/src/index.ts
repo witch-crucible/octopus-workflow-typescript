@@ -30,15 +30,19 @@ import type { StepRuntime } from "@octopus/core/step.js"
 import { createEmptyChecklist } from "@octopus/core/checklist.js"
 import type { StateStore } from "@octopus/context/index.js"
 import { createStateStore } from "@octopus/context/index.js"
+import { initializeWorkflowFile, loadWorkflowDefinition } from "@octopus/context/workflow.js"
 import type { OctopusConfig } from "@octopus/context/config.js"
 import { toAIClientConfig } from "@octopus/context/config.js"
-import { createStepsForPhase } from "@octopus/task-library/index.js"
+import { createStepsForPhase, createStepsFromDefinition } from "@octopus/task-library/index.js"
 import type { AIClient } from "@octopus/agent-layer/index.js"
 import { createAIClient } from "@octopus/agent-layer/index.js"
 import type { AIEventHandler, AIEventPayload, AIGateResult } from "@octopus/core/agent.js"
 import type { IntegrationService } from "@octopus/integration/index.js"
 import { CapabilityRegistry } from "./capabilities.js"
 import type { CapabilityContext } from "./capabilities.js"
+import { NodeExecutionService } from "./execution.js"
+import type { IntegrationHealth, NodeRun, WorkflowExecutionSnapshot } from "@octopus/core/execution.js"
+import type { RunNodeOptions, RunWorkflowOptions } from "./execution.js"
 
 /** 门控检查结果 */
 export interface GateCheckResult {
@@ -71,6 +75,7 @@ export class WorkflowEngine {
   private readonly heinrichThreshold: number
   private readonly registry: CapabilityRegistry
   private readonly integrations: Record<string, IntegrationService>
+  private readonly nodeExecution: NodeExecutionService
   private aiHandlers: Array<(event: {
     type: "onPhaseAdvance" | "onPhaseRollback"
     from: Phase
@@ -86,6 +91,62 @@ export class WorkflowEngine {
     this.heinrichThreshold = config.heinrichThreshold ?? 3
     this.registry = new CapabilityRegistry()
     this.integrations = config.integrations ?? {}
+    this.nodeExecution = new NodeExecutionService(this.store)
+  }
+
+  /** 节点运行与监控服务。 */
+  get execution(): NodeExecutionService {
+    return this.nodeExecution
+  }
+
+  /** 获取当前节点、READY 节点和活动运行摘要。 */
+  getExecutionSnapshot(projectId: string): WorkflowExecutionSnapshot {
+    return this.nodeExecution.getSnapshot(projectId)
+  }
+
+  /** 独立运行一个节点。 */
+  runNode(projectId: string, nodeId: string, options?: RunNodeOptions): NodeRun {
+    return this.nodeExecution.runNode(projectId, nodeId, options)
+  }
+
+  /** 自动并行运行所有 READY 节点。 */
+  runWorkflow(projectId: string, options?: RunWorkflowOptions): Promise<WorkflowExecutionSnapshot> {
+    return this.nodeExecution.runWorkflow(projectId, options)
+  }
+
+  /** 检查已注入的集成并持久化健康度。 */
+  async checkIntegrationHealth(): Promise<IntegrationHealth[]> {
+    const results: IntegrationHealth[] = []
+    for (const [serviceName, service] of Object.entries(this.integrations)) {
+      const startedAt = Date.now()
+      try {
+        const result = await service.healthCheck()
+        const health: IntegrationHealth = {
+          service: serviceName,
+          healthy: result.success,
+          latencyMs: Date.now() - startedAt,
+          message: result.message,
+          checkedAt: new Date().toISOString(),
+        }
+        this.nodeExecution.saveIntegrationHealth(health)
+        results.push(health)
+      } catch (cause) {
+        const health: IntegrationHealth = {
+          service: serviceName,
+          healthy: false,
+          latencyMs: Date.now() - startedAt,
+          message: (cause as Error).message,
+          checkedAt: new Date().toISOString(),
+        }
+        this.nodeExecution.saveIntegrationHealth(health)
+        results.push(health)
+      }
+    }
+    return results
+  }
+
+  getIntegrationHealth(): IntegrationHealth[] {
+    return this.nodeExecution.listIntegrationHealth()
   }
 
   /** 暴露 capability 注册表以便注册自定义处理器 */
@@ -139,11 +200,16 @@ export class WorkflowEngine {
   // ── 项目生命周期 ──
 
   /** 初始化新项目 */
-  initProject(name: string, description?: string): WorkflowState {
-    const state = this.store.createProject(name, description)
+  initProject(name: string, description?: string, projectRoot?: string): WorkflowState {
+    const definition = projectRoot
+      ? (initializeWorkflowFile(projectRoot), loadWorkflowDefinition(projectRoot))
+      : undefined
+    const state = this.store.createProject(name, description, projectRoot)
 
     // 为当前阶段生成步骤（唯一真相源：tasks 与 stages 已统一为 steps）
-    state.steps = createStepsForPhase(state.projectId, state.currentPhase)
+    state.steps = definition
+      ? createStepsFromDefinition(state.projectId, definition, state.currentPhase)
+      : createStepsForPhase(state.projectId, state.currentPhase)
     state.checklists[state.currentPhase] = createEmptyChecklist(state.currentPhase)
     state.heinrich = createEmptyHeinrichRecord()
 
@@ -385,7 +451,11 @@ export class WorkflowEngine {
 
     // 生成下一阶段的步骤（唯一真相源）
     const existingIds = new Set(state.steps.map((s) => s.id))
-    for (const step of createStepsForPhase(state.projectId, next)) {
+    const definition = state.projectRoot ? loadWorkflowDefinition(state.projectRoot) : undefined
+    const nextSteps = definition
+      ? createStepsFromDefinition(state.projectId, definition, next)
+      : createStepsForPhase(state.projectId, next)
+    for (const step of nextSteps) {
       if (!existingIds.has(step.id)) {
         state.steps.push(step)
       }

@@ -92,6 +92,9 @@ function mergeConfigs(...configs: Partial<OctopusConfig>[]): OctopusConfig {
     if (config.ai) {
       result = { ...result, ai: { ...result.ai, ...config.ai } }
     }
+    if (config.workflow) {
+      result = { ...result, workflow: { ...result.workflow, ...config.workflow } }
+    }
   }
 
   return result

@@ -11,6 +11,7 @@
     { "path": "../task-library" },
     { "path": "../context" },
     { "path": "../agent-layer" },
-    { "path": "../integration" }
+    { "path": "../integration" },
+    { "path": "../executor" }
   ]
 }

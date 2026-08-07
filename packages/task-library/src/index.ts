@@ -5,7 +5,9 @@
  */
 
 import type { StepSpec } from "@octopus/core/spec.js"
+import type { CapabilityRef } from "@octopus/core/spec.js"
 import { getSteps } from "@octopus/core/spec.js"
+import type { WorkflowDefinition, WorkflowNodeSpec, NodeAction } from "@octopus/core/execution.js"
 import type { StepRuntime } from "@octopus/core/step.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { TaskId } from "@octopus/core/branded-ids.js"
@@ -26,10 +28,47 @@ export function createStepFromSpec(phase: Phase, step: StepSpec): StepRuntime {
     status: TaskStatus.PENDING,
     dependsOn: [...step.dependsOn],
     ...(step.capabilities ? { capabilities: step.capabilities } : {}),
+    actions: step.capabilities?.map(capabilityToAction) ?? [{ type: "manual" }],
     artifactIds: [],
     createdAt: now,
     updatedAt: now,
   }
+}
+
+/** 从 workflow.yaml 节点创建运行态步骤。 */
+export function createStepFromNode(projectId: string, node: WorkflowNodeSpec): StepRuntime {
+  const now = new Date().toISOString()
+  const random = Math.random().toString(36).slice(2, 8)
+  return {
+    id: node.id,
+    taskId: TaskId(`${node.id}_${Date.now()}_${random}`),
+    phase: node.phase,
+    name: node.name,
+    description: node.description,
+    responsibleRole: node.responsibleRoles[0] ?? Role.AI,
+    status: TaskStatus.PENDING,
+    dependsOn: [...node.dependsOn],
+    actions: node.actions,
+    artifactIds: [],
+    createdAt: now,
+    updatedAt: now,
+    notes: `workspace=${projectId}`,
+  }
+}
+
+/** 从项目工作流定义生成指定阶段的步骤。 */
+export function createStepsFromDefinition(projectId: string, definition: WorkflowDefinition, phase: Phase): StepRuntime[] {
+  return definition.nodes.filter((node) => node.phase === phase).map((node) => createStepFromNode(projectId, node))
+}
+
+function capabilityToAction(capability: CapabilityRef): NodeAction {
+  if (capability.kind === "ai") return { type: "ai", assistant: capability.assistant }
+  if (capability.kind === "integration") {
+    return { type: "integration", service: capability.service, operation: capability.op }
+  }
+  return capability.level === undefined
+    ? { type: "heinrich", delta: capability.delta }
+    : { type: "heinrich", delta: capability.delta, level: capability.level }
 }
 
 /** 为一个阶段生成所有步骤 */

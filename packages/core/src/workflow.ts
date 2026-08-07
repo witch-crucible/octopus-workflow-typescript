@@ -3,7 +3,7 @@
  *
  * 单一真相源为 `steps`（StepRuntime[]）：取代原先并行的 tasks[] + stages{}。
  * `Task` / `StageInfo` 通过 stepToTask / stepToStageInfo 派生，供前端零改动复用。
- * 通过 StateStore 持久化为 JSON 文件。
+ * 通过 StateStore 持久化为事务化 SQLite 聚合。
  */
 
 import type { ProjectId, TaskId } from "./branded-ids.js"
@@ -17,8 +17,8 @@ import { createEmptyHeinrichRecord } from "./risk.js"
 import type { Artifact, ArtifactType } from "./artifact.js"
 import { Role } from "./role.js"
 
-/** 当前状态结构版本（v2 = 统一 steps 模型） */
-export const CURRENT_SCHEMA_VERSION = 2
+/** 当前状态结构版本（v3 = 节点工作区与声明式动作） */
+export const CURRENT_SCHEMA_VERSION = 3
 
 /** 工作流运行时状态 */
 export interface WorkflowState {
@@ -30,6 +30,8 @@ export interface WorkflowState {
   projectName: string
   /** 项目描述 */
   description: string
+  /** 项目源码根目录（节点执行器用于解析 workflow/ 目录） */
+  projectRoot?: string
   /** 创建时间（ISO 8601） */
   createdAt: string
   /** 最后更新时间（ISO 8601） */
@@ -122,6 +124,7 @@ export function createEmptyState(
   projectId: ProjectId,
   projectName: string,
   description: string,
+  projectRoot?: string,
 ): WorkflowState {
   const now = new Date().toISOString()
   const phaseStatus = {} as Record<Phase, PhaseLock>
@@ -139,6 +142,7 @@ export function createEmptyState(
     projectId,
     projectName,
     description,
+    ...(projectRoot !== undefined ? { projectRoot } : {}),
     createdAt: now,
     updatedAt: now,
     currentPhase: Phase.REQUIREMENTS_ANALYSIS,
@@ -183,7 +187,7 @@ interface LegacyStageLike {
 
 /**
  * 迁移任意持久化状态到当前结构。
- * v2+ 原样返回；v1（tasks[]+stages{}）按 stageId 归并为 steps[]。
+ * v2+ 保留 steps 并补齐版本号；v1（tasks[]+stages{}）按 stageId 归并为 steps[]。
  */
 export function migrateWorkflowState(raw: unknown): WorkflowState {
   const state = raw as WorkflowState & {
@@ -191,8 +195,8 @@ export function migrateWorkflowState(raw: unknown): WorkflowState {
     stages?: Record<string, LegacyStageLike>
   }
 
-  if ((state.schemaVersion ?? 1) >= CURRENT_SCHEMA_VERSION && Array.isArray(state.steps)) {
-    return state
+  if ((state.schemaVersion ?? 1) >= 2 && Array.isArray(state.steps)) {
+    return { ...state, schemaVersion: CURRENT_SCHEMA_VERSION }
   }
 
   const legacyTasks = state.tasks ?? []

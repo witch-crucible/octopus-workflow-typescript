@@ -3,6 +3,7 @@
  */
 
 import type { Command } from "commander"
+import { resolve } from "node:path"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 
 export function buildInitCommand(program: Command, engine: WorkflowEngine): void {
@@ -11,10 +12,12 @@ export function buildInitCommand(program: Command, engine: WorkflowEngine): void
     .description("创建新项目")
     .argument("<projectName>", "项目名称")
     .option("-d, --description <desc>", "项目描述")
+    .option("--root <path>", "项目源码根目录（默认当前目录）")
     .option("--json", "以 JSON 格式输出")
-    .action((projectName: string, options: { description?: string; json?: boolean }) => {
+    .action((projectName: string, options: { description?: string; root?: string; json?: boolean }) => {
       try {
-        const state = engine.initProject(projectName, options.description)
+        const projectRoot = resolve(options.root ?? process.cwd())
+        const state = engine.initProject(projectName, options.description, projectRoot)
         if (options.json) {
           console.log(JSON.stringify({
             projectId: state.projectId,
@@ -22,6 +25,7 @@ export function buildInitCommand(program: Command, engine: WorkflowEngine): void
             description: state.description,
             currentPhase: state.currentPhase,
             taskCount: state.steps.length,
+            projectRoot,
             createdAt: state.createdAt,
           }, null, 2))
           return

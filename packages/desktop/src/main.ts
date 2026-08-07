@@ -7,8 +7,9 @@
 
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { app, BrowserWindow, ipcMain } from "electron"
+import { app, BrowserWindow, ipcMain, shell, Notification } from "electron"
 import { loadConfig } from "@octopus/context/config.js"
+import { getWorkflowWorkspace } from "@octopus/context/workflow.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 
@@ -24,8 +25,8 @@ function listProjects(): string[] {
 function registerIpc(): void {
   ipcMain.handle("octopus:listProjects", () => listProjects())
 
-  ipcMain.handle("octopus:init", (_e, name: string, description?: string) => {
-    const state = engine.initProject(name, description)
+  ipcMain.handle("octopus:init", (_e, name: string, description?: string, projectRoot?: string) => {
+    const state = engine.initProject(name, description, projectRoot ?? app.getPath("documents"))
     return {
       projectId: state.projectId,
       projectName: state.projectName,
@@ -35,6 +36,25 @@ function registerIpc(): void {
   })
 
   ipcMain.handle("octopus:status", (_e, projectId: string) => engine.getProjectStatus(projectId))
+  ipcMain.handle("octopus:snapshot", (_e, projectId: string) => engine.getExecutionSnapshot(projectId))
+  ipcMain.handle("octopus:state", (_e, projectId: string) => engine.getState(projectId))
+  ipcMain.handle("octopus:runNode", (_e, projectId: string, nodeId: string, force?: boolean) => engine.runNode(projectId, nodeId, force === undefined ? {} : { force }))
+  ipcMain.handle("octopus:runWorkflow", (_e, projectId: string, force?: boolean, maxParallel?: number) => engine.runWorkflow(projectId, {
+    ...(force === undefined ? {} : { force }),
+    ...(maxParallel === undefined ? {} : { maxParallel }),
+  }))
+  ipcMain.handle("octopus:completeNode", (_e, projectId: string, nodeId: string, force?: boolean) => engine.execution.completeManualNode(projectId, nodeId, force === true))
+  ipcMain.handle("octopus:cancelRun", (_e, projectId: string, runId: string) => engine.execution.cancelRun(projectId, runId))
+  ipcMain.handle("octopus:retryRun", (_e, projectId: string, runId: string, force?: boolean) => engine.execution.retryRun(projectId, runId, force === undefined ? {} : { force }))
+  ipcMain.handle("octopus:runs", (_e, projectId: string, nodeId?: string) => engine.execution.listRuns(projectId, nodeId))
+  ipcMain.handle("octopus:events", (_e, projectId: string, sequence?: number) => engine.execution.eventsAfter(projectId, sequence ?? 0))
+  ipcMain.handle("octopus:health", () => engine.checkIntegrationHealth())
+  ipcMain.handle("octopus:openNodeDirectory", async (_e, projectId: string, nodeId: string) => {
+    const state = engine.getState(projectId)
+    if (!state.projectRoot) throw new Error("项目没有源码根目录")
+    const path = getWorkflowWorkspace(state.projectRoot).nodePath(nodeId)
+    return shell.openPath(path)
+  })
 }
 
 function createWindow(): void {
@@ -55,6 +75,20 @@ app.whenReady().then(async () => {
   engine = await createWorkflowEngineFromConfig(config)
   registerIpc()
   createWindow()
+
+  // 窗口打开期间由主进程轮询失败事件，避免渲染进程自行访问文件系统。
+  const notifiedEvents = new Set<number>()
+  setInterval(() => {
+    for (const projectId of listProjects()) {
+      const events = engine.execution.eventsAfter(projectId, 0)
+      for (const event of events) {
+        if (event.type === "RUN_FAILED" && !notifiedEvents.has(event.sequence) && Notification.isSupported()) {
+          notifiedEvents.add(event.sequence)
+          new Notification({ title: "Octopus 节点执行失败", body: String(event.payload["error"] ?? event.nodeId ?? "未知错误") }).show()
+        }
+      }
+    }
+  }, 5_000)
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

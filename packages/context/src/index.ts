@@ -1,12 +1,13 @@
 /**
  * Context 包 —— 工作流状态持久化层。
  *
- * 将 WorkflowState 以 JSON 文件形式存储到项目根目录的 .octo/ 目录。
- * 支持原子写入（写 tmp → copy + unlink）避免并发写导致的数据损坏。
+ * 将 WorkflowState 以 JSON 聚合存储在 SQLite 的 WAL 数据库中。
+ * 每次更新使用事务，确保后台 worker 与桌面端并发写入不会互相覆盖。
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFileSync, unlinkSync } from "node:fs"
-import { join, dirname, isAbsolute, resolve } from "node:path"
+import { existsSync, mkdirSync } from "node:fs"
+import { join, isAbsolute, resolve } from "node:path"
+import Database from "better-sqlite3"
 import type { WorkflowState } from "@octopus/core/workflow.js"
 import { ProjectId } from "@octopus/core/branded-ids.js"
 import { createEmptyState, migrateWorkflowState } from "@octopus/core/workflow.js"
@@ -28,10 +29,12 @@ export interface StateStore {
   load(projectId: string): WorkflowState
   /** 保存项目状态 */
   save(state: WorkflowState): void
+  /** 在单个 SQLite 事务中读取并更新项目状态，避免并行 worker 覆盖彼此修改。 */
+  update(projectId: string, updater: (state: WorkflowState) => WorkflowState): WorkflowState
   /** 列出所有项目 */
   listProjects(): string[]
   /** 创建新项目 */
-  createProject(name: string, description?: string): WorkflowState
+  createProject(name: string, description?: string, projectRoot?: string): WorkflowState
   /** 删除项目 */
   deleteProject(projectId: string): void
   /** 获取存储路径 */
@@ -41,69 +44,69 @@ export interface StateStore {
 /** 创建默认状态存储实例 */
 export function createStateStore(config?: Partial<StoreConfig>): StateStore {
   const storeDir = config?.storeDir ?? DEFAULT_STORE_DIR
-  return new JsonFileStateStore(storeDir)
+  return new SqliteStateStore(storeDir)
 }
 
 /**
- * 基于 JSON 文件的状态存储实现。
+ * SQLite 状态存储。
  *
- * 结构：
- *   {storeDir}/
- *     index.json           —— 项目索引 { projectId -> projectName }
- *     projects/
- *       {projectId}.json   —— 项目状态
+ * 状态主体仍以 JSON 保存以保持领域模型的聚合语义，执行运行记录和事件由
+ * executor 单独写入扩展表。事务化 update 是跨进程节点执行的并发写入边界。
  */
-class JsonFileStateStore implements StateStore {
+class SqliteStateStore implements StateStore {
   private readonly originalStoreDir: string
   private readonly storeDir: string
-  private readonly projectsDir: string
-  private readonly indexFile: string
+  private readonly databasePath: string
 
   constructor(storeDir: string) {
     this.originalStoreDir = storeDir
     this.storeDir = isAbsolute(storeDir) ? storeDir : resolve(storeDir)
-    this.projectsDir = join(this.storeDir, "projects")
-    this.indexFile = join(this.storeDir, "index.json")
-    this.ensureDirectories()
+    this.databasePath = join(this.storeDir, "state.sqlite")
+    if (!existsSync(this.storeDir)) mkdirSync(this.storeDir, { recursive: true })
+    this.withDatabase((db) => this.initialize(db))
   }
 
-  private ensureDirectories(): void {
-    if (!existsSync(this.storeDir)) {
-      mkdirSync(this.storeDir, { recursive: true })
-    }
-    if (!existsSync(this.projectsDir)) {
-      mkdirSync(this.projectsDir, { recursive: true })
-    }
+  private initialize(db: Database.Database): void {
+    // WAL 让桌面端读状态与后台 worker 写状态可以并发进行。
+    db.pragma("journal_mode = WAL")
+    db.pragma("busy_timeout = 5000")
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        project_id TEXT PRIMARY KEY,
+        project_name TEXT NOT NULL,
+        state_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+    `)
   }
 
-  private ensureParentDir(filePath: string): void {
-    const parent = dirname(filePath)
-    if (!existsSync(parent)) {
-      mkdirSync(parent, { recursive: true })
-    }
-  }
-
-  private readIndex(): Record<string, string> {
+  private withDatabase<T>(callback: (db: Database.Database) => T): T {
+    const db = new Database(this.databasePath)
     try {
-      if (!existsSync(this.indexFile)) return {}
-      const raw = readFileSync(this.indexFile, "utf-8")
-      return JSON.parse(raw) as Record<string, string>
-    } catch {
-      return {}
+      this.initialize(db)
+      return callback(db)
+    } finally {
+      db.close()
     }
   }
 
-  private writeIndex(index: Record<string, string>): void {
-    this.atomicWrite(this.indexFile, JSON.stringify(index, null, 2))
-  }
-
-  private atomicWrite(filePath: string, data: string): void {
-    try {
-      this.ensureParentDir(filePath)
-      writeFileSync(filePath, data, "utf-8")
-    } catch (cause) {
-      throw new StoreError("STORE_SAVE_FAILED", `无法写入 ${filePath}`, cause)
-    }
+  private saveInTransaction(db: Database.Database, state: WorkflowState): WorkflowState {
+    const updatedAt = new Date().toISOString()
+    state.updatedAt = updatedAt
+    db.prepare(
+      `INSERT INTO projects(project_id, project_name, state_json, updated_at)
+       VALUES (@projectId, @projectName, @stateJson, @updatedAt)
+       ON CONFLICT(project_id) DO UPDATE SET
+         project_name = excluded.project_name,
+         state_json = excluded.state_json,
+         updated_at = excluded.updated_at`,
+    ).run({
+      projectId: state.projectId,
+      projectName: state.projectName,
+      stateJson: JSON.stringify(state),
+      updatedAt,
+    })
+    return state
   }
 
   getStorePath(): string {
@@ -111,56 +114,60 @@ class JsonFileStateStore implements StateStore {
   }
 
   load(projectId: string): WorkflowState {
-    const filePath = join(this.projectsDir, `${projectId}.json`)
-    try {
-      const raw = readFileSync(filePath, "utf-8")
-      // 迁移旧版（v1: tasks[]+stages{}）状态到统一 steps 模型
-      return migrateWorkflowState(JSON.parse(raw))
-    } catch (cause) {
-      throw new StoreError("STORE_LOAD_FAILED", `无法加载项目 ${projectId}`, cause)
-    }
+    return this.withDatabase((db) => {
+      const row = db.prepare("SELECT state_json FROM projects WHERE project_id = ?").get(projectId) as
+        | { state_json: string }
+        | undefined
+      if (!row) throw new StoreError("STORE_LOAD_FAILED", `无法加载项目 ${projectId}`)
+      return migrateWorkflowState(JSON.parse(row.state_json))
+    })
   }
 
   save(state: WorkflowState): void {
-    const filePath = join(this.projectsDir, `${state.projectId}.json`)
-    const data = JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2)
-    this.atomicWrite(filePath, data)
+    this.withDatabase((db) => {
+      const transaction = db.transaction(() => this.saveInTransaction(db, state))
+      transaction()
+    })
+  }
+
+  update(projectId: string, updater: (state: WorkflowState) => WorkflowState): WorkflowState {
+    return this.withDatabase((db) => {
+      const transaction = db.transaction(() => {
+        const row = db.prepare("SELECT state_json FROM projects WHERE project_id = ?").get(projectId) as
+          | { state_json: string }
+          | undefined
+        if (!row) throw new StoreError("STORE_LOAD_FAILED", `无法加载项目 ${projectId}`)
+        const current = migrateWorkflowState(JSON.parse(row.state_json))
+        return this.saveInTransaction(db, updater(current))
+      })
+      return transaction()
+    })
   }
 
   listProjects(): string[] {
-    const index = this.readIndex()
-    return Object.keys(index)
+    return this.withDatabase((db) => {
+      const rows = db.prepare("SELECT project_id FROM projects ORDER BY updated_at DESC").all() as Array<{ project_id: string }>
+      return rows.map((row) => row.project_id)
+    })
   }
 
-  createProject(name: string, description?: string): WorkflowState {
+  createProject(name: string, description?: string, projectRoot?: string): WorkflowState {
     const projectId = ProjectId(`proj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`)
-    const state = createEmptyState(projectId, name, description ?? "")
-
-    // 注册到索引
-    const index = this.readIndex()
-    index[projectId] = name
-    this.writeIndex(index)
-
-    // 保存初始状态
-    this.save(state)
+    const state = createEmptyState(projectId, name, description ?? "", projectRoot)
+    this.withDatabase((db) => {
+      const transaction = db.transaction(() => this.saveInTransaction(db, state))
+      transaction()
+    })
     return state
   }
 
   deleteProject(projectId: string): void {
-    const filePath = join(this.projectsDir, `${projectId}.json`)
-    try {
-      if (existsSync(filePath)) {
-        renameSync(filePath, `${filePath}.deleted`)
-      }
-    } catch (cause) {
-      throw new StoreError("STORE_SAVE_FAILED", `无法删除项目 ${projectId}`, cause)
-    }
-
-    const index = this.readIndex()
-    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-    delete index[projectId]
-    this.writeIndex(index)
+    this.withDatabase((db) => {
+      db.prepare("DELETE FROM projects WHERE project_id = ?").run(projectId)
+    })
   }
 }
 
 export { ProjectId, Phase }
+export * from "./workflow.js"
+export * from "./execution.js"

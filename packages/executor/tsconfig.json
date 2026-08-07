@@ -4,13 +4,12 @@
     "outDir": "dist",
     "rootDir": "src",
     "composite": true,
-    "lib": ["ES2022", "DOM"],
     "types": ["node"]
   },
-  "include": ["src/main.ts"],
+  "include": ["src"],
   "references": [
+    { "path": "../agent-layer" },
     { "path": "../context" },
-    { "path": "../workflow-engine" },
-    { "path": "../executor" }
+    { "path": "../core" }
   ]
 }

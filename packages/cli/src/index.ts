@@ -27,6 +27,9 @@ import { buildHeinrichCommands } from "./commands/heinrich.js"
 import { buildStageCommands } from "./commands/stage.js"
 import { buildStepCommands } from "./commands/step.js"
 import { buildAiCommands } from "./commands/ai.js"
+import { buildNodeCommands } from "./commands/node.js"
+import { buildWorkflowCommands } from "./commands/workflow.js"
+import { buildMonitorCommands } from "./commands/monitor.js"
 
 async function main(): Promise<void> {
   const config = loadConfig()
@@ -49,6 +52,9 @@ async function main(): Promise<void> {
   buildStageCommands(program, engine)
   buildStepCommands(program, engine)
   buildAiCommands(program, engine)
+  buildNodeCommands(program, engine)
+  buildWorkflowCommands(program, engine)
+  buildMonitorCommands(program, engine)
 
   program.parse(process.argv)
 
