@@ -7,15 +7,12 @@
  * - 支持常驻进程模式（复用进程减少冷启动）
  */
 
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
+import { spawn } from "node:child_process"
 import { AIAssistantType } from "@octopus/core/agent.js"
 import type { AIRequest, AIResponse } from "@octopus/core/agent.js"
 import { AICallError } from "@octopus/core/errors.js"
 import { AgentCallId } from "@octopus/core/branded-ids.js"
 import { executeAIAssistantModule } from "./modules/registry.js"
-
-const execFileAsync = promisify(execFile)
 
 /** AI 客户端配置 */
 export interface AIClientConfig {
@@ -52,12 +49,24 @@ export class AIClient {
     this.config = { ...DEFAULT_CONFIG, ...config }
   }
 
-  /** 基础调用 —— 直接执行 claude -p 子进程（异步 + 重试） */
+  /** 基础调用 —— 通过 stdin 执行 claude -p 子进程（异步 + 重试，避免大型 prompt 超出 argv 上限） */
   async ask(request: AIRequest): Promise<AIResponse> {
     const startTime = Date.now()
     const system = request.system ?? ""
     const model = request.model ?? this.config.defaultModel
     const timeout = request.timeout ?? this.config.defaultTimeout
+    if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 2_147_483_647) {
+      throw new AICallError("AI 调用超时必须是 0 至 2147483647ms 的整数")
+    }
+    if (!Number.isSafeInteger(this.config.retryDelay) || this.config.retryDelay < 0 || this.config.retryDelay > 2_147_483_647) {
+      throw new AICallError("AI 重试间隔必须是 0 至 2147483647ms 的整数")
+    }
+    if (!Number.isSafeInteger(this.config.retries) || this.config.retries < 0) {
+      throw new AICallError("AI 重试次数必须是非负整数")
+    }
+    if (this.config.retryDelay * Math.max(1, this.config.retries) > 2_147_483_647) {
+      throw new AICallError("AI 重试退避时间超过 Node 定时器上限")
+    }
 
     const args = [
       "-p",
@@ -68,17 +77,12 @@ export class AIClient {
       "json",
       "--system-prompt",
       system,
-      request.prompt,
     ]
 
     let lastError: unknown
     for (let attempt = 0; attempt <= this.config.retries; attempt++) {
       try {
-        const { stdout } = await execFileAsync(this.config.claudePath, args, {
-          encoding: "utf-8",
-          timeout,
-          maxBuffer: 10 * 1024 * 1024,
-        })
+        const stdout = await this.executeClaude(args, request.prompt, timeout)
 
         const parsed = JSON.parse(stdout) as { result?: string }
         const durationMs = Date.now() - startTime
@@ -101,6 +105,70 @@ export class AIClient {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  private executeClaude(args: readonly string[], prompt: string, timeout: number): Promise<string> {
+    const maxBuffer = 10 * 1024 * 1024
+    return new Promise((resolve, reject) => {
+      const child = spawn(this.config.claudePath, args, { stdio: ["pipe", "pipe", "pipe"] })
+      const stdout: Buffer[] = []
+      const stderr: Buffer[] = []
+      let stdoutLength = 0
+      let stderrLength = 0
+      let settled = false
+      let terminationError: Error | undefined
+      let timer: NodeJS.Timeout | undefined
+      const finish = (error?: Error, output?: string): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        if (error) reject(error)
+        else resolve(output ?? "")
+      }
+      const append = (chunks: Buffer[], chunk: Buffer, currentLength: number): number => {
+        const nextLength = currentLength + chunk.length
+        if (nextLength > maxBuffer) {
+          if (!terminationError) {
+            terminationError = new Error(`claude 输出超过 ${maxBuffer} 字节`)
+            child.kill("SIGKILL")
+          }
+          return currentLength
+        }
+        chunks.push(chunk)
+        return nextLength
+      }
+      if (timeout > 0) {
+        timer = setTimeout(() => {
+          terminationError = new Error(`claude 调用超时（${timeout}ms）`)
+          child.kill("SIGKILL")
+        }, timeout)
+      }
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdoutLength = append(stdout, chunk, stdoutLength)
+      })
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderrLength = append(stderr, chunk, stderrLength)
+      })
+      child.once("error", (error) => finish(error))
+      child.once("spawn", () => {
+        if (!terminationError) child.stdin.end(prompt)
+      })
+      child.once("close", (code, signal) => {
+        if (terminationError) {
+          finish(terminationError)
+          return
+        }
+        const output = Buffer.concat(stdout).toString("utf-8")
+        if (code === 0) {
+          finish(undefined, output)
+          return
+        }
+        const detail = Buffer.concat(stderr).toString("utf-8").trim()
+        finish(new Error(`claude 退出失败（${signal ?? code ?? "unknown"}）${detail ? `: ${detail}` : ""}`))
+      })
+      child.stdin.once("error", (error) => finish(error))
+    })
   }
 
   /** 生成 AI 调用记录 */

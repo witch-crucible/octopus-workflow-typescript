@@ -42,9 +42,10 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
       try {
         const pid = resolveProjectId(engine, projectId)
         if (!pid) return
+        const maxParallel = parsePositiveInteger(options.maxParallel, "--max-parallel")
         const snapshot = await engine.runWorkflow(pid, options.force === undefined
-          ? { maxParallel: Number.parseInt(options.maxParallel, 10) }
-          : { maxParallel: Number.parseInt(options.maxParallel, 10), force: options.force })
+          ? { maxParallel }
+          : { maxParallel, force: options.force })
         if (options.json) console.log(JSON.stringify(snapshot, null, 2))
         else console.log(`✅ 调度结束: ${snapshot.schedulerStatus} · 当前节点: ${snapshot.currentNodeIds.join(", ") || "无"}`)
       } catch (error) {
@@ -74,10 +75,18 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
 
 function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
   if (projectId) return projectId
-  const projects = engine["store"].listProjects()
+  const projects = engine.listProjects()
   if (projects.length === 0) {
     console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
     return null
   }
   return projects[0] ?? null
+}
+
+function parsePositiveInteger(value: string, option: string): number {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${option} 必须是正整数`)
+  }
+  return parsed
 }

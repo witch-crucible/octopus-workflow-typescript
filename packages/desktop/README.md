@@ -12,6 +12,16 @@ Octopus 工作流引擎的 **macOS 桌面外壳**（Electron）。
 pnpm --filter @octopus/desktop start      # 编译并启动窗口
 ```
 
+## 浏览器界面
+
+Electron 无法启动或只需要本地浏览器展示时，在仓库根目录运行：
+
+```bash
+pnpm web
+```
+
+然后访问 `http://127.0.0.1:4173`。服务只监听 `127.0.0.1`，默认读取仓库根目录的 `.octo/state.sqlite`；使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改状态目录。页面复用 Electron renderer，但通过同源 HTTP API 访问真实工作流引擎。
+
 ## 打包为 macOS 应用
 
 ```bash

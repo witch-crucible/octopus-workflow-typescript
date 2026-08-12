@@ -50,6 +50,9 @@ export function createStepFromNode(
     if (!dependencyId) throw new Error(`节点 ${node.key} 的依赖缺少内部 ID 映射: ${dependencyKey}`)
     return dependencyId
   })
+  const capabilities = node.actions
+    .map(actionToCapability)
+    .filter((capability): capability is CapabilityRef => capability !== undefined)
   return {
     id: nodeId,
     taskId: TaskId(`${nodeId}_${Date.now()}_${random}`),
@@ -59,6 +62,7 @@ export function createStepFromNode(
     responsibleRole: node.responsibleRoles[0] ?? Role.AI,
     status: TaskStatus.PENDING,
     dependsOn: dependencyIds,
+    ...(capabilities.length > 0 ? { capabilities } : {}),
     actions: node.actions,
     artifactIds: [],
     createdAt: now,
@@ -90,6 +94,28 @@ function capabilityToAction(capability: CapabilityRef): NodeAction {
   return capability.level === undefined
     ? { type: "heinrich", delta: capability.delta }
     : { type: "heinrich", delta: capability.delta, level: capability.level }
+}
+
+/** 从兼容的节点动作恢复 capability，manual / command 仍只作为执行动作。 */
+function actionToCapability(action: NodeAction): CapabilityRef | undefined {
+  if (action.type === "ai") {
+    return {
+      kind: "ai",
+      assistant: action.assistant,
+      ...(action.input !== undefined ? { input: action.input } : {}),
+      ...(action.outputFile !== undefined ? { outputFile: action.outputFile } : {}),
+      ...(action.ifExists !== undefined ? { ifExists: action.ifExists } : {}),
+    }
+  }
+  if (action.type === "integration") {
+    return { kind: "integration", service: action.service, op: action.operation }
+  }
+  if (action.type === "heinrich") {
+    return action.level === undefined
+      ? { kind: "heinrich", delta: action.delta }
+      : { kind: "heinrich", delta: action.delta, level: action.level }
+  }
+  return undefined
 }
 
 /** 为一个阶段生成所有步骤 */

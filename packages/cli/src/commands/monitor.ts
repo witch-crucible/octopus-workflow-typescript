@@ -3,6 +3,8 @@
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+
 export function buildMonitorCommands(program: Command, engine: WorkflowEngine): void {
   const monitor = program.command("monitor").description("工作流运行监控")
 
@@ -41,6 +43,7 @@ export function buildMonitorCommands(program: Command, engine: WorkflowEngine): 
     .action(async (projectId: string | undefined, options: { interval: string }) => {
       const pid = resolveProjectId(engine, projectId)
       if (!pid) return
+      const interval = parseInterval(options.interval)
       let sequence = 0
       console.log("正在监控，按 Ctrl+C 退出。")
       while (true) {
@@ -48,14 +51,14 @@ export function buildMonitorCommands(program: Command, engine: WorkflowEngine): 
           sequence = event.sequence
           console.log(`[${event.createdAt}] ${event.type} ${event.nodeId ?? ""} ${JSON.stringify(event.payload)}`)
         }
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.max(100, Number(options.interval))))
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, interval))
       }
     })
 }
 
 function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
   if (projectId) return projectId
-  const projects = engine["store"].listProjects()
+  const projects = engine.listProjects()
   if (projects.length === 0) {
     console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
     return null
@@ -63,3 +66,10 @@ function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | 
   return projects[0] ?? null
 }
 
+function parseInterval(value: string): number {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 100 || parsed > MAX_TIMER_DELAY_MS) {
+    throw new Error(`--interval 必须是 100 至 ${MAX_TIMER_DELAY_MS}ms 的整数`)
+  }
+  return parsed
+}

@@ -2,6 +2,7 @@
 const { contextBridge, ipcRenderer } = require("electron")
 
 contextBridge.exposeInMainWorld("octopus", {
+  canInit: () => ipcRenderer.invoke("octopus:canInit"),
   listProjects: () => ipcRenderer.invoke("octopus:listProjects"),
   init: (name, description, projectRoot) => ipcRenderer.invoke("octopus:init", name, description, projectRoot),
   status: (projectId) => ipcRenderer.invoke("octopus:status", projectId),

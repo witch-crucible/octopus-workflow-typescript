@@ -3,8 +3,9 @@
  *
  * 配置来源优先级（从高到低）：
  *  1. 环境变量（OCTOPUS_*）
- *  2. JSON 配置文件（.octo/config.json）
- *  3. 默认值
+ *  2. 调用方显式状态目录
+ *  3. JSON 配置文件（.octo/config.json）
+ *  4. 默认值
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -104,7 +105,8 @@ function mergeConfigs(...configs: Partial<OctopusConfig>[]): OctopusConfig {
 export function loadConfig(storeDir?: string): OctopusConfig {
   const fileConfig = loadFromFile(storeDir ?? DEFAULT_CONFIG.storeDir)
   const envConfig = loadFromEnv()
-  return mergeConfigs(fileConfig, envConfig)
+  const explicitStoreConfig = storeDir === undefined ? {} : { storeDir }
+  return mergeConfigs(fileConfig, explicitStoreConfig, envConfig)
 }
 
 /** 保存配置到文件 */

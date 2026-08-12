@@ -214,6 +214,11 @@ export class WorkflowEngine {
     return this.nodeExecution
   }
 
+  /** 列出状态库中的项目 ID。 */
+  listProjects(): string[] {
+    return this.store.listProjects()
+  }
+
   /** 获取当前节点、READY 节点和活动运行摘要。 */
   getExecutionSnapshot(projectId: string): WorkflowExecutionSnapshot {
     return this.nodeExecution.getSnapshot(projectId)
@@ -336,9 +341,11 @@ export class WorkflowEngine {
    * 分发某步骤声明的 capabilities（AI / 集成 / Heinrich）。
    * 改 spec 步骤上的 capability 即可增删行为，无需改本方法。
    * @param input 可选显式输入：传给该步骤声明的 AI 模块；未提供时回退为“步骤名称：步骤描述”
+   * 外部调用期间若聚合状态发生并发变化，本次结果不会覆盖最新状态，而是要求调用方重试。
    */
   async runStepCapabilities(projectId: string, stepId: string, input?: string): Promise<WorkflowState> {
     const state = this.getState(projectId)
+    const expectedState = JSON.stringify(state)
     const step = state.steps.find((s) => s.id === stepId)
     if (!step) {
       throw new Error(`步骤不存在: ${stepId}`)
@@ -373,8 +380,12 @@ export class WorkflowEngine {
     // capability 可能改变 Heinrich 条数，检查审计触发
     this.checkHeinrichAuditTrigger(state, step.phase)
 
-    this.store.save(state)
-    return state
+    return this.store.update(projectId, (current) => {
+      if (JSON.stringify(current) !== expectedState) {
+        throw new Error(`步骤 ${stepId} 执行期间项目状态已变更，请确认最新状态后重试`)
+      }
+      return state
+    })
   }
 
   // ── 项目生命周期 ──
@@ -456,13 +467,17 @@ export class WorkflowEngine {
     this.aiHandlers.push(handler)
   }
 
-  /** 触发 AI 门控事件（同步门控；异步处理器暂不支持，跳过） */
+  /** 触发 AI 门控事件（当前阶段转换 API 为同步契约，异步处理器必须明确拒绝）。 */
   private emitAIEvent(payload: AIEventPayload): AIGateResult {
     for (const handler of this.aiHandlers) {
       const result = handler(payload)
-      if (result instanceof Promise) continue
-      if (!result.allowed) {
-        return result
+      if (result && typeof (result as PromiseLike<AIGateResult>).then === "function") {
+        void Promise.resolve(result).catch(() => undefined)
+        throw new Error("当前阶段转换不支持异步 AI 门控处理器")
+      }
+      const gateResult = result as AIGateResult
+      if (!gateResult.allowed) {
+        return gateResult
       }
     }
     return { allowed: true }

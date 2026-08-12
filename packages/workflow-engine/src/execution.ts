@@ -29,6 +29,8 @@ export interface RunWorkflowOptions {
   readonly force?: boolean
 }
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+
 export class NodeExecutionService {
   private static readonly retentionDays = 30
   private readonly executions
@@ -187,9 +189,33 @@ export class NodeExecutionService {
     const run = this.executions.getRun(runId)
     if (!run || run.projectId !== projectId) throw new Error(`运行不存在: ${runId}`)
     if (run.status !== "QUEUED" && run.status !== "RUNNING") return run
-    terminateWorker(run)
-    this.appendEvent(projectId, run, "RUN_CANCELED", { requested: true })
-    return this.executions.updateRun(runId, { status: "CANCELED", finishedAt: new Date().toISOString() })
+    const canceled = this.executions.transitionRun(runId, ["QUEUED", "RUNNING"], {
+      status: "CANCELED",
+      finishedAt: new Date().toISOString(),
+    })
+    if (!canceled) return this.executions.getRun(runId) ?? run
+    let finalRun = canceled
+    try {
+      if (canceled.pid) terminateWorker(canceled)
+    } catch (cause) {
+      finalRun = this.executions.updateRun(runId, {
+        error: `运行已取消，但终止 worker 失败: ${(cause as Error).message}`,
+      })
+    }
+    this.store.update(projectId, (state) => {
+      const step = state.steps.find((candidate) => candidate.id === canceled.nodeId)
+      if (step && step.status === TaskStatus.IN_PROGRESS) {
+        step.status = TaskStatus.BLOCKED
+        step.notes = "运行已取消"
+        step.updatedAt = new Date().toISOString()
+      }
+      return state
+    })
+    this.appendEvent(projectId, finalRun, "RUN_CANCELED", {
+      requested: true,
+      ...(finalRun.error ? { terminationError: finalRun.error } : {}),
+    })
+    return finalRun
   }
 
   retryRun(projectId: string, runId: string, options: RunNodeOptions = {}): NodeRun {
@@ -226,22 +252,30 @@ export class NodeExecutionService {
 
   /** 自动并行执行 READY 节点，直到完成、阻塞或遇到手动节点。 */
   async runWorkflow(projectId: string, options: RunWorkflowOptions = {}): Promise<WorkflowExecutionSnapshot> {
-    const maxParallel = Math.max(1, options.maxParallel ?? 4)
-    const pollIntervalMs = Math.max(100, options.pollIntervalMs ?? 500)
+    const maxParallel = options.maxParallel ?? 4
+    const pollIntervalMs = options.pollIntervalMs ?? 500
+    if (!Number.isSafeInteger(maxParallel) || maxParallel < 1) {
+      throw new Error("maxParallel 必须是正整数")
+    }
+    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 100 || pollIntervalMs > MAX_TIMER_DELAY_MS) {
+      throw new Error(`pollIntervalMs 必须是 100 至 ${MAX_TIMER_DELAY_MS}ms 的整数`)
+    }
     while (true) {
       const snapshot = this.getSnapshot(projectId)
       const capacity = maxParallel - snapshot.activeRuns.length
+      let launchError: unknown
       if (capacity > 0) {
         for (const nodeId of snapshot.readyNodeIds.slice(0, capacity)) {
           try {
             this.runNode(projectId, nodeId, options.force === undefined ? {} : { force: options.force })
-          } catch {
-            // 依赖状态可能在并发启动间发生变化，下一轮会重新计算。
+          } catch (cause) {
+            launchError ??= cause
           }
         }
       }
       const next = this.getSnapshot(projectId)
       if (next.activeRuns.length === 0 && next.readyNodeIds.length === 0) return next
+      if (launchError && next.activeRuns.length === 0) throw launchError
       await new Promise((resolvePromise) => setTimeout(resolvePromise, pollIntervalMs))
     }
   }

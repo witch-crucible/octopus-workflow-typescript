@@ -20,13 +20,15 @@ let engine: WorkflowEngine
 
 /** 读取项目 ID 列表（与 CLI status 命令使用同一入口）。 */
 function listProjects(): string[] {
-  return (engine as unknown as { store: { listProjects(): string[] } }).store.listProjects()
+  return engine.listProjects()
 }
 
 function registerIpc(): void {
+  ipcMain.handle("octopus:canInit", () => listProjects().length === 0)
   ipcMain.handle("octopus:listProjects", () => listProjects())
 
   ipcMain.handle("octopus:init", (_e, name: string, description?: string, projectRoot?: string) => {
+    if (listProjects().length > 0) throw new Error("状态库已有项目，禁止执行 init")
     const state = engine.initProject(name, description, projectRoot ?? app.getPath("documents"))
     return {
       projectId: state.projectId,

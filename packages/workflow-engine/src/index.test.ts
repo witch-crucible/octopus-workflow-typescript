@@ -16,6 +16,13 @@ function createEngine(): WorkflowEngine {
   })
 }
 
+function createGatedEngine(): WorkflowEngine {
+  return new WorkflowEngine({
+    store: createStateStore({ storeDir: TEST_STORE_DIR }),
+    aiGatingEnabled: true,
+  })
+}
+
 function completeAllPhaseTasks(engine: WorkflowEngine, projectId: string, phase: Phase): void {
   const tasks = engine.getTasks(projectId, { phase })
   for (const task of tasks) {
@@ -57,6 +64,16 @@ describe("WorkflowEngine", () => {
       expect(next.currentPhase).toBe(Phase.DESIGN)
       expect(next.phaseStatus[Phase.REQUIREMENTS_ANALYSIS]).toBe(PhaseLock.COMPLETED)
       expect(next.phaseStatus[Phase.DESIGN]).toBe(PhaseLock.ACTIVE)
+    })
+
+    it("注册异步 AI 门控时明确拒绝同步阶段转换", () => {
+      const engine = createGatedEngine()
+      const state = engine.initProject("async_gate_test")
+      completeAllPhaseTasks(engine, state.projectId, Phase.REQUIREMENTS_ANALYSIS)
+      engine.registerAIHandler(async () => ({ allowed: false, reason: "异步拒绝" }))
+
+      expect(() => engine.advancePhase(state.projectId)).toThrow("异步 AI 门控处理器")
+      expect(engine.getState(state.projectId).currentPhase).toBe(Phase.REQUIREMENTS_ANALYSIS)
     })
   })
 

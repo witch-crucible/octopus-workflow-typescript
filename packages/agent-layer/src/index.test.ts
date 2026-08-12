@@ -1,7 +1,18 @@
-import { describe, it, expect } from "vitest"
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterEach, describe, it, expect } from "vitest"
 import { createAIClient, AIClient, getAIAssistantModule } from "./index.js"
 import { AIAssistantType } from "@octopus/core/agent.js"
 import type { AIRequest, AIResponse } from "@octopus/core/agent.js"
+
+const temporaryDirectories: string[] = []
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
 
 /** 记录 ask 请求的假客户端（替换 ask，不调用 Claude CLI） */
 function fakeClient(): { client: AIClient; requests: AIRequest[] } {
@@ -37,6 +48,51 @@ describe("createAIClient", () => {
   it("支持自定义配置", () => {
     const client = createAIClient({ defaultModel: "sonnet", defaultTimeout: 300_000 })
     expect(client).toBeInstanceOf(AIClient)
+  })
+
+  it("通过 stdin 传输大型 prompt，不把文件内容放入 argv，并保留 timeout=0 的无超时语义", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "octopus-agent-layer-"))
+    temporaryDirectories.push(directory)
+    const fakeClaudePath = join(directory, "fake-claude.mjs")
+    writeFileSync(
+      fakeClaudePath,
+      [
+        "#!/usr/bin/env node",
+        'let input = ""',
+        'process.stdin.setEncoding("utf8")',
+        'process.stdin.on("data", (chunk) => { input += chunk })',
+        'process.stdin.on("end", () => {',
+        '  process.stdout.write(JSON.stringify({ result: String(input.length) + ":" + process.argv.includes(input) }))',
+        "})",
+      ].join("\n"),
+    )
+    chmodSync(fakeClaudePath, 0o755)
+
+    const prompt = "大".repeat(1024 * 1024)
+    const client = createAIClient({ claudePath: fakeClaudePath, retries: 0, defaultTimeout: 0 })
+
+    await expect(client.ask({ prompt })).resolves.toMatchObject({
+      result: `${prompt.length}:false`,
+    })
+  })
+
+  it("超时时等待子进程关闭后才返回错误", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "octopus-agent-layer-timeout-"))
+    temporaryDirectories.push(directory)
+    const fakeClaudePath = join(directory, "fake-claude-timeout.mjs")
+    writeFileSync(
+      fakeClaudePath,
+      [
+        "#!/usr/bin/env node",
+        'process.on("SIGTERM", () => {})',
+        "process.stdin.resume()",
+        "setInterval(() => {}, 1000)",
+      ].join("\n"),
+    )
+    chmodSync(fakeClaudePath, 0o755)
+    const client = createAIClient({ claudePath: fakeClaudePath, retries: 0, defaultTimeout: 50 })
+
+    await expect(client.ask({ prompt: "会超时" })).rejects.toThrow("claude 调用超时（50ms）")
   })
 })
 

@@ -63,7 +63,7 @@ class SqliteStateStore implements StateStore {
     this.storeDir = isAbsolute(storeDir) ? storeDir : resolve(storeDir)
     this.databasePath = join(this.storeDir, "state.sqlite")
     if (!existsSync(this.storeDir)) mkdirSync(this.storeDir, { recursive: true })
-    this.withDatabase((db) => this.initialize(db))
+    this.withDatabase(() => undefined)
   }
 
   private initialize(db: Database.Database): void {

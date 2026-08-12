@@ -24,6 +24,7 @@ export interface ExecutionStore {
   getRun(runId: string): NodeRun | undefined
   listRuns(projectId: string, nodeId?: string): NodeRun[]
   updateRun(runId: string, patch: Partial<NodeRun>): NodeRun
+  transitionRun(runId: string, from: readonly NodeRunStatus[], patch: Partial<NodeRun>): NodeRun | undefined
   appendEvent(event: Omit<WorkflowEvent, "sequence">): WorkflowEvent
   eventsAfter(projectId: string, sequence: number): WorkflowEvent[]
   saveIntegrationHealth(health: IntegrationHealth): void
@@ -159,29 +160,32 @@ class SqliteExecutionStore implements ExecutionStore {
 
   updateRun(runId: string, patch: Partial<NodeRun>): NodeRun {
     return this.withDatabase((db) => {
-      const current = db.prepare("SELECT * FROM workflow_runs WHERE id = ?").get(runId) as RunRow | undefined
-      if (!current) throw new Error(`运行不存在: ${runId}`)
-      const next = { ...toRun(current), ...patch }
-      db.prepare(
-        `UPDATE workflow_runs SET status=@status, forced=@forced, pid=@pid,
-          current_action=@currentAction, started_at=@startedAt, finished_at=@finishedAt,
-          heartbeat_at=@heartbeatAt, exit_code=@exitCode, error=@error,
-          stdout_path=@stdoutPath, stderr_path=@stderrPath WHERE id=@id`,
-      ).run({
-        id: next.id,
-        status: next.status,
-        forced: next.forced ? 1 : 0,
-        pid: next.pid ?? null,
-        currentAction: next.currentAction ?? null,
-        startedAt: next.startedAt ?? null,
-        finishedAt: next.finishedAt ?? null,
-        heartbeatAt: next.heartbeatAt ?? null,
-        exitCode: next.exitCode ?? null,
-        error: next.error ?? null,
-        stdoutPath: next.stdoutPath,
-        stderrPath: next.stderrPath,
-      })
-      return next
+      const { assignments, values } = runPatch(runId, patch)
+
+      const row = assignments.length > 0
+        ? db
+            .prepare(`UPDATE workflow_runs SET ${assignments.join(", ")} WHERE id=@runId RETURNING *`)
+            .get(values) as RunRow | undefined
+        : db.prepare("SELECT * FROM workflow_runs WHERE id = ?").get(runId) as RunRow | undefined
+      if (!row) throw new Error(`运行不存在: ${runId}`)
+      return toRun(row)
+    })
+  }
+
+  transitionRun(runId: string, from: readonly NodeRunStatus[], patch: Partial<NodeRun>): NodeRun | undefined {
+    if (from.length === 0) return undefined
+    return this.withDatabase((db) => {
+      const { assignments, values } = runPatch(runId, patch)
+      if (assignments.length === 0) throw new Error("运行状态转换 patch 不能为空")
+      const placeholders = from.map((_, index) => `@from${index}`)
+      for (const [index, status] of from.entries()) values[`from${index}`] = status
+      const row = db
+        .prepare(
+          `UPDATE workflow_runs SET ${assignments.join(", ")}
+           WHERE id=@runId AND status IN (${placeholders.join(", ")}) RETURNING *`,
+        )
+        .get(values) as RunRow | undefined
+      return row ? toRun(row) : undefined
     })
   }
 
@@ -256,6 +260,32 @@ class SqliteExecutionStore implements ExecutionStore {
       return result.changes
     })
   }
+}
+
+function runPatch(runId: string, patch: Partial<NodeRun>): {
+  assignments: string[]
+  values: Record<string, unknown>
+} {
+  const assignments: string[] = []
+  const values: Record<string, unknown> = { runId }
+  const set = (property: keyof NodeRun, column: string, value: unknown): void => {
+    if (!Object.hasOwn(patch, property)) return
+    assignments.push(`${column}=@${property}`)
+    values[property] = value
+  }
+
+  set("status", "status", patch.status)
+  set("forced", "forced", patch.forced ? 1 : 0)
+  set("pid", "pid", patch.pid ?? null)
+  set("currentAction", "current_action", patch.currentAction ?? null)
+  set("startedAt", "started_at", patch.startedAt ?? null)
+  set("finishedAt", "finished_at", patch.finishedAt ?? null)
+  set("heartbeatAt", "heartbeat_at", patch.heartbeatAt ?? null)
+  set("exitCode", "exit_code", patch.exitCode ?? null)
+  set("error", "error", patch.error ?? null)
+  set("stdoutPath", "stdout_path", patch.stdoutPath)
+  set("stderrPath", "stderr_path", patch.stderrPath)
+  return { assignments, values }
 }
 
 function toRun(row: RunRow): NodeRun {

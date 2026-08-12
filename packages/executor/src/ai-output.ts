@@ -18,8 +18,8 @@ export interface PreparedAIOutput {
 }
 
 /** 解析 AI 输出位置，并在扩展模式下注入已有文档。 */
-export function prepareAIOutput(action: AIAction, nodePath: string): PreparedAIOutput {
-  const input = action.input ?? ""
+export function prepareAIOutput(action: AIAction, nodePath: string, fallbackInput = ""): PreparedAIOutput {
+  const input = action.input ?? fallbackInput
   if (!action.outputFile) return { input, extended: false }
 
   const nodeRoot = resolve(nodePath)

@@ -7,7 +7,7 @@
     "lib": ["ES2022", "DOM"],
     "types": ["node"]
   },
-  "include": ["src/main.ts"],
+  "include": ["src/main.ts", "src/web.ts"],
   "references": [
     { "path": "../context" },
     { "path": "../workflow-engine" },

@@ -117,7 +117,12 @@ async function showNode(nodeId) {
   detailsEl.innerHTML = `<div class="detail"><dl><dt>节点</dt><dd>${escapeHtml(node.id)} · ${escapeHtml(node.name)}</dd><dt>状态</dt><dd>${escapeHtml(node.status)}</dd><dt>依赖</dt><dd>${escapeHtml(node.dependsOn.join(", ") || "无")}</dd><dt>工作目录</dt><dd>${escapeHtml(currentState.projectRoot ? `${currentState.projectRoot}/workflow/nodes/${node.id}` : "未配置")}</dd></dl><div class="actions"><button id="runNode">运行</button><button id="completeNode" class="secondary">手动完成</button><button id="openNode" class="secondary">打开目录</button></div><h3>运行历史</h3>${currentRuns.slice(0, 5).map((run) => `<div class="detail"><span class="badge">${escapeHtml(run.status)}</span> ${escapeHtml(run.id)}<div class="actions"><button data-retry="${escapeHtml(run.id)}" class="secondary">重试</button><button data-cancel="${escapeHtml(run.id)}" class="danger">取消</button></div></div>`).join("")}</div>`
   document.getElementById("runNode").onclick = () => runSelected(false)
   document.getElementById("completeNode").onclick = () => completeSelected(false)
-  document.getElementById("openNode").onclick = () => window.octopus.openNodeDirectory(selectedProject, node.id)
+  const openNodeButton = document.getElementById("openNode")
+  if (window.octopus.openNodeDirectory) {
+    openNodeButton.onclick = () => window.octopus.openNodeDirectory(selectedProject, node.id)
+  } else {
+    openNodeButton.remove()
+  }
   detailsEl.querySelectorAll("[data-retry]").forEach((button) => { button.onclick = () => window.octopus.retryRun(selectedProject, button.dataset.retry).then(() => showProject(selectedProject)) })
   detailsEl.querySelectorAll("[data-cancel]").forEach((button) => { button.onclick = () => window.octopus.cancelRun(selectedProject, button.dataset.cancel).then(() => showProject(selectedProject)) })
   renderGraph()
@@ -133,6 +138,7 @@ document.getElementById("create").onclick = async () => {
   const root = document.getElementById("root").value.trim() || undefined
   const result = await window.octopus.init(name, description, root)
   document.getElementById("name").value = ""; document.getElementById("desc").value = ""
+  await configureRuntime()
   await refreshProjects(result.projectId)
 }
 document.getElementById("refresh").onclick = () => showProject(selectedProject)
@@ -143,10 +149,15 @@ document.getElementById("exportTasks").onclick = async () => {
 }
 document.getElementById("importTasks").onclick = async () => {
   if (!selectedProject) return
-  const result = await window.octopus.importTasks(selectedProject)
-  if (!result.canceled) {
-    statusEl.textContent = `已更新 ${result.updated} 个任务`
-    await showProject(selectedProject)
+  try {
+    const result = await window.octopus.importTasks(selectedProject)
+    if (!result.canceled) {
+      statusEl.textContent = `已更新 ${result.updated} 个任务`
+      await showProject(selectedProject)
+    }
+  } catch (error) {
+    statusEl.textContent = error instanceof Error ? error.message : String(error)
+    statusEl.className = "badge bad"
   }
 }
 document.getElementById("health").onclick = async () => {
@@ -171,5 +182,14 @@ document.getElementById("runWorkflow").onclick = async () => {
   }
 }
 
+async function configureRuntime() {
+  if (window.octopus.canInit && !await window.octopus.canInit()) {
+    document.getElementById("initPanel").hidden = true
+  }
+}
+
 setInterval(() => { if (selectedProject) showProject(selectedProject).catch(() => {}) }, 2000)
-refreshProjects()
+configureRuntime().then(() => refreshProjects()).catch((error) => {
+  statusEl.textContent = error.message
+  statusEl.className = "badge bad"
+})

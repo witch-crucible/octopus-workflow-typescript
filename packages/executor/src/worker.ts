@@ -44,7 +44,6 @@ async function main(): Promise<void> {
     const active = executionStore.getRun(args.runId)
     if (!active || active.status !== "RUNNING") return
     executionStore.updateRun(args.runId, { heartbeatAt: new Date().toISOString() })
-    appendEvent(args, "HEARTBEAT", { pid: process.pid })
   }, 2_000)
 
   let child: ReturnType<typeof spawn> | undefined
@@ -57,14 +56,19 @@ async function main(): Promise<void> {
   process.once("SIGINT", cancel)
 
   try {
-    executionStore.updateRun(args.runId, { status: "RUNNING", startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString() })
-    appendEvent(args, "RUN_STARTED", { pid: process.pid, nodePath })
+    const started = executionStore.transitionRun(args.runId, ["QUEUED", "RUNNING"], {
+      status: "RUNNING",
+      startedAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
+    })
+    if (!started) return
+    appendEvent(executionStore, args, "RUN_STARTED", { pid: process.pid, nodePath })
     for (let index = 0; index < actions.length; index++) {
       const action = actions[index]
       if (!action) continue
       if (cancelled) throw new WorkerFailure("CANCELED", "运行已取消")
       executionStore.updateRun(args.runId, { currentAction: index, heartbeatAt: new Date().toISOString() })
-      appendEvent(args, "ACTION_STARTED", { index, type: action.type })
+      appendEvent(executionStore, args, "ACTION_STARTED", { index, type: action.type })
       const result = await executeAction(action, {
         args,
         nodePath,
@@ -72,36 +76,52 @@ async function main(): Promise<void> {
         stateProjectId: args.projectId,
         config,
         projectRoot,
+        fallbackAIInput: `${step.name}：${step.description}`,
         stdoutPath: run.stdoutPath,
         stderrPath: run.stderrPath,
         assignChild: (processHandle) => { child = processHandle },
       })
-      appendEvent(args, "ACTION_FINISHED", { index, type: action.type, ...result })
+      appendEvent(executionStore, args, "ACTION_FINISHED", { index, type: action.type, ...result })
     }
-    executionStore.updateRun(args.runId, {
+    const succeeded = executionStore.transitionRun(args.runId, ["RUNNING"], {
       status: "SUCCEEDED",
-        finishedAt: new Date().toISOString(),
-        heartbeatAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      heartbeatAt: new Date().toISOString(),
     })
-    stateStore.update(args.projectId, (current) => {
-      const target = current.steps.find((candidate) => candidate.id === run.nodeId)
-      if (target) {
-        target.status = TaskStatus.COMPLETED
-        target.completedAt = new Date().toISOString()
-        target.updatedAt = new Date().toISOString()
-      }
-      return current
-    })
-    appendEvent(args, "RUN_FINISHED", { status: "SUCCEEDED" })
+    if (!succeeded) return
+    try {
+      stateStore.update(args.projectId, (current) => {
+        const target = current.steps.find((candidate) => candidate.id === run.nodeId)
+        if (target) {
+          target.status = TaskStatus.COMPLETED
+          target.completedAt = new Date().toISOString()
+          target.updatedAt = new Date().toISOString()
+        }
+        return current
+      })
+    } catch (cause) {
+      const error = `运行结果写入项目状态失败: ${(cause as Error).message}`
+      const failed = executionStore.transitionRun(args.runId, ["SUCCEEDED"], {
+        status: "FAILED",
+        error,
+      })
+      if (failed) appendEvent(executionStore, args, "RUN_FAILED", { status: "FAILED", error })
+      process.exitCode = 1
+      return
+    }
+    appendEvent(executionStore, args, "RUN_FINISHED", { status: "SUCCEEDED" })
   } catch (cause) {
+    const currentRun = executionStore.getRun(args.runId)
+    if (currentRun && currentRun.status !== "QUEUED" && currentRun.status !== "RUNNING") return
     const failure = cause instanceof WorkerFailure ? cause : new WorkerFailure("FAILED", (cause as Error).message)
     const status: NodeRunStatus = failure.status
-    executionStore.updateRun(args.runId, {
+    const failed = executionStore.transitionRun(args.runId, ["QUEUED", "RUNNING"], {
       status,
       finishedAt: new Date().toISOString(),
       heartbeatAt: new Date().toISOString(),
       error: failure.message,
     })
+    if (!failed) return
     stateStore.update(args.projectId, (current) => {
       const target = current.steps.find((candidate) => candidate.id === run.nodeId)
       if (target) {
@@ -111,7 +131,7 @@ async function main(): Promise<void> {
       }
       return current
     })
-    appendEvent(args, status === "CANCELED" ? "RUN_CANCELED" : "RUN_FAILED", { status, error: failure.message })
+    appendEvent(executionStore, args, status === "CANCELED" ? "RUN_CANCELED" : "RUN_FAILED", { status, error: failure.message })
     process.exitCode = 1
   } finally {
     clearInterval(heartbeat)
@@ -125,6 +145,7 @@ interface ActionContext {
   stateProjectId: string
   config: ReturnType<typeof loadConfig>
   projectRoot: string
+  fallbackAIInput: string
   stdoutPath: string
   stderrPath: string
   assignChild: (child: ReturnType<typeof spawn>) => void
@@ -140,7 +161,7 @@ async function executeAction(
     return {}
   }
   if (action.type === "ai") {
-    const prepared = prepareAIOutput(action, context.nodePath)
+    const prepared = prepareAIOutput(action, context.nodePath, context.fallbackAIInput)
     const client = createAIClient(context.config.ai)
     const response = await client.callAssistant(action.assistant, prepared.input)
     if (prepared.outputPath) writeAIOutput(prepared.outputPath, response.result)
@@ -212,8 +233,13 @@ function executeCommand(
   })
 }
 
-function appendEvent(args: WorkerArgs, type: WorkflowEvent["type"], payload: Record<string, unknown>): void {
-  createExecutionStore(args.storeDir).appendEvent({
+function appendEvent(
+  store: ReturnType<typeof createExecutionStore>,
+  args: WorkerArgs,
+  type: WorkflowEvent["type"],
+  payload: Record<string, unknown>,
+): void {
+  store.appendEvent({
     projectId: args.projectId,
     runId: args.runId,
     type,
@@ -249,12 +275,12 @@ void main().catch((error) => {
     const store = createExecutionStore(args.storeDir)
     const run = store.getRun(args.runId)
     if (run && (run.status === "QUEUED" || run.status === "RUNNING")) {
-      store.updateRun(args.runId, {
+      const failed = store.transitionRun(args.runId, ["QUEUED", "RUNNING"], {
         status: "FAILED",
         finishedAt: new Date().toISOString(),
         error: (error as Error).message,
       })
-      appendEvent(args, "RUN_FAILED", { error: (error as Error).message })
+      if (failed) appendEvent(store, args, "RUN_FAILED", { error: (error as Error).message })
     }
   } catch {
     // 启动参数或存储本身损坏时无法再写入运行记录，只保留进程错误输出。

@@ -10,6 +10,7 @@ import { buildPhaseCommands } from "./commands/phase.js"
 import { buildAiCommands } from "./commands/ai.js"
 import { buildTaskCommands } from "./commands/task.js"
 import { buildNodeCommands } from "./commands/node.js"
+import { buildWorkflowCommands } from "./commands/workflow.js"
 import { createStateStore } from "@octopus/context/index.js"
 import { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 import { TaskStatus } from "@octopus/core/task.js"
@@ -41,6 +42,7 @@ describe("CLI 命令验证", () => {
   })
 
   afterEach(() => {
+    rmSync(TEST_STORE_DIR, { recursive: true, force: true })
     for (const directory of temporaryProjectRoots.splice(0)) {
       rmSync(directory, { recursive: true, force: true })
     }
@@ -88,6 +90,34 @@ describe("CLI 命令验证", () => {
     consoleErrorSpy.mockRestore()
   })
 
+  it("init 应在状态库已有项目时拒绝创建项目", () => {
+    const engine = createEngine()
+    engine.initProject("已存在项目")
+    const initProjectSpy = vi.spyOn(engine, "initProject")
+    const program = new Command()
+    buildInitCommand(program, engine)
+    const projectRoot = mkdtempSync(join(tmpdir(), "octopus-cli-existing-state-"))
+    temporaryProjectRoots.push(projectRoot)
+
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit")
+    })
+
+    expect(() => {
+      program.parse(["node", "octopus", "init", "重复初始化", "--root", projectRoot])
+    }).toThrow("process.exit")
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("状态库已有项目，禁止执行 init"))
+    expect(exitSpy).toHaveBeenCalledWith(1)
+    expect(initProjectSpy).not.toHaveBeenCalled()
+    expect(existsSync(join(projectRoot, "workflow.yaml"))).toBe(false)
+
+    initProjectSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+    exitSpy.mockRestore()
+  })
+
   it("status 命令应在无项目时返回错误", () => {
     const engine = createEngine()
     const program = new Command()
@@ -107,6 +137,24 @@ describe("CLI 命令验证", () => {
 
     consoleErrorSpy.mockRestore()
     exitSpy.mockRestore()
+  })
+
+  it.each(["NaN", "0", "1.5", "Infinity"])("workflow run 拒绝非法并发数 %s", async (value) => {
+    const engine = createEngine()
+    const state = engine.initProject("并发参数测试")
+    const runWorkflowSpy = vi.spyOn(engine, "runWorkflow")
+    const program = new Command()
+    buildWorkflowCommands(program, engine)
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    await program.parseAsync(["node", "octopus", "workflow", "run", state.projectId, "--max-parallel", value])
+
+    expect(runWorkflowSpy).not.toHaveBeenCalled()
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("--max-parallel 必须是正整数"))
+    expect(process.exitCode).toBe(1)
+    process.exitCode = undefined
+    runWorkflowSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
   })
 
   it("phase advance 应正确前进阶段", () => {

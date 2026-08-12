@@ -48,7 +48,7 @@ const aiHandler: CapabilityHandler = async (ref, ctx) => {
   if (!ctx.aiClient) {
     return { kind: "ai", ref: label, ok: false, summary: "未配置 AIClient" }
   }
-  const input = ctx.input ?? `${ctx.step.name}：${ctx.step.description}`
+  const input = ctx.input ?? ref.input ?? `${ctx.step.name}：${ctx.step.description}`
   const res = await ctx.aiClient.callAssistant(ref.assistant, input)
   const text = res.result ?? ""
 

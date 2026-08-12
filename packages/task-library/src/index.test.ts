@@ -1,12 +1,88 @@
 import { describe, it, expect } from "vitest"
 import { Phase } from "@octopus/core/phase.js"
 import { TaskStatus } from "@octopus/core/task.js"
+import { AIAssistantType } from "@octopus/core/agent.js"
+import { HeinrichLevel } from "@octopus/core/risk.js"
+import { Role } from "@octopus/core/role.js"
+import type { WorkflowDefinition, WorkflowNodeSpec } from "@octopus/core/execution.js"
 import {
+  createStepsFromDefinition,
   createStepsForPhase,
   createAllSteps,
   getStepsByRole,
   getPendingSteps,
 } from "./index.js"
+
+describe("createStepsFromDefinition", () => {
+  it("从 workflow actions 恢复 AI、integration 与 Heinrich capabilities", () => {
+    const node: WorkflowNodeSpec = {
+      key: "compatibility-node",
+      phase: Phase.DEVELOPMENT,
+      name: "Compatibility Node",
+      description: "Restores capabilities from actions",
+      responsibleRoles: [Role.DEV],
+      dependsOn: [],
+      actions: [
+        { type: "manual", instructions: "人工确认" },
+        { type: "command", executable: "node", args: ["--version"] },
+        {
+          type: "ai",
+          assistant: AIAssistantType.DOCUMENT_SYNC,
+          input: "同步文档",
+          outputFile: "documentation.md",
+          ifExists: "extend",
+        },
+        { type: "integration", service: "sonar", operation: "runScan" },
+        { type: "heinrich", delta: 2, level: HeinrichLevel.MINOR },
+      ],
+    }
+    const definition: WorkflowDefinition = {
+      version: 2,
+      name: "Compatibility Test",
+      nodeIdMapping: { [node.key]: "node-compatibility" },
+      nodes: [node],
+    }
+
+    const step = createStepsFromDefinition("proj_test", definition, Phase.DEVELOPMENT)[0]!
+
+    expect(step.actions).toBe(node.actions)
+    expect(step.capabilities).toEqual([
+      {
+        kind: "ai",
+        assistant: AIAssistantType.DOCUMENT_SYNC,
+        input: "同步文档",
+        outputFile: "documentation.md",
+        ifExists: "extend",
+      },
+      { kind: "integration", service: "sonar", op: "runScan" },
+      { kind: "heinrich", delta: 2, level: HeinrichLevel.MINOR },
+    ])
+  })
+
+  it("manual 与 command actions 不生成 capabilities", () => {
+    const node: WorkflowNodeSpec = {
+      key: "execution-only-node",
+      phase: Phase.DEVELOPMENT,
+      name: "Execution Only Node",
+      description: "Keeps execution-only actions",
+      responsibleRoles: [Role.DEV],
+      dependsOn: [],
+      actions: [
+        { type: "manual" },
+        { type: "command", executable: "node", args: ["--version"] },
+      ],
+    }
+    const definition: WorkflowDefinition = {
+      version: 2,
+      name: "Execution Test",
+      nodeIdMapping: { [node.key]: "node-execution-only" },
+      nodes: [node],
+    }
+
+    const step = createStepsFromDefinition("proj_test", definition, Phase.DEVELOPMENT)[0]!
+    expect(step.capabilities).toBeUndefined()
+  })
+})
 
 describe("createStepsForPhase", () => {
   it("REQUIREMENTS_ANALYSIS 阶段生成12个步骤", () => {

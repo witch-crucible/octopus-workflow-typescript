@@ -20,6 +20,25 @@ afterEach(() => {
 })
 
 describe("AI 节点文件输出", () => {
+  it("未显式配置 input 时使用节点回退输入", () => {
+    const prepared = prepareAIOutput({
+      type: "ai",
+      assistant: AIAssistantType.MEETING_MINUTES,
+    }, createTemporaryDirectory(), "AI Meeting Minutes：Generate meeting minutes")
+
+    expect(prepared.input).toBe("AI Meeting Minutes：Generate meeting minutes")
+  })
+
+  it("显式 input 优先于节点回退输入", () => {
+    const prepared = prepareAIOutput({
+      type: "ai",
+      assistant: AIAssistantType.MEETING_MINUTES,
+      input: "会议原文",
+    }, createTemporaryDirectory(), "AI Meeting Minutes：Generate meeting minutes")
+
+    expect(prepared.input).toBe("会议原文")
+  })
+
   it("目标不存在时创建文档", () => {
     const nodePath = createTemporaryDirectory()
     const prepared = prepareAIOutput({

@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   buildWorkflowCommands(program, engine)
   buildMonitorCommands(program, engine)
 
-  program.parse(process.argv)
+  await program.parseAsync(process.argv)
 
   // 未指定命令时显示帮助
   if (!process.argv.slice(2).length) {
