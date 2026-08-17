@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from "vitest"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { Phase } from "@octopus/core/phase.js"
 import { Role } from "@octopus/core/role.js"
 import { AIAssistantType } from "@octopus/core/agent.js"
+import { getWorkflowSpec } from "@octopus/core/spec.js"
 import {
   appendWorkflowNode,
   definitionFromBuiltInSpec,
@@ -52,24 +54,24 @@ describe("项目工作流节点写入", () => {
   it("追加节点并创建工作目录", () => {
     const projectRoot = createProjectRoot()
     const result = appendWorkflowNode(projectRoot, {
-      key: "generate-documentation",
+      key: "generate-report",
       phase: Phase.REQUIREMENTS_ANALYSIS,
-      name: "Generate Documentation",
-      description: "Generate or extend technical documentation",
+      name: "Generate Report",
+      description: "Generate a one-off delivery report",
       responsibleRoles: [Role.AI],
       dependsOn: ["requirements-analysis-and-brd-design"],
       actions: [{
         type: "ai",
         assistant: AIAssistantType.DOCUMENT_SYNC,
-        outputFile: "documentation.md",
+        outputFile: "report.md",
         ifExists: "extend",
       }],
     })
 
     const saved = loadWorkflowDefinition(projectRoot)
-    expect(saved.nodes.some((node) => node.key === "generate-documentation")).toBe(true)
-    expect(saved.nodeIdMapping["generate-documentation"]).toBe(result.nodeId)
-    expect(existsSync(result.workspace.nodePath("generate-documentation"))).toBe(true)
+    expect(saved.nodes.some((node) => node.key === "generate-report")).toBe(true)
+    expect(saved.nodeIdMapping["generate-report"]).toBe(result.nodeId)
+    expect(existsSync(result.workspace.nodePath("generate-report"))).toBe(true)
   })
 
   it("拒绝重复节点且不改写原定义", () => {
@@ -121,5 +123,49 @@ describe("工作流叠加", () => {
     expect(resolved.nodeIdMapping["extra-qa-gate"]).toBe("overlay:extra-qa-gate")
     const afterDemo = resolved.nodes.find((node) => node.dependsOn.includes("weekly-feature-demo"))
     expect(afterDemo).toBeUndefined()
+  })
+})
+
+const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url))
+
+describe("内置 spec 与 workflow.yaml 一致性", () => {
+  it("spec 步骤 id 集合与 workflow.yaml nodeIdMapping 双向一致", () => {
+    const definition = loadWorkflowDefinition(REPO_ROOT)
+    const specIds = new Set(getWorkflowSpec().phases.flatMap((phase) => phase.steps.map((step) => step.id)))
+    const yamlIds = new Set(Object.values(definition.nodeIdMapping))
+    expect([...specIds].sort()).toEqual([...yamlIds].sort())
+  })
+
+  it("spec 每阶段步骤数与 workflow.yaml 对应阶段节点数一致", () => {
+    const definition = loadWorkflowDefinition(REPO_ROOT)
+    const spec = getWorkflowSpec()
+    const byPhase = new Map(spec.phases.map((phase) => [phase.phase, phase.steps.length]))
+    for (const node of definition.nodes) {
+      const expected = byPhase.get(node.phase)
+      expect(expected, `节点 ${node.key} 阶段 ${node.phase} 的 spec 步骤数缺失`).toBeDefined()
+      byPhase.set(node.phase, (byPhase.get(node.phase) ?? 0) - 1)
+    }
+    for (const [phase, remaining] of byPhase) {
+      expect(remaining, `阶段 ${phase} 的 spec 步骤数与 workflow.yaml 节点数不一致`).toBe(0)
+    }
+  })
+})
+
+describe("definitionFromBuiltInSpec 生成 generate-documentation", () => {
+  it("包含 generate-documentation 节点且 actions 映射正确", () => {
+    const definition = definitionFromBuiltInSpec()
+    const node = definition.nodes.find((candidate) => candidate.key === "generate-documentation")
+    expect(node).toBeDefined()
+    expect(node?.phase).toBe(Phase.REQUIREMENTS_ANALYSIS)
+    expect(node?.responsibleRoles).toEqual([Role.AI])
+    expect(node?.dependsOn).toEqual(["requirements-analysis-and-brd-design"])
+    expect(definition.nodeIdMapping["generate-documentation"]).toBe("10.doc")
+    const aiActions = node?.actions.filter((action) => action.type === "ai") ?? []
+    expect(aiActions).toHaveLength(1)
+    const action = aiActions[0]
+    if (!action || action.type !== "ai") throw new Error("generate-documentation 应包含 ai 动作")
+    expect(action.assistant).toBe(AIAssistantType.DOCUMENT_SYNC)
+    expect(action.outputFile).toBe("documentation.md")
+    expect(action.input).toContain("Preserve valid existing content and extend changed sections.")
   })
 })

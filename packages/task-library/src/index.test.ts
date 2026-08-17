@@ -85,9 +85,9 @@ describe("createStepsFromDefinition", () => {
 })
 
 describe("createStepsForPhase", () => {
-  it("REQUIREMENTS_ANALYSIS 阶段生成12个步骤", () => {
+  it("REQUIREMENTS_ANALYSIS 阶段生成13个步骤", () => {
     const steps = createStepsForPhase("proj_test", Phase.REQUIREMENTS_ANALYSIS)
-    expect(steps.length).toBe(12)
+    expect(steps.length).toBe(13)
     expect(steps[0]!.phase).toBe(Phase.REQUIREMENTS_ANALYSIS)
     expect(steps[0]!.status).toBe(TaskStatus.PENDING)
   })

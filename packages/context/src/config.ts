@@ -10,6 +10,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
+import { z } from "zod"
 import type { AIClientConfig } from "@octopus/agent-layer/index.js"
 import { ConfigError } from "@octopus/core/errors.js"
 import type { PluginRef } from "@octopus/plugin/index.js"
@@ -32,6 +33,53 @@ export interface OctopusConfig {
   /** 本机插件引用；与 workflow.yaml plugins 按顺序拼接 */
   plugins: PluginRef[]
 }
+
+/**
+ * 配置文件宽松结构校验。只校验已知字段的类型，允许额外字段与缺省字段
+ * （zod object 默认 strip 未知键，且所有键都是可选的）。
+ */
+const pluginRefSchema = z.union([
+  z.string(),
+  z
+    .object({
+      id: z.string().optional(),
+      path: z.string().optional(),
+      package: z.string().optional(),
+      enabled: z.boolean().optional(),
+      options: z.record(z.unknown()).optional(),
+    })
+    .refine(
+      (value) =>
+        value.id !== undefined ||
+        value.path !== undefined ||
+        value.package !== undefined ||
+        value.enabled !== undefined ||
+        value.options !== undefined,
+      { message: "插件引用对象必须包含至少一个已知字段" },
+    ),
+])
+
+const configFileSchema = z.object({
+  storeDir: z.string().optional(),
+  ai: z
+    .object({
+      defaultModel: z.string().optional(),
+      defaultTimeout: z.number().optional(),
+      claudePath: z.string().optional(),
+      persistent: z.boolean().optional(),
+      retries: z.number().optional(),
+      retryDelay: z.number().optional(),
+    })
+    .optional(),
+  workflow: z
+    .object({
+      strictPermissions: z.boolean().optional(),
+      aiGatingEnabled: z.boolean().optional(),
+      heinrichThreshold: z.number().optional(),
+    })
+    .optional(),
+  plugins: z.array(pluginRefSchema).optional(),
+})
 
 /** 默认配置 */
 export const DEFAULT_CONFIG: OctopusConfig = {
@@ -89,7 +137,15 @@ function loadFromFile(storeDir: string): Partial<OctopusConfig> {
     throw new ConfigError(`配置文件 ${configPath} 顶层必须是对象`, configPath)
   }
 
-  return parsed as Partial<OctopusConfig>
+  const result = configFileSchema.safeParse(parsed)
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+      .join("; ")
+    throw new ConfigError(`配置文件 ${configPath} 字段校验失败：${issues}`, configPath)
+  }
+
+  return result.data as Partial<OctopusConfig>
 }
 
 /** 合并配置 */

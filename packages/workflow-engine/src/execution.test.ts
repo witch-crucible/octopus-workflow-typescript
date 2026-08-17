@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createStateStore } from "@octopus/context/index.js"
 import type { NodeRun } from "@octopus/core/execution.js"
+import { Phase } from "@octopus/core/phase.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { WorkflowEngine } from "./index.js"
 
@@ -16,6 +17,15 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(testStoreDir, { recursive: true, force: true })
 })
+
+/** 完成某阶段全部任务 */
+function completeAllPhaseTasks(engine: WorkflowEngine, projectId: string, phase: Phase): void {
+  for (const task of engine.getTasks(projectId, { phase })) {
+    if (task.status !== TaskStatus.COMPLETED) {
+      engine.completeTask(projectId, task.id)
+    }
+  }
+}
 
 describe("NodeExecutionService", () => {
   it("取消运行后同步把 IN_PROGRESS 节点标记为 BLOCKED", () => {
@@ -84,5 +94,140 @@ describe("NodeExecutionService", () => {
 
     await expect(engine.runWorkflow(state.projectId)).rejects.toThrow("worker 启动失败")
     expect(launch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("WorkflowEngine 事务化更新", () => {
+  it("并发完成同一项目不同任务时不丢更新，且不再经由 save 落库", async () => {
+    const store = createStateStore({ storeDir: testStoreDir })
+    const saveSpy = vi.spyOn(store, "save")
+    const engine = new WorkflowEngine({ store })
+    const state = engine.initProject("concurrent_tasks")
+    saveSpy.mockClear()
+    const pending = engine.getTasks(state.projectId).filter((t) => t.status === TaskStatus.PENDING)
+    const first = pending[0]!
+    const second = pending[1]!
+    const concurrentEngine = new WorkflowEngine({ store })
+
+    await Promise.all([
+      Promise.resolve().then(() => engine.completeTask(state.projectId, first.id)),
+      Promise.resolve().then(() => concurrentEngine.completeTask(state.projectId, second.id)),
+    ])
+
+    expect(saveSpy).not.toHaveBeenCalled()
+    const after = engine.getTasks(state.projectId)
+    expect(after.find((t) => t.id === first.id)?.status).toBe(TaskStatus.COMPLETED)
+    expect(after.find((t) => t.id === second.id)?.status).toBe(TaskStatus.COMPLETED)
+  })
+})
+
+describe("Heinrich 审计步骤自动完成", () => {
+  it("assessQuality 成功后将当前阶段的 heinrich.audit.<phase> 步骤标记为 COMPLETED", () => {
+    const engine = new WorkflowEngine({
+      store: createStateStore({ storeDir: testStoreDir }),
+      heinrichThreshold: 1,
+    })
+    const state = engine.initProject("heinrich_audit_auto")
+    completeAllPhaseTasks(engine, state.projectId, Phase.REQUIREMENTS_ANALYSIS)
+    // 阶段前进会给下一阶段计数 +1，达到阈值 1 时创建审计步骤
+    const design = engine.advancePhase(state.projectId)
+    expect(design.currentPhase).toBe(Phase.DESIGN)
+    const auditId = `heinrich.audit.${Phase.DESIGN}`
+    const auditStep = engine.getState(state.projectId).steps.find((s) => s.id === auditId)
+    expect(auditStep).toBeDefined()
+    expect(auditStep?.status).toBe(TaskStatus.PENDING)
+
+    engine.assessQuality(state.projectId)
+
+    const completed = engine.getState(state.projectId).steps.find((s) => s.id === auditId)
+    expect(completed?.status).toBe(TaskStatus.COMPLETED)
+    expect(completed?.completedAt).toBeTruthy()
+  })
+
+  it("无审计步骤时 assessQuality 幂等，不影响原评估结果", () => {
+    const engine = new WorkflowEngine({
+      store: createStateStore({ storeDir: testStoreDir }),
+      heinrichThreshold: 100,
+    })
+    const state = engine.initProject("heinrich_audit_none")
+    const assessment = engine.assessQuality(state.projectId)
+    expect(assessment.verdict).toBe("INSUFFICIENT_DATA")
+    const auditStep = engine.getState(state.projectId).steps.find((s) => s.id === `heinrich.audit.${state.currentPhase}`)
+    expect(auditStep).toBeUndefined()
+  })
+})
+
+describe("recoverStaleRuns", () => {
+  function executionsOf(engine: WorkflowEngine): {
+    createRun(input: { id: string; projectId: string; nodeId: string; forced: boolean; stdoutPath: string; stderrPath: string }): NodeRun
+    updateRun(runId: string, patch: Partial<NodeRun>): NodeRun
+    appendEvent(event: unknown): unknown
+  } {
+    return (engine.execution as unknown as {
+      executions: {
+        createRun(input: { id: string; projectId: string; nodeId: string; forced: boolean; stdoutPath: string; stderrPath: string }): NodeRun
+        updateRun(runId: string, patch: Partial<NodeRun>): NodeRun
+        appendEvent(event: unknown): unknown
+      }
+    }).executions
+  }
+
+  it("心跳超时的 RUNNING 运行被中断，节点置 BLOCKED 并写入 RUN_FAILED 事件", () => {
+    const store = createStateStore({ storeDir: testStoreDir })
+    const engine = new WorkflowEngine({ store })
+    const state = engine.initProject("stale_runs")
+    const step = state.steps.find((candidate) => candidate.id === "10.1")
+    if (!step) throw new Error("测试节点不存在")
+    const executions = executionsOf(engine)
+    const staleRun = executions.createRun({
+      id: "run_stale_1",
+      projectId: state.projectId,
+      nodeId: step.id,
+      forced: false,
+      stdoutPath: "stale.out",
+      stderrPath: "stale.err",
+    })
+    const oldHeartbeat = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    executions.updateRun(staleRun.id, { status: "RUNNING", heartbeatAt: oldHeartbeat })
+    store.update(state.projectId, (current) => {
+      const target = current.steps.find((candidate) => candidate.id === step.id)
+      if (target) target.status = TaskStatus.IN_PROGRESS
+      return current
+    })
+
+    const recovered = engine.recoverStaleRuns(state.projectId)
+
+    expect(recovered).toBe(1)
+    expect(engine.execution.listRuns(state.projectId).find((run) => run.id === staleRun.id)?.status).toBe("INTERRUPTED")
+    expect(engine.getState(state.projectId).steps.find((candidate) => candidate.id === step.id)).toMatchObject({
+      status: TaskStatus.BLOCKED,
+      notes: "运行超过心跳超时未上报，判定为僵死",
+    })
+    const failedEvents = engine.execution.eventsAfter(state.projectId).filter((event) => event.type === "RUN_FAILED")
+    expect(failedEvents).toHaveLength(1)
+    expect(failedEvents[0]?.payload).toMatchObject({ status: "INTERRUPTED" })
+  })
+
+  it("心跳新鲜的 RUNNING 运行不会被误杀", () => {
+    const store = createStateStore({ storeDir: testStoreDir })
+    const engine = new WorkflowEngine({ store })
+    const state = engine.initProject("fresh_runs")
+    const step = state.steps.find((candidate) => candidate.id === "10.1")
+    if (!step) throw new Error("测试节点不存在")
+    const executions = executionsOf(engine)
+    const freshRun = executions.createRun({
+      id: "run_fresh_1",
+      projectId: state.projectId,
+      nodeId: step.id,
+      forced: false,
+      stdoutPath: "fresh.out",
+      stderrPath: "fresh.err",
+    })
+    executions.updateRun(freshRun.id, { status: "RUNNING", heartbeatAt: new Date().toISOString() })
+
+    const recovered = engine.recoverStaleRuns(state.projectId, 30_000)
+
+    expect(recovered).toBe(0)
+    expect(engine.execution.listRuns(state.projectId).find((run) => run.id === freshRun.id)?.status).toBe("RUNNING")
   })
 })

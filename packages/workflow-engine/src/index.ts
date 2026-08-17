@@ -1,8 +1,9 @@
 /**
  * Workflow Engine 包 —— 工作流状态机引擎。
  *
- * 使用 xstate v5 定义阶段转换、任务生命周期、阶段门控校验。
- * 状态持久化通过 @octopus/context 的 StateStore 实现。
+ * 阶段转换、任务生命周期与阶段门控校验均为命令式实现（不使用 xstate）。
+ * 状态持久化通过 @octopus/context 的 StateStore 完成；所有读改写方法
+ * 都在 store.update 的单个 SQLite 事务内执行，避免并发写入互相覆盖。
  *
  * 阶段转换规则（映射 PlantUML）：
  * - 只能按顺序前进：REQUIREMENTS → DESIGN → DEVELOPMENT → TESTING → DEPLOYMENT → MAINTENANCE
@@ -22,12 +23,11 @@ import type {
 import { TaskStatus } from "@octopus/core/task.js"
 import { StageStatus } from "@octopus/core/task.js"
 import type { StageProgress, StageInfo } from "@octopus/core/task.js"
-import type { Checklist, ChecklistItem } from "@octopus/core/checklist.js"
+import type { Checklist } from "@octopus/core/checklist.js"
 import { ChecklistItemStatus } from "@octopus/core/checklist.js"
 import type { HeinrichRecord, HeinrichObservation, QualityAssessment } from "@octopus/core/risk.js"
 import { QualityVerdict, HEINRICH_IDEAL_RATIO, createEmptyHeinrichRecord, HeinrichLevel } from "@octopus/core/risk.js"
 import type { Artifact, ArtifactType } from "@octopus/core/artifact.js"
-import type { ProjectId } from "@octopus/core/branded-ids.js"
 import { PhaseId, TaskId, ChecklistItemId, ObservationId, ArtifactId } from "@octopus/core/branded-ids.js"
 import { Role } from "@octopus/core/role.js"
 import { InvalidPhaseTransitionError, PhaseLockedError } from "@octopus/core/errors.js"
@@ -72,6 +72,20 @@ import type { RunNodeOptions, RunWorkflowOptions } from "./execution.js"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/** 同步阻塞休眠（微秒级退避用；Node 主线程可用） */
+function sleep(ms: number): void {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    // busy wait
+  }
+}
+
+/** 是否 SQLite 并发写锁冲突（可重试） */
+function isWriteLockError(cause: unknown): boolean {
+  const err = cause as { code?: string; message?: string }
+  return err?.code === "SQLITE_BUSY" || (typeof err?.message === "string" && err.message.includes("database is locked"))
 }
 
 function isIsoDate(value: unknown): value is string {
@@ -239,6 +253,27 @@ export class WorkflowEngine {
     return loadResolvedWorkflowDefinition(projectRoot, this.pluginHost.overlays)
   }
 
+  /**
+   * 在单个 SQLite 事务内完成读改写；并发写锁冲突（SQLITE_BUSY）时按指数
+   * 退避重试整个事务，避免跨进程并发写入互相覆盖或互相死锁。
+   */
+  private transactionalUpdate(
+    projectId: string,
+    updater: (state: WorkflowState) => WorkflowState,
+  ): WorkflowState {
+    let attempt = 0
+    for (;;) {
+      try {
+        return this.store.update(projectId, updater)
+      } catch (cause) {
+        if (!isWriteLockError(cause) || attempt >= 30) throw cause
+        attempt++
+        // 抖动退避：避免多个进程以相同节奏反复碰撞
+        sleep(1 + Math.floor(Math.random() * (2 ** Math.min(attempt, 7))))
+      }
+    }
+  }
+
   /** 节点运行与监控服务。 */
   get execution(): NodeExecutionService {
     return this.nodeExecution
@@ -252,6 +287,11 @@ export class WorkflowEngine {
   /** 获取当前节点、READY 节点和活动运行摘要。 */
   getExecutionSnapshot(projectId: string): WorkflowExecutionSnapshot {
     return this.nodeExecution.getSnapshot(projectId)
+  }
+
+  /** 恢复僵死运行（心跳超时的 RUNNING → INTERRUPTED，节点置 BLOCKED），返回恢复数量。 */
+  recoverStaleRuns(projectId: string, staleAfterMs?: number): number {
+    return this.nodeExecution.recoverStaleRuns(projectId, staleAfterMs)
   }
 
   /** 独立运行一个节点。 */
@@ -316,7 +356,7 @@ export class WorkflowEngine {
     const appended = appendWorkflowNode(state.projectRoot, node)
     const activated = node.phase === state.currentPhase
     if (activated) {
-      this.store.update(projectId, (current) => {
+      this.transactionalUpdate(projectId, (current) => {
         if (current.steps.some((step) => step.id === appended.nodeId)) throw new Error(`节点已存在: ${node.key}`)
         current.steps.push(createStepFromNode(projectId, node, appended.definition))
         return current
@@ -418,7 +458,7 @@ export class WorkflowEngine {
     this.checkHeinrichAuditTrigger(working, workingStep.phase)
 
     // 乐观校验：仅当本次读取的原始快照仍是最新时才落库，否则交由调用方重试
-    return this.store.update(projectId, (current) => {
+    return this.transactionalUpdate(projectId, (current) => {
       if (JSON.stringify(current) !== expectedState) {
         throw new Error(`步骤 ${stepId} 执行期间项目状态已变更，请确认最新状态后重试`)
       }
@@ -525,21 +565,21 @@ export class WorkflowEngine {
 
   /** 更新步骤状态（按步骤 id；status 沿用 StageStatus 值域，与 TaskStatus 等价） */
   updateStageStatus(projectId: string, stageId: string, status: StageStatus): WorkflowState {
-    const state = this.getState(projectId)
-    const step = state.steps.find((s) => s.id === stageId)
+    return this.transactionalUpdate(projectId, (current) => {
+      const step = current.steps.find((s) => s.id === stageId)
 
-    if (!step) {
-      throw new Error(`阶段步骤不存在: ${stageId}`)
-    }
+      if (!step) {
+        throw new Error(`阶段步骤不存在: ${stageId}`)
+      }
 
-    step.status = status as unknown as TaskStatus
-    step.updatedAt = new Date().toISOString()
-    if (status === StageStatus.COMPLETED) {
-      step.completedAt = new Date().toISOString()
-    }
+      step.status = status as unknown as TaskStatus
+      step.updatedAt = new Date().toISOString()
+      if (status === StageStatus.COMPLETED) {
+        step.completedAt = new Date().toISOString()
+      }
 
-    this.store.save(state)
-    return state
+      return current
+    })
   }
 
   /** 获取步骤运行态视图（StageInfo，从 steps 派生） */
@@ -631,6 +671,7 @@ export class WorkflowEngine {
 
   /** 前进到下一阶段 */
   advancePhase(projectId: string, skipAiGating?: boolean): WorkflowState {
+    // 只读快照上做门控检查；真实变更在事务内基于最新状态完成
     const state = this.getState(projectId)
     const gate = this.checkAdvanceGate(state)
 
@@ -649,7 +690,8 @@ export class WorkflowEngine {
       throw new InvalidPhaseTransitionError(state.currentPhase, "NEXT", "已是最终阶段")
     }
 
-    // AI 门控
+    // AI 门控（handler 收到的是旧快照，保持现有行为）
+    let aiAllowed = false
     if (this.aiGatingEnabled && !skipAiGating) {
       const aiResult = this.emitAIEvent({
         type: "onPhaseAdvance",
@@ -659,64 +701,76 @@ export class WorkflowEngine {
       })
 
       if (!aiResult.allowed) {
-        state.aiGateResults.push({
-          phase: state.currentPhase,
-          allowed: false,
-          ...(aiResult.reason !== undefined ? { reason: aiResult.reason } : {}),
-          timestamp: new Date().toISOString(),
+        this.transactionalUpdate(projectId, (current) => {
+          current.aiGateResults.push({
+            phase: current.currentPhase,
+            allowed: false,
+            ...(aiResult.reason !== undefined ? { reason: aiResult.reason } : {}),
+            timestamp: new Date().toISOString(),
+          })
+          return current
         })
-        this.store.save(state)
         throw new PhaseLockedError(state.currentPhase, [`AI 门控拒绝: ${aiResult.reason ?? "未通过预检查"}`])
       }
 
-      state.aiGateResults.push({
-        phase: state.currentPhase,
-        allowed: true,
-        timestamp: new Date().toISOString(),
-      })
+      aiAllowed = true
     }
 
-    // 标记当前阶段为 COMPLETED
-    state.phaseStatus[state.currentPhase] = PhaseLock.COMPLETED
-    // 激活下一阶段
-    state.phaseStatus[next] = PhaseLock.ACTIVE
-    state.currentPhase = next
-
-    // 生成下一阶段的步骤（唯一真相源）
-    const existingIds = new Set(state.steps.map((s) => s.id))
-    const definition = state.projectRoot ? this.loadDefinition(state.projectRoot) : undefined
-    const nextSteps = definition
-      ? createStepsFromDefinition(state.projectId, definition, next)
-      : createStepsForPhase(state.projectId, next)
-    for (const step of nextSteps) {
-      if (!existingIds.has(step.id)) {
-        state.steps.push(step)
+    return this.transactionalUpdate(projectId, (current) => {
+      if (aiAllowed) {
+        current.aiGateResults.push({
+          phase: current.currentPhase,
+          allowed: true,
+          timestamp: new Date().toISOString(),
+        })
       }
-    }
 
-    // 初始化下一阶段的清单
-    if (!state.checklists[next]) {
-      state.checklists[next] = createEmptyChecklist(next)
-    }
+      // 标记当前阶段为 COMPLETED
+      current.phaseStatus[current.currentPhase] = PhaseLock.COMPLETED
+      // 激活下一阶段
+      const transitionTo = getNextPhase(current.currentPhase)
+      if (!transitionTo) {
+        throw new InvalidPhaseTransitionError(current.currentPhase, "NEXT", "已是最终阶段")
+      }
+      current.phaseStatus[transitionTo] = PhaseLock.ACTIVE
+      current.currentPhase = transitionTo
 
-    // Checklist 继承
-    this.inheritChecklist(state, state.currentPhase)
+      // 生成下一阶段的步骤（唯一真相源）
+      const existingIds = new Set(current.steps.map((s) => s.id))
+      const definition = current.projectRoot ? this.loadDefinition(current.projectRoot) : undefined
+      const nextSteps = definition
+        ? createStepsFromDefinition(current.projectId, definition, transitionTo)
+        : createStepsForPhase(current.projectId, transitionTo)
+      for (const step of nextSteps) {
+        if (!existingIds.has(step.id)) {
+          current.steps.push(step)
+        }
+      }
 
-    // 海因里希三角：阶段前进时记录条数触发计数
-    state.heinrich.triggerCounts[next] = (state.heinrich.triggerCounts[next] ?? 0) + 1
+      // 初始化下一阶段的清单
+      if (!current.checklists[transitionTo]) {
+        current.checklists[transitionTo] = createEmptyChecklist(transitionTo)
+      }
 
-    // Heinrich 条数审计触发
-    this.checkHeinrichAuditTrigger(state, next)
+      // Checklist 继承
+      this.inheritChecklist(current, current.currentPhase)
 
-    // 注：阶段前进时的 AI Checklist 增量推荐已迁移为 spec 步骤 capability，
-    // 由 runStepCapabilities 显式触发（见 Phase 3），此处不再内联异步调用。
+      // 海因里希三角：阶段前进时记录条数触发计数
+      current.heinrich.triggerCounts[transitionTo] = (current.heinrich.triggerCounts[transitionTo] ?? 0) + 1
 
-    this.store.save(state)
-    return state
+      // Heinrich 条数审计触发
+      this.checkHeinrichAuditTrigger(current, transitionTo)
+
+      // 注：阶段前进时的 AI Checklist 增量推荐已迁移为 spec 步骤 capability，
+      // 由 runStepCapabilities 显式触发（见 Phase 3），此处不再内联异步调用。
+
+      return current
+    })
   }
 
   /** 回退到指定阶段 */
   rollbackTo(projectId: string, targetPhase: Phase): WorkflowState {
+    // 只读快照上做校验；真实变更在事务内基于最新状态完成
     const state = this.getState(projectId)
     const currentIdx = getPhaseIndex(state.currentPhase)
     const targetIdx = getPhaseIndex(targetPhase)
@@ -729,7 +783,8 @@ export class WorkflowEngine {
       )
     }
 
-    // AI 门控
+    // AI 门控（handler 收到的是旧快照，保持现有行为）
+    let aiAllowed = false
     if (this.aiGatingEnabled) {
       const aiResult = this.emitAIEvent({
         type: "onPhaseRollback",
@@ -739,37 +794,49 @@ export class WorkflowEngine {
       })
 
       if (!aiResult.allowed) {
-        state.aiGateResults.push({
-          phase: state.currentPhase,
-          allowed: false,
-          ...(aiResult.reason !== undefined ? { reason: aiResult.reason } : {}),
-          timestamp: new Date().toISOString(),
+        this.transactionalUpdate(projectId, (current) => {
+          current.aiGateResults.push({
+            phase: current.currentPhase,
+            allowed: false,
+            ...(aiResult.reason !== undefined ? { reason: aiResult.reason } : {}),
+            timestamp: new Date().toISOString(),
+          })
+          return current
         })
-        this.store.save(state)
         throw new PhaseLockedError(state.currentPhase, [`AI 门控拒绝回退: ${aiResult.reason ?? "未通过预检查"}`])
       }
 
-      state.aiGateResults.push({
-        phase: state.currentPhase,
-        allowed: true,
-        timestamp: new Date().toISOString(),
-      })
+      aiAllowed = true
     }
 
-    // 锁定当前阶段后的所有阶段
-    for (let i = currentIdx; i >= 0; i--) {
-      const phase = PHASE_ORDER[i]
-      if (!phase) continue
-      if (i > targetIdx) {
-        state.phaseStatus[phase] = PhaseLock.LOCKED
-      } else if (i === targetIdx) {
-        state.phaseStatus[phase] = PhaseLock.ACTIVE
+    return this.transactionalUpdate(projectId, (current) => {
+      if (aiAllowed) {
+        current.aiGateResults.push({
+          phase: current.currentPhase,
+          allowed: true,
+          timestamp: new Date().toISOString(),
+        })
       }
-    }
 
-    state.currentPhase = targetPhase
-    this.store.save(state)
-    return state
+      const currentIdx = getPhaseIndex(current.currentPhase)
+      if (getPhaseIndex(targetPhase) > currentIdx) {
+        throw new InvalidPhaseTransitionError(current.currentPhase, targetPhase, "不能回退到后续阶段")
+      }
+
+      // 锁定当前阶段后的所有阶段
+      for (let i = currentIdx; i >= 0; i--) {
+        const phase = PHASE_ORDER[i]
+        if (!phase) continue
+        if (i > targetIdx) {
+          current.phaseStatus[phase] = PhaseLock.LOCKED
+        } else if (i === targetIdx) {
+          current.phaseStatus[phase] = PhaseLock.ACTIVE
+        }
+      }
+
+      current.currentPhase = targetPhase
+      return current
+    })
   }
 
   // ── 权限校验 ──
@@ -838,102 +905,106 @@ export class WorkflowEngine {
 
   /** 按 stageId 合并任务进度与执行信息 */
   importTasks(projectId: string, document: unknown): TaskImportResult {
+    // 文档格式校验为只读校验（事务外完成）
     const imported = validateTaskExportDocument(document)
-    const state = this.getState(projectId)
-    const stepsById = new Map<string, StepRuntime>()
+    let matched = 0
+    let updated = 0
+    const saved = this.transactionalUpdate(projectId, (current) => {
+      const stepsById = new Map<string, StepRuntime>()
 
-    for (const step of state.steps) {
-      if (stepsById.has(step.id)) {
-        throw new Error(`目标项目包含重复的 stageId: ${step.id}`)
+      for (const step of current.steps) {
+        if (stepsById.has(step.id)) {
+          throw new Error(`目标项目包含重复的 stageId: ${step.id}`)
+        }
+        stepsById.set(step.id, step)
       }
-      stepsById.set(step.id, step)
-    }
 
-    const matches = imported.tasks.map((task) => {
-      const step = stepsById.get(task.stageId)
-      if (!step) {
-        throw new Error(`目标项目不存在任务 stageId: ${task.stageId}`)
+      const matches = imported.tasks.map((task) => {
+        const step = stepsById.get(task.stageId)
+        if (!step) {
+          throw new Error(`目标项目不存在任务 stageId: ${task.stageId}`)
+        }
+        if (step.phase !== task.phase) {
+          throw new Error(`任务 ${task.stageId} 的阶段不匹配: ${task.phase} != ${step.phase}`)
+        }
+        return { task, step }
+      })
+
+      const importedAt = new Date().toISOString()
+      let localUpdated = 0
+      for (const { task, step } of matches) {
+        const assignedTo = step.assignedTo ?? null
+        const notes = step.notes ?? null
+        const completedAt = step.completedAt ?? null
+        if (step.status === task.status
+          && assignedTo === task.assignedTo
+          && notes === task.notes
+          && completedAt === task.completedAt) {
+          continue
+        }
+
+        step.status = task.status
+        if (task.assignedTo === null) delete step.assignedTo
+        else step.assignedTo = task.assignedTo
+        if (task.notes === null) delete step.notes
+        else step.notes = task.notes
+        if (task.completedAt === null) delete step.completedAt
+        else step.completedAt = task.completedAt
+        step.updatedAt = importedAt
+        localUpdated++
       }
-      if (step.phase !== task.phase) {
-        throw new Error(`任务 ${task.stageId} 的阶段不匹配: ${task.phase} != ${step.phase}`)
-      }
-      return { task, step }
+
+      matched = matches.length
+      updated = localUpdated
+      return current
     })
 
-    let updated = 0
-    const importedAt = new Date().toISOString()
-    for (const { task, step } of matches) {
-      const assignedTo = step.assignedTo ?? null
-      const notes = step.notes ?? null
-      const completedAt = step.completedAt ?? null
-      if (step.status === task.status
-        && assignedTo === task.assignedTo
-        && notes === task.notes
-        && completedAt === task.completedAt) {
-        continue
-      }
-
-      step.status = task.status
-      if (task.assignedTo === null) delete step.assignedTo
-      else step.assignedTo = task.assignedTo
-      if (task.notes === null) delete step.notes
-      else step.notes = task.notes
-      if (task.completedAt === null) delete step.completedAt
-      else step.completedAt = task.completedAt
-      step.updatedAt = importedAt
-      updated++
-    }
-
-    if (updated > 0) {
-      this.store.save(state)
-    }
-
     return {
-      projectId: state.projectId,
-      matched: matches.length,
+      projectId: saved.projectId,
+      matched,
       updated,
-      unchanged: matches.length - updated,
+      unchanged: matched - updated,
     }
   }
 
   /** 完成任务（按 taskId 定位对应步骤） */
   completeTask(projectId: string, taskId: string, role?: Role): WorkflowState {
-    const state = this.getState(projectId)
-    const step = state.steps.find((s) => s.taskId === taskId)
+    return this.transactionalUpdate(projectId, (current) => {
+      const step = current.steps.find((s) => s.taskId === taskId)
 
-    if (!step) {
-      throw new Error(`任务不存在: ${taskId}`)
-    }
+      if (!step) {
+        throw new Error(`任务不存在: ${taskId}`)
+      }
 
-    if (role) {
-      this.requireRole(projectId, taskId, role, step.responsibleRole)
-    }
+      if (role) {
+        this.requireRole(projectId, taskId, role, step.responsibleRole)
+      }
 
-    step.status = TaskStatus.COMPLETED
-    step.completedAt = new Date().toISOString()
-    step.updatedAt = new Date().toISOString()
+      step.status = TaskStatus.COMPLETED
+      step.completedAt = new Date().toISOString()
+      step.updatedAt = new Date().toISOString()
 
-    this.store.save(state)
-    return state
+      return current
+    })
   }
 
   /** 设置任务状态 */
   setTaskStatus(projectId: string, taskId: string, status: TaskStatus): WorkflowState {
-    const state = this.getState(projectId)
-    const step = state.steps.find((s) => s.taskId === taskId)
+    return this.transactionalUpdate(projectId, (current) => {
+      const step = current.steps.find((s) => s.taskId === taskId)
 
-    if (!step) {
-      throw new Error(`任务不存在: ${taskId}`)
-    }
+      if (!step) {
+        throw new Error(`任务不存在: ${taskId}`)
+      }
 
-    step.status = status
-    step.updatedAt = new Date().toISOString()
-    if (status === TaskStatus.COMPLETED) {
-      step.completedAt = new Date().toISOString()
-    }
+      step.status = status
+      step.updatedAt = new Date().toISOString()
+      if (status === TaskStatus.COMPLETED) {
+        step.completedAt = new Date().toISOString()
+      }
 
-    this.store.save(state)
-    return state
+      return current
+    })
   }
 
   /** 获取某阶段任务进度 */
@@ -967,69 +1038,68 @@ export class WorkflowEngine {
 
   /** 核验清单项 */
   verifyChecklistItem(projectId: string, phase: Phase, itemId: string, role?: Role): WorkflowState {
-    const state = this.getState(projectId)
-    const checklist = state.checklists[phase]
+    return this.transactionalUpdate(projectId, (current) => {
+      const checklist = current.checklists[phase]
 
-    if (!checklist) {
-      throw new Error(`阶段 ${phase} 没有清单`)
-    }
-
-    const item = checklist.items.find((i) => i.id === itemId)
-    if (!item) {
-      throw new Error(`清单项不存在: ${itemId}`)
-    }
-
-    if (role && this.strictPermissions) {
-      if (item.verifiedBy && role !== item.verifiedBy) {
-        throw new Error(`权限不足: 清单项需要角色 ${item.verifiedBy}，当前角色 ${role}`)
+      if (!checklist) {
+        throw new Error(`阶段 ${phase} 没有清单`)
       }
-    }
 
-    item.status = ChecklistItemStatus.VERIFIED
-    if (role) {
-      item.verifiedBy = role
-    }
-    item.verifiedAt = new Date().toISOString()
+      const item = checklist.items.find((i) => i.id === itemId)
+      if (!item) {
+        throw new Error(`清单项不存在: ${itemId}`)
+      }
 
-    this.store.save(state)
-    return state
+      if (role && this.strictPermissions) {
+        if (item.verifiedBy && role !== item.verifiedBy) {
+          throw new Error(`权限不足: 清单项需要角色 ${item.verifiedBy}，当前角色 ${role}`)
+        }
+      }
+
+      item.status = ChecklistItemStatus.VERIFIED
+      if (role) {
+        item.verifiedBy = role
+      }
+      item.verifiedAt = new Date().toISOString()
+
+      return current
+    })
   }
 
   /** 添加清单项 */
   addChecklistItem(projectId: string, phase: Phase, category: string, description: string): WorkflowState {
-    const state = this.getState(projectId)
-    if (!state.checklists[phase]) {
-      state.checklists[phase] = createEmptyChecklist(phase)
-    }
+    return this.transactionalUpdate(projectId, (current) => {
+      if (!current.checklists[phase]) {
+        current.checklists[phase] = createEmptyChecklist(phase)
+      }
 
-    const checklist = state.checklists[phase]
-    if (!checklist) throw new Error("无法创建清单")
+      const checklist = current.checklists[phase]
+      if (!checklist) throw new Error("无法创建清单")
 
-    const item: ChecklistItem = {
-      id: ChecklistItemId(`cl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-      category,
-      description,
-      status: ChecklistItemStatus.PENDING,
-    }
+      checklist.items.push({
+        id: ChecklistItemId(`cl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        category,
+        description,
+        status: ChecklistItemStatus.PENDING,
+      })
 
-    checklist.items.push(item)
-    this.store.save(state)
-    return state
+      return current
+    })
   }
 
   /** 删除清单项 */
   removeChecklistItem(projectId: string, phase: Phase, itemId: string): WorkflowState {
-    const state = this.getState(projectId)
-    const checklist = state.checklists[phase]
+    return this.transactionalUpdate(projectId, (current) => {
+      const checklist = current.checklists[phase]
 
-    if (!checklist) throw new Error(`阶段 ${phase} 没有清单`)
+      if (!checklist) throw new Error(`阶段 ${phase} 没有清单`)
 
-    const idx = checklist.items.findIndex((i) => i.id === itemId)
-    if (idx === -1) throw new Error(`清单项不存在: ${itemId}`)
+      const idx = checklist.items.findIndex((i) => i.id === itemId)
+      if (idx === -1) throw new Error(`清单项不存在: ${itemId}`)
 
-    checklist.items.splice(idx, 1)
-    this.store.save(state)
-    return state
+      checklist.items.splice(idx, 1)
+      return current
+    })
   }
 
   // ── 海因里希三角操作 ──
@@ -1042,19 +1112,19 @@ export class WorkflowEngine {
 
   /** 记录海因里希条数标记 */
   logHeinrichMarker(projectId: string, phase: Phase, description?: string): WorkflowState {
-    const state = this.getState(projectId)
-    state.heinrich.triggerCounts[phase] = (state.heinrich.triggerCounts[phase] ?? 0) + 1
+    return this.transactionalUpdate(projectId, (current) => {
+      current.heinrich.triggerCounts[phase] = (current.heinrich.triggerCounts[phase] ?? 0) + 1
 
-    state.heinrich.observations.push({
-      id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-      phase,
-      level: HeinrichLevel.TRIVIAL,
-      description: description ?? `Heinrich marker at ${phase}`,
-      notedAt: new Date().toISOString(),
+      current.heinrich.observations.push({
+        id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        phase,
+        level: HeinrichLevel.TRIVIAL,
+        description: description ?? `Heinrich marker at ${phase}`,
+        notedAt: new Date().toISOString(),
+      })
+
+      return current
     })
-
-    this.store.save(state)
-    return state
   }
 
   /** 检查 Heinrich 条数是否达到审计阈值 */
@@ -1085,50 +1155,66 @@ export class WorkflowEngine {
 
   /** 记录观测 */
   logObservation(projectId: string, phase: Phase, level: HeinrichLevel, description: string): WorkflowState {
-    const state = this.getState(projectId)
+    return this.transactionalUpdate(projectId, (current) => {
+      const observation: HeinrichObservation = {
+        id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        phase,
+        level,
+        description,
+        notedAt: new Date().toISOString(),
+      }
 
-    const observation: HeinrichObservation = {
-      id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-      phase,
-      level,
-      description,
-      notedAt: new Date().toISOString(),
-    }
+      current.heinrich.observations.push(observation)
 
-    state.heinrich.observations.push(observation)
+      // 更新计数
+      if (level === "MAJOR") current.heinrich.majorDefects += 1
+      else if (level === "MINOR") current.heinrich.minorDefects += 1
+      else if (level === "TRIVIAL") current.heinrich.trivialDefects += 1
 
-    // 更新计数
-    if (level === "MAJOR") state.heinrich.majorDefects += 1
-    else if (level === "MINOR") state.heinrich.minorDefects += 1
-    else if (level === "TRIVIAL") state.heinrich.trivialDefects += 1
-
-    this.store.save(state)
-    return state
+      return current
+    })
   }
 
   /** 解决观测 */
   resolveObservation(projectId: string, obsId: string): WorkflowState {
-    const state = this.getState(projectId)
-    const obs = state.heinrich.observations.find((o) => o.id === obsId)
+    return this.transactionalUpdate(projectId, (current) => {
+      const obs = current.heinrich.observations.find((o) => o.id === obsId)
 
-    if (!obs) throw new Error(`观测不存在: ${obsId}`)
+      if (!obs) throw new Error(`观测不存在: ${obsId}`)
 
-    obs.resolvedAt = new Date().toISOString()
-    this.store.save(state)
-    return state
+      obs.resolvedAt = new Date().toISOString()
+      return current
+    })
   }
 
   /** 质量评估 */
   assessQuality(projectId: string): QualityAssessment {
-    const state = this.getState(projectId)
-    const heinrich = state.heinrich
+    let assessment: QualityAssessment | undefined
+    this.transactionalUpdate(projectId, (current) => {
+      assessment = this.computeQualityAssessment(current.heinrich)
+      current.heinrich.observations.push({
+        id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        phase: current.currentPhase,
+        level: HeinrichLevel.TRIVIAL,
+        description: this.assessmentObservationDescription(assessment),
+        notedAt: new Date().toISOString(),
+      })
+      // 审计步骤自动完成：assessQuality 成功即视为该阶段 Heinrich 审计已满足
+      this.completeHeinrichAuditStep(current, current.currentPhase)
+      return current
+    })
+    return assessment!
+  }
+
+  /** 根据海因里希记录计算质量评估（纯函数，供事务内调用） */
+  private computeQualityAssessment(heinrich: HeinrichRecord): QualityAssessment {
     const idealRatio = HEINRICH_IDEAL_RATIO as unknown as Record<string, number>
     const major = idealRatio["MAJOR"]!
     const minor = idealRatio["MINOR"]!
     const trivial = idealRatio["TRIVIAL"]!
 
     if (heinrich.majorDefects === 0) {
-      const assessment = {
+      return {
         expectedMinor: 0,
         expectedTrivial: 0,
         actualMinor: heinrich.minorDefects,
@@ -1137,21 +1223,10 @@ export class WorkflowEngine {
         trivialRatio: 0,
         verdict: QualityVerdict.INSUFFICIENT_DATA,
       }
-
-      state.heinrich.observations.push({
-        id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-        phase: state.currentPhase,
-        level: HeinrichLevel.TRIVIAL,
-        description: `Quality assessment: ${assessment.verdict}`,
-        notedAt: new Date().toISOString(),
-      })
-
-      this.store.save(state)
-      return assessment
     }
 
     if (heinrich.minorDefects === 0 && heinrich.trivialDefects === 0) {
-      const assessment = {
+      return {
         expectedMinor: 0,
         expectedTrivial: 0,
         actualMinor: heinrich.minorDefects,
@@ -1160,17 +1235,6 @@ export class WorkflowEngine {
         trivialRatio: 0,
         verdict: QualityVerdict.INSUFFICIENT_DATA,
       }
-
-      state.heinrich.observations.push({
-        id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-        phase: state.currentPhase,
-        level: HeinrichLevel.TRIVIAL,
-        description: `Quality assessment: ${assessment.verdict}`,
-        notedAt: new Date().toISOString(),
-      })
-
-      this.store.save(state)
-      return assessment
     }
 
     const expectedMinor = heinrich.majorDefects * minor / major
@@ -1187,7 +1251,7 @@ export class WorkflowEngine {
       verdict = QualityVerdict.HEALTHY
     }
 
-    const assessment = {
+    return {
       expectedMinor,
       expectedTrivial,
       actualMinor: heinrich.minorDefects,
@@ -1196,17 +1260,25 @@ export class WorkflowEngine {
       trivialRatio,
       verdict,
     }
+  }
 
-    state.heinrich.observations.push({
-      id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-      phase: state.currentPhase,
-      level: HeinrichLevel.TRIVIAL,
-      description: `Quality assessment: ${verdict} (minorRatio=${minorRatio.toFixed(2)}, trivialRatio=${trivialRatio.toFixed(2)})`,
-      notedAt: new Date().toISOString(),
-    })
+  /** 生成质量评估的观测描述 */
+  private assessmentObservationDescription(assessment: QualityAssessment): string {
+    if (assessment.verdict === QualityVerdict.INSUFFICIENT_DATA) {
+      return `Quality assessment: ${assessment.verdict}`
+    }
+    return `Quality assessment: ${assessment.verdict} (minorRatio=${assessment.minorRatio.toFixed(2)}, trivialRatio=${assessment.trivialRatio.toFixed(2)})`
+  }
 
-    this.store.save(state)
-    return assessment
+  /** 自动完成当前阶段的 Heinrich 审计步骤（幂等：无审计步骤时不产生影响） */
+  private completeHeinrichAuditStep(state: WorkflowState, phase: Phase): void {
+    const auditId = `heinrich.audit.${phase}`
+    const auditStep = state.steps.find((s) => s.id === auditId)
+    if (!auditStep) return
+    const now = new Date().toISOString()
+    auditStep.status = TaskStatus.COMPLETED
+    auditStep.completedAt = now
+    auditStep.updatedAt = now
   }
 
   // ── Checklist 继承 ──
@@ -1254,25 +1326,24 @@ export class WorkflowEngine {
       filePath?: string
     },
   ): WorkflowState {
-    const state = this.getState(projectId)
+    return this.transactionalUpdate(projectId, (current) => {
+      const artifact = {
+        id: ArtifactId(`art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+        type: params.type,
+        title: params.title,
+        description: params.description,
+        phase: params.phase,
+        version: "0.1.0",
+        createdBy: params.createdBy,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...(params.content !== undefined ? { content: params.content } : {}),
+        ...(params.filePath !== undefined ? { filePath: params.filePath } : {}),
+      } as Artifact
 
-    const artifact = {
-      id: ArtifactId(`art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
-      type: params.type,
-      title: params.title,
-      description: params.description,
-      phase: params.phase,
-      version: "0.1.0",
-      createdBy: params.createdBy,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      ...(params.content !== undefined ? { content: params.content } : {}),
-      ...(params.filePath !== undefined ? { filePath: params.filePath } : {}),
-    } as Artifact
-
-    state.artifacts.push(artifact)
-    this.store.save(state)
-    return state
+      current.artifacts.push(artifact)
+      return current
+    })
   }
 
   /** 获取制品列表 */

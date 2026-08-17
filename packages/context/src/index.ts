@@ -77,12 +77,20 @@ class SqliteStateStore implements StateStore {
         state_json TEXT NOT NULL,
         updated_at TEXT NOT NULL
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS octopus_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      ) STRICT;
     `)
+    // 记录 schema 版本；迁移仍走 migrateWorkflowState 内存迁移，此处仅作元数据。
+    db.prepare("INSERT OR IGNORE INTO octopus_meta(key, value) VALUES ('schema_version', '1')").run()
   }
 
   private withDatabase<T>(callback: (db: Database.Database) => T): T {
     const db = new Database(this.databasePath)
     try {
+      // 外键级联依赖执行表的 REFERENCES projects 约束，需在每个连接上开启。
+      db.pragma("foreign_keys = ON")
       this.initialize(db)
       return callback(db)
     } finally {
@@ -163,6 +171,16 @@ class SqliteStateStore implements StateStore {
 
   deleteProject(projectId: string): void {
     this.withDatabase((db) => {
+      // 显式清理执行表，避免 PRAGMA foreign_keys 未开启时残留孤儿运行记录。
+      // 执行表由 execution store 负责建表，此处仅在表已存在时清理。
+      const hasTable = (name: string): boolean =>
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined
+      if (hasTable("workflow_runs")) {
+        db.prepare("DELETE FROM workflow_runs WHERE project_id = ?").run(projectId)
+      }
+      if (hasTable("workflow_events")) {
+        db.prepare("DELETE FROM workflow_events WHERE project_id = ?").run(projectId)
+      }
       db.prepare("DELETE FROM projects WHERE project_id = ?").run(projectId)
     })
   }

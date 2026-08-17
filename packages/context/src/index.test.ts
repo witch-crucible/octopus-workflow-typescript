@@ -1,9 +1,19 @@
 import { describe, it, expect, afterEach } from "vitest"
 import { existsSync, rmSync } from "node:fs"
+import { join } from "node:path"
+import Database from "better-sqlite3"
 import { createStateStore } from "./index.js"
+import { createExecutionStore } from "./execution.js"
 import { Phase } from "@octopus/core/phase.js"
 
 const TEST_STORE_DIR = ".octo_test"
+
+function readMeta(db: Database.Database, key: string): string | undefined {
+  const row = db.prepare("SELECT value FROM octopus_meta WHERE key = ?").get(key) as
+    | { value: string }
+    | undefined
+  return row?.value
+}
 
 describe("createStateStore", () => {
   afterEach(() => {
@@ -50,5 +60,43 @@ describe("createStateStore", () => {
     store.deleteProject(state.projectId)
     const projects = store.listProjects()
     expect(projects).not.toContain(state.projectId)
+  })
+
+  it("初始化写入 schema 版本且可读", () => {
+    createStateStore({ storeDir: TEST_STORE_DIR })
+    const db = new Database(join(TEST_STORE_DIR, "state.sqlite"))
+    try {
+      expect(readMeta(db, "schema_version")).toBe("1")
+    } finally {
+      db.close()
+    }
+  })
+
+  it("deleteProject 级联清理运行记录与事件", () => {
+    const stateStore = createStateStore({ storeDir: TEST_STORE_DIR })
+    const executionStore = createExecutionStore(TEST_STORE_DIR)
+    const state = stateStore.createProject("级联删除")
+    const run = executionStore.createRun({
+      id: "run_cascade",
+      projectId: state.projectId,
+      nodeId: "step_test",
+      forced: false,
+      stdoutPath: "stdout.log",
+      stderrPath: "stderr.log",
+    })
+    executionStore.appendEvent({
+      projectId: state.projectId,
+      runId: run.id,
+      nodeId: run.nodeId,
+      type: "RUN_STARTED",
+      payload: {},
+      createdAt: "2026-08-12T08:00:00.000Z",
+    })
+
+    stateStore.deleteProject(state.projectId)
+
+    expect(executionStore.listRuns(state.projectId)).toHaveLength(0)
+    expect(executionStore.eventsAfter(state.projectId, 0)).toHaveLength(0)
+    expect(stateStore.listProjects()).not.toContain(state.projectId)
   })
 })

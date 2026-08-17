@@ -36,6 +36,7 @@ const BUILT_IN_NODE_KEY_BY_ID: Readonly<Record<string, string>> = {
   "10.10": "ai-effort-summary",
   "10.11": "effort-estimate-sync",
   "10.12": "developer-effort-confirmation",
+  "10.doc": "generate-documentation",
   "20.1": "requirements-scheduling",
   "20.2": "kickoff-review",
   "20.2a": "ai-kickoff-summary",

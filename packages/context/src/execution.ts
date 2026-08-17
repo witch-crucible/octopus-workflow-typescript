@@ -79,10 +79,12 @@ class SqliteExecutionStore implements ExecutionStore {
     try {
       db.pragma("journal_mode = WAL")
       db.pragma("busy_timeout = 5000")
+      // 外键级联依赖 REFERENCES projects 约束，需在每个连接上开启。
+      db.pragma("foreign_keys = ON")
       db.exec(`
         CREATE TABLE IF NOT EXISTS workflow_runs (
           id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL,
+          project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
           node_id TEXT NOT NULL,
           status TEXT NOT NULL,
           forced INTEGER NOT NULL,
@@ -99,7 +101,7 @@ class SqliteExecutionStore implements ExecutionStore {
         CREATE INDEX IF NOT EXISTS workflow_runs_project_idx ON workflow_runs(project_id, node_id, started_at);
         CREATE TABLE IF NOT EXISTS workflow_events (
           sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-          project_id TEXT NOT NULL,
+          project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
           run_id TEXT,
           node_id TEXT,
           type TEXT NOT NULL,
@@ -257,6 +259,7 @@ class SqliteExecutionStore implements ExecutionStore {
     return this.withDatabase((db) => {
       const result = db.prepare("DELETE FROM workflow_runs WHERE finished_at IS NOT NULL AND finished_at < ?").run(before)
       db.prepare("DELETE FROM workflow_events WHERE created_at < ?").run(before)
+      db.prepare("DELETE FROM integration_health WHERE checked_at < ?").run(before)
       return result.changes
     })
   }

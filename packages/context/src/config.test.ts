@@ -101,4 +101,45 @@ describe("loadConfig", () => {
       workflow: { strictPermissions: true, aiGatingEnabled: false, heinrichThreshold: 3 },
     })
   })
+
+  it("未知额外字段不应导致校验失败", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      storeDir: ".octo-custom",
+      futureField: "ignored",
+      ai: { defaultModel: "sonnet", futureAiField: 42 },
+      workflow: { strictPermissions: true, futureWorkflowField: "x" },
+    }))
+
+    expect(loadConfig(storeDir)).toMatchObject({
+      storeDir,
+      ai: { defaultModel: "sonnet" },
+      workflow: { strictPermissions: true },
+    })
+  })
+
+  it("类型错误的字段应抛出 ConfigError 且带路径与问题摘要", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      ai: { defaultModel: 123 },
+    }))
+
+    expect(() => loadConfig(storeDir)).toThrow(ConfigError)
+    expect(() => loadConfig(storeDir)).toThrow(/ai\.defaultModel/)
+  })
+
+  it("plugins 数组元素类型错误应抛出 ConfigError", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      plugins: [{ notAValidPluginRef: true }],
+    }))
+
+    expect(() => loadConfig(storeDir)).toThrow(ConfigError)
+  })
 })

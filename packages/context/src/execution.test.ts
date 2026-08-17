@@ -5,16 +5,19 @@ import type { NodeRun } from "@octopus/core/execution.js"
 import Database from "better-sqlite3"
 import { afterEach, describe, expect, it } from "vitest"
 import { createExecutionStore } from "./execution.js"
+import { createStateStore } from "./index.js"
 
 const temporaryDirectories: string[] = []
 
 function createRun() {
   const storeDir = mkdtempSync(join(tmpdir(), "octopus-execution-"))
   temporaryDirectories.push(storeDir)
+  // workflow_runs 的 project_id 外键引用 projects，需先建 project。
+  const projectId = createStateStore({ storeDir }).createProject("测试项目").projectId
   const store = createExecutionStore(storeDir)
   const run = store.createRun({
     id: "run_test",
-    projectId: "project_test",
+    projectId,
     nodeId: "node_test",
     forced: false,
     stdoutPath: join(storeDir, "stdout.log"),
@@ -148,5 +151,40 @@ describe("ExecutionStore.updateRun", () => {
       status: "FAILED",
       error: "运行结果写入项目状态失败",
     })
+  })
+})
+
+describe("ExecutionStore.purge", () => {
+  it("清理过期的 integration_health 并保留新记录", () => {
+    const { store } = createRun()
+    store.saveIntegrationHealth({
+      service: "github",
+      healthy: true,
+      latencyMs: 10,
+      message: "ok",
+      checkedAt: "2026-07-01T00:00:00.000Z",
+    })
+    store.saveIntegrationHealth({
+      service: "gitlab",
+      healthy: true,
+      latencyMs: 20,
+      message: "ok",
+      checkedAt: "2026-08-15T00:00:00.000Z",
+    })
+
+    const purged = store.purge("2026-08-01T00:00:00.000Z")
+
+    expect(store.listIntegrationHealth().map((health) => health.service)).toEqual(["gitlab"])
+    expect(purged).toBe(0)
+  })
+
+  it("保持返回已删除运行数语义", () => {
+    const { store, run } = createRun()
+    store.updateRun(run.id, { status: "SUCCEEDED", finishedAt: "2026-07-10T00:00:00.000Z" })
+
+    const purged = store.purge("2026-08-01T00:00:00.000Z")
+
+    expect(purged).toBe(1)
+    expect(store.getRun(run.id)).toBeUndefined()
   })
 })

@@ -94,6 +94,10 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
         { id: "10.10", name: "AI Effort Summary", description: "AI summarizes effort from the detailed Excel estimate", responsibleRoles: [Role.AI], dependsOn: ["10.8"], capabilities: [ai(AIAssistantType.EFFORT_ESTIMATION)] },
         { id: "10.11", name: "Effort Estimate Sync", description: "SA shares the effort estimate with PM and DEV", responsibleRoles: [Role.SA, Role.PM, Role.DEV], dependsOn: ["10.10"] },
         { id: "10.12", name: "Developer Effort Confirmation", description: "DEV confirms the effort estimate", responsibleRoles: [Role.DEV], dependsOn: ["10.11"] },
+        { id: "10.doc", name: "Generate Documentation", description: "Generate or extend complete technical documentation from the project source code", responsibleRoles: [Role.AI], dependsOn: ["10.1"], capabilities: [ai(AIAssistantType.DOCUMENT_SYNC, {
+          input: "Generate complete technical documentation from the project source code. Preserve valid existing content and extend changed sections.",
+          outputFile: "documentation.md",
+        })] },
       ],
     },
     {
@@ -191,7 +195,7 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
   ],
 }
 
-/** 获取当前工作流规格（预留：未来可支持自定义 spec 注入） */
+/** 获取当前工作流规格 —— DEFAULT_WORKFLOW_SPEC 是内置工作流 spec 的唯一来源 */
 export function getWorkflowSpec(): WorkflowSpec {
   return DEFAULT_WORKFLOW_SPEC
 }

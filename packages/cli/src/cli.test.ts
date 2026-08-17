@@ -298,7 +298,7 @@ describe("CLI 命令验证", () => {
       "octopus",
       "node",
       "create",
-      "generate-documentation",
+      "generate-project-report",
       "Generate Documentation",
       state.projectId,
       "--role",
@@ -320,7 +320,7 @@ describe("CLI 命令验证", () => {
 
     expect(consoleErrorSpy).not.toHaveBeenCalled()
     const definition = loadWorkflowDefinition(projectRoot)
-    const internalId = definition.nodeIdMapping["generate-documentation"]
+    const internalId = definition.nodeIdMapping["generate-project-report"]
     const created = engine.getState(state.projectId).steps.find((step) => step.id === internalId)
     expect(created?.responsibleRole).toBe("AI")
     expect(created?.actions).toEqual([expect.objectContaining({
@@ -328,9 +328,9 @@ describe("CLI 命令验证", () => {
       outputFile: "documentation.md",
       ifExists: "extend",
     })])
-    expect(existsSync(`${projectRoot}/workflow/nodes/generate-documentation`)).toBe(true)
+    expect(existsSync(`${projectRoot}/workflow/nodes/generate-project-report`)).toBe(true)
     const workflowYaml = readFileSync(`${projectRoot}/workflow.yaml`, "utf8")
-    expect(workflowYaml).toContain("generate-documentation")
+    expect(workflowYaml).toContain("generate-project-report")
     expect(workflowYaml).not.toContain("  - id:")
 
     consoleLogSpy.mockRestore()

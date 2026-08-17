@@ -32,6 +32,20 @@ export interface RunWorkflowOptions {
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647
 
+/** 同步阻塞休眠（微秒级退避用；Node 主线程可用） */
+function sleep(ms: number): void {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    // busy wait
+  }
+}
+
+/** 是否 SQLite 并发写锁冲突（可重试） */
+function isWriteLockError(cause: unknown): boolean {
+  const err = cause as { code?: string; message?: string }
+  return err?.code === "SQLITE_BUSY" || (typeof err?.message === "string" && err.message.includes("database is locked"))
+}
+
 export class NodeExecutionService {
   private static readonly retentionDays = 30
   private readonly executions
@@ -45,6 +59,27 @@ export class NodeExecutionService {
     this.executions = createExecutionStore(this.storeDir)
     const cutoff = new Date(Date.now() - NodeExecutionService.retentionDays * 24 * 60 * 60 * 1000).toISOString()
     this.executions.purge(cutoff)
+  }
+
+  /**
+   * 在单个 SQLite 事务内完成读改写；并发写锁冲突（SQLITE_BUSY）时按指数
+   * 退避重试整个事务，避免跨进程并发写入互相覆盖或互相死锁。
+   */
+  private transactionalUpdate(
+    projectId: string,
+    updater: (state: WorkflowState) => WorkflowState,
+  ): WorkflowState {
+    let attempt = 0
+    for (;;) {
+      try {
+        return this.store.update(projectId, updater)
+      } catch (cause) {
+        if (!isWriteLockError(cause) || attempt >= 30) throw cause
+        attempt++
+        // 抖动退避：避免多个进程以相同节奏反复碰撞
+        sleep(1 + Math.floor(Math.random() * (2 ** Math.min(attempt, 7))))
+      }
+    }
   }
 
   getSnapshot(projectId: string): WorkflowExecutionSnapshot {
@@ -123,7 +158,7 @@ export class NodeExecutionService {
       stdoutPath: join(runDir, `${runId}.stdout.log`),
       stderrPath: join(runDir, `${runId}.stderr.log`),
     })
-    this.store.update(projectId, (current) => {
+    this.transactionalUpdate(projectId, (current) => {
       const target = current.steps.find((candidate) => candidate.id === nodeId)
       if (target) {
         target.status = TaskStatus.IN_PROGRESS
@@ -145,7 +180,7 @@ export class NodeExecutionService {
         finishedAt: new Date().toISOString(),
         error,
       })
-      this.store.update(projectId, (current) => {
+      this.transactionalUpdate(projectId, (current) => {
         const target = current.steps.find((candidate) => candidate.id === nodeId)
         if (target) {
           target.status = TaskStatus.BLOCKED
@@ -163,7 +198,7 @@ export class NodeExecutionService {
   }
 
   completeManualNode(projectId: string, nodeId: string, force = false): WorkflowState {
-    const state = this.store.update(projectId, (current) => {
+    const state = this.transactionalUpdate(projectId, (current) => {
       const step = current.steps.find((candidate) => candidate.id === nodeId)
       if (!step) throw new Error(`节点不存在: ${nodeId}`)
       if (!(step.actions ?? []).every((action) => action.type === "manual")) {
@@ -206,7 +241,7 @@ export class NodeExecutionService {
         error: `运行已取消，但终止 worker 失败: ${(cause as Error).message}`,
       })
     }
-    this.store.update(projectId, (state) => {
+    this.transactionalUpdate(projectId, (state) => {
       const step = state.steps.find((candidate) => candidate.id === canceled.nodeId)
       if (step && step.status === TaskStatus.IN_PROGRESS) {
         step.status = TaskStatus.BLOCKED
@@ -226,7 +261,7 @@ export class NodeExecutionService {
     const run = this.executions.getRun(runId)
     if (!run || run.projectId !== projectId) throw new Error(`运行不存在: ${runId}`)
     if (["QUEUED", "RUNNING"].includes(run.status)) throw new Error(`运行仍在执行: ${runId}`)
-    this.store.update(projectId, (state) => {
+    this.transactionalUpdate(projectId, (state) => {
       const step = state.steps.find((candidate) => candidate.id === run.nodeId)
       if (step) {
         step.status = TaskStatus.PENDING
@@ -244,6 +279,44 @@ export class NodeExecutionService {
 
   eventsAfter(projectId: string, sequence = 0): WorkflowEvent[] {
     return this.executions.eventsAfter(projectId, sequence)
+  }
+
+  /**
+   * 恢复僵死运行：heartbeatAt 早于阈值的 RUNNING 运行会被中断，
+   * 并同步把对应节点标记为 BLOCKED（事务化），同时写入 RUN_FAILED 事件。
+   * @returns 本次恢复（中断）的运行数量
+   */
+  recoverStaleRuns(projectId: string, staleAfterMs = 30_000): number {
+    const cutoff = Date.now() - staleAfterMs
+    const staleRuns = this.executions.listRuns(projectId).filter((run) => {
+      if (run.status !== "RUNNING") return false
+      if (run.heartbeatAt === undefined) return true
+      const heartbeat = new Date(run.heartbeatAt).getTime()
+      return Number.isNaN(heartbeat) || heartbeat < cutoff
+    })
+
+    for (const run of staleRuns) {
+      const interrupted = this.executions.transitionRun(run.id, ["RUNNING"], {
+        status: "INTERRUPTED",
+        finishedAt: new Date().toISOString(),
+        error: "运行超过心跳超时未上报，判定为僵死",
+      })
+      if (!interrupted) continue
+      this.transactionalUpdate(projectId, (current) => {
+        const step = current.steps.find((candidate) => candidate.id === interrupted.nodeId)
+        if (step) {
+          step.status = TaskStatus.BLOCKED
+          step.notes = "运行超过心跳超时未上报，判定为僵死"
+          step.updatedAt = new Date().toISOString()
+        }
+        return current
+      })
+      this.appendEvent(projectId, interrupted, "RUN_FAILED", {
+        status: "INTERRUPTED",
+        error: interrupted.error,
+      })
+    }
+    return staleRuns.length
   }
 
   saveIntegrationHealth(health: IntegrationHealth): void {
@@ -265,6 +338,8 @@ export class NodeExecutionService {
       throw new Error(`pollIntervalMs 必须是 100 至 ${MAX_TIMER_DELAY_MS}ms 的整数`)
     }
     while (true) {
+      // 每次轮询先恢复僵死运行，避免卡住调度器
+      this.recoverStaleRuns(projectId)
       const snapshot = this.getSnapshot(projectId)
       const capacity = maxParallel - snapshot.activeRuns.length
       let launchError: unknown
