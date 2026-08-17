@@ -12,7 +12,8 @@
   "dependencies": {
     "@octopus/agent-layer": "workspace:*",
     "@octopus/context": "workspace:*",
-    "@octopus/core": "workspace:*"
+    "@octopus/core": "workspace:*",
+    "@octopus/plugin": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.2.0",

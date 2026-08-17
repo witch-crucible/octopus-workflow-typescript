@@ -5,7 +5,6 @@
  * 缺少注册视为开发错误，不再回退到通用提示词。
  */
 
-import { AIAssistantType } from "@octopus/core/agent.js"
 import type { AIResponse } from "@octopus/core/agent.js"
 import type { AIAssistantClient, AIAssistantModule } from "./types.js"
 import { checklistRecommendationModule } from "./checklist-recommendation.js"
@@ -23,7 +22,7 @@ import { testScriptGenerationModule } from "./test-script-generation.js"
 
 /** AI 模块注册表 */
 export class AIAssistantModuleRegistry {
-  private readonly modules = new Map<AIAssistantType, AIAssistantModule>()
+  private readonly modules = new Map<string, AIAssistantModule>()
 
   /** 注册模块（重复注册视为开发错误） */
   register(module: AIAssistantModule): void {
@@ -33,8 +32,13 @@ export class AIAssistantModuleRegistry {
     this.modules.set(module.type, module)
   }
 
+  /** 是否已注册该类型 */
+  has(type: string): boolean {
+    return this.modules.has(type)
+  }
+
   /** 按类型获取模块（未注册视为开发错误） */
-  get(type: AIAssistantType): AIAssistantModule {
+  get(type: string): AIAssistantModule {
     const module = this.modules.get(type)
     if (!module) {
       throw new Error(`AI 模块未注册: ${type}`)
@@ -43,7 +47,7 @@ export class AIAssistantModuleRegistry {
   }
 
   /** 独立执行模块 */
-  async execute(type: AIAssistantType, input: string, client: AIAssistantClient): Promise<AIResponse> {
+  async execute(type: string, input: string, client: AIAssistantClient): Promise<AIResponse> {
     return this.get(type).execute(input, client)
   }
 
@@ -69,13 +73,13 @@ aiAssistantModuleRegistry.register(releaseRiskAssessmentModule)
 aiAssistantModuleRegistry.register(techDebtQuantificationModule)
 
 /** 按类型获取模块（未注册视为开发错误） */
-export function getAIAssistantModule(type: AIAssistantType): AIAssistantModule {
+export function getAIAssistantModule(type: string): AIAssistantModule {
   return aiAssistantModuleRegistry.get(type)
 }
 
 /** 独立执行模块 */
 export function executeAIAssistantModule(
-  type: AIAssistantType,
+  type: string,
   input: string,
   client: AIAssistantClient,
 ): Promise<AIResponse> {

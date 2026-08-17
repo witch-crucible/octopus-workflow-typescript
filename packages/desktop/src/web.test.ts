@@ -58,7 +58,7 @@ describe("Octopus Web", () => {
   it("应提供真实项目状态并拒绝同一状态库重复初始化", async () => {
     const root = mkdtempSync(join(tmpdir(), "octopus-web-"))
     temporaryDirectories.push(root)
-    const server = createOctopusWebServer({
+    const server = await createOctopusWebServer({
       port: 0,
       storeDir: join(root, "store"),
       projectRoot: join(root, "project"),
@@ -103,7 +103,7 @@ describe("Octopus Web", () => {
       projectRoot: join(root, "project"),
       rendererDir: join(process.cwd(), "packages/desktop/src/renderer"),
     }
-    const first = createOctopusWebServer(options)
+    const first = await createOctopusWebServer(options)
     const firstUrl = await first.listen()
     try {
       expect(await (await invoke(firstUrl, "canInit")).json()).toEqual({ result: true })
@@ -111,7 +111,7 @@ describe("Octopus Web", () => {
       await first.close()
     }
 
-    const restarted = createOctopusWebServer(options)
+    const restarted = await createOctopusWebServer(options)
     const restartedUrl = await restarted.listen()
     try {
       expect(await (await invoke(restartedUrl, "canInit")).json()).toEqual({ result: true })
@@ -124,7 +124,7 @@ describe("Octopus Web", () => {
   it("应拒绝伪造 Host 与跨源 Origin，同时允许无 Origin 的本地客户端", async () => {
     const root = mkdtempSync(join(tmpdir(), "octopus-web-origin-"))
     temporaryDirectories.push(root)
-    const server = createOctopusWebServer({
+    const server = await createOctopusWebServer({
       port: 0,
       storeDir: join(root, "store"),
       rendererDir: join(process.cwd(), "packages/desktop/src/renderer"),

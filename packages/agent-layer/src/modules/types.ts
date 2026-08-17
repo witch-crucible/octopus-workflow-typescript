@@ -5,7 +5,7 @@
  * 因此可以单独导入、单独执行、单独测试。
  */
 
-import type { AIAssistantType, AIRequest, AIResponse } from "@octopus/core/agent.js"
+import type { AIRequest, AIResponse } from "@octopus/core/agent.js"
 
 /** AI 模块可调用的客户端最小接口（AIClient 结构兼容） */
 export interface AIAssistantClient {
@@ -14,8 +14,8 @@ export interface AIAssistantClient {
 
 /** AI 辅助模块 */
 export interface AIAssistantModule {
-  /** 唯一类型标识（与 AIAssistantType 一一对应） */
-  readonly type: AIAssistantType
+  /** 唯一类型标识。内置 12 类使用 AIAssistantType；插件可注册额外字符串 id。 */
+  readonly type: string
   /** 模块名称 */
   readonly name: string
   /** 执行：调用方显式传入输入文本与客户端 */

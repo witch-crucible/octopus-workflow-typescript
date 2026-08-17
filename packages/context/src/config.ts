@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { AIClientConfig } from "@octopus/agent-layer/index.js"
 import { ConfigError } from "@octopus/core/errors.js"
+import type { PluginRef } from "@octopus/plugin/index.js"
 
 /** 全局配置 */
 export interface OctopusConfig {
@@ -28,6 +29,8 @@ export interface OctopusConfig {
     /** 海因里希条数阈值 */
     heinrichThreshold: number
   }
+  /** 本机插件引用；与 workflow.yaml plugins 按顺序拼接 */
+  plugins: PluginRef[]
 }
 
 /** 默认配置 */
@@ -46,6 +49,7 @@ export const DEFAULT_CONFIG: OctopusConfig = {
     aiGatingEnabled: false,
     heinrichThreshold: 3,
   },
+  plugins: [],
 }
 
 /** 从环境变量加载配置 */
@@ -95,6 +99,9 @@ function mergeConfigs(...configs: Partial<OctopusConfig>[]): OctopusConfig {
     }
     if (config.workflow) {
       result = { ...result, workflow: { ...result.workflow, ...config.workflow } }
+    }
+    if (config.plugins) {
+      result = { ...result, plugins: [...config.plugins] }
     }
   }
 

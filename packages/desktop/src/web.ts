@@ -78,14 +78,14 @@ async function readRequest(request: IncomingMessage): Promise<WebRequest> {
   }
 }
 
-export function createOctopusWebServer(options: OctopusWebServerOptions = {}): OctopusWebServer {
+export async function createOctopusWebServer(options: OctopusWebServerOptions = {}): Promise<OctopusWebServer> {
   const host = options.host ?? "127.0.0.1"
   const requestedPort = options.port ?? 4173
   const storeDir = resolve(options.storeDir ?? process.env["OCTOPUS_STORE_DIR"] ?? join(repositoryRoot, ".octo"))
   const rendererDir = resolve(options.rendererDir ?? join(moduleDirectory, "..", "src", "renderer"))
   const defaultProjectRoot = resolve(options.projectRoot ?? repositoryRoot)
   const config = { ...loadConfig(storeDir), storeDir }
-  const engine = createWorkflowEngineFromConfig(config)
+  const engine = await createWorkflowEngineFromConfig(config, { projectRoot: defaultProjectRoot })
 
   const listProjects = (): string[] => engine.listProjects()
   const initializationAllowed = (): boolean => listProjects().length === 0
@@ -223,10 +223,9 @@ export function createOctopusWebServer(options: OctopusWebServerOptions = {}): O
 
 const entryPath = process.argv[1] ? resolve(process.argv[1]) : undefined
 if (entryPath === fileURLToPath(import.meta.url)) {
-  const server = createOctopusWebServer({
+  void createOctopusWebServer({
     ...(process.env["OCTOPUS_WEB_PORT"] ? { port: Number(process.env["OCTOPUS_WEB_PORT"]) } : {}),
-  })
-  server.listen()
+  }).then((server) => server.listen())
     .then((url) => console.log(`🐙 Octopus Web 已启动：${url}`))
     .catch((error: unknown) => {
       console.error(`❌ Octopus Web 启动失败：${error instanceof Error ? error.message : String(error)}`)

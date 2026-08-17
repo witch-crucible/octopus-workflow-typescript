@@ -1,5 +1,5 @@
 {
-  "name": "@octopus/context",
+  "name": "@octopus/plugin",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,11 +12,7 @@
   "dependencies": {
     "@octopus/agent-layer": "workspace:*",
     "@octopus/core": "workspace:*",
-    "@octopus/plugin": "workspace:*",
-    "@types/better-sqlite3": "^7.6.13",
-    "better-sqlite3": "12.11.1",
-    "js-yaml": "4.3.0",
-    "zod": "3.25.76"
+    "@octopus/integration": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.2.0",

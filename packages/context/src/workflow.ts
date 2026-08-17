@@ -10,11 +10,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join, resolve } from "node:path"
 import { dump, load } from "js-yaml"
 import { z } from "zod"
-import type { WorkflowDefinition, WorkflowNodeSpec, NodeAction } from "@octopus/core/execution.js"
+import type { WorkflowDefinition, WorkflowNodeSpec, NodeAction, WorkflowPluginRef } from "@octopus/core/execution.js"
 import { getWorkflowSpec } from "@octopus/core/spec.js"
 import { Phase } from "@octopus/core/phase.js"
 import { Role } from "@octopus/core/role.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
+import { applyWorkflowOverlays } from "@octopus/plugin/overlay.js"
+import type { PluginRef, WorkflowOverlay } from "@octopus/plugin/index.js"
 
 const WORKFLOW_FILE = "workflow.yaml"
 const NODE_KEY_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
@@ -95,6 +97,22 @@ const actionSchema = z.discriminatedUnion("type", [
     input: z.record(z.unknown()).optional(),
   }),
   z.object({ type: z.literal("heinrich"), delta: z.number().int(), level: z.nativeEnum(HeinrichLevel).optional() }),
+  z.object({
+    type: z.literal("custom"),
+    name: z.string().min(1),
+    input: z.record(z.unknown()).optional(),
+  }),
+])
+
+const pluginRefSchema = z.union([
+  z.string().min(1),
+  z.object({
+    id: z.string().min(1).optional(),
+    path: z.string().min(1).optional(),
+    package: z.string().min(1).optional(),
+    enabled: z.boolean().optional(),
+    options: z.record(z.unknown()).optional(),
+  }).strict(),
 ])
 
 const nodeSchema = z.object({
@@ -115,7 +133,20 @@ const definitionSchema = z.object({
   name: z.string().min(1),
   nodeIdMapping: z.record(z.string().min(1)),
   nodes: z.array(nodeSchema).min(1),
+  plugins: z.array(pluginRefSchema).optional(),
 }).strict()
+
+const overlaySchema = z.object({
+  add: z.array(nodeSchema).optional(),
+  replace: z.array(nodeSchema.partial().required({ key: true })).optional(),
+  disable: z.array(z.string().min(1)).optional(),
+  rewire: z.array(z.object({
+    key: z.string().min(1),
+    dependsOn: z.array(z.string()),
+  }).strict()).optional(),
+}).strict()
+
+const OVERLAY_FILE = "workflow.overlay.yaml"
 
 export interface WorkflowWorkspace {
   readonly projectRoot: string
@@ -177,12 +208,66 @@ export function definitionFromBuiltInSpec(): WorkflowDefinition {
         if (capability.kind === "integration") {
           return { type: "integration", service: capability.service, operation: capability.op }
         }
+        if (capability.kind === "custom") {
+          return capability.input === undefined
+            ? { type: "custom", name: capability.name }
+            : { type: "custom", name: capability.name, input: capability.input }
+        }
         return capability.level === undefined
           ? { type: "heinrich", delta: capability.delta }
           : { type: "heinrich", delta: capability.delta, level: capability.level }
       }) ?? [{ type: "manual" }],
     })),
   }
+}
+
+/** 读取 workflow.yaml 中的 plugins 字段；文件不存在时返回空列表。 */
+export function loadWorkflowPluginRefs(projectRoot: string): PluginRef[] {
+  const workspace = getWorkflowWorkspace(projectRoot)
+  if (!existsSync(workspace.workflowFile)) return []
+  let parsed: unknown
+  try {
+    parsed = load(readFileSync(workspace.workflowFile, "utf8"))
+  } catch (cause) {
+    throw new Error(`无法解析 ${workspace.workflowFile}: ${(cause as Error).message}`)
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return []
+  const plugins = (parsed as { plugins?: unknown }).plugins
+  if (plugins === undefined) return []
+  const result = z.array(pluginRefSchema).safeParse(plugins)
+  if (!result.success) {
+    throw new Error(`workflow.yaml plugins 校验失败: ${result.error.issues.map((issue) => issue.message).join("; ")}`)
+  }
+  return result.data as PluginRef[]
+}
+
+/** 读取项目根目录的 workflow.overlay.yaml；不存在则返回 undefined。 */
+export function loadWorkflowOverlayFile(projectRoot: string): WorkflowOverlay | undefined {
+  const overlayPath = join(resolve(projectRoot), OVERLAY_FILE)
+  if (!existsSync(overlayPath)) return undefined
+  let parsed: unknown
+  try {
+    parsed = load(readFileSync(overlayPath, "utf8"))
+  } catch (cause) {
+    throw new Error(`无法解析 ${overlayPath}: ${(cause as Error).message}`)
+  }
+  const result = overlaySchema.safeParse(parsed)
+  if (!result.success) {
+    throw new Error(`workflow.overlay.yaml 校验失败: ${result.error.issues.map((issue) => issue.message).join("; ")}`)
+  }
+  return result.data as WorkflowOverlay
+}
+
+/** 读取基础定义并按插件 overlay + 项目 overlay 文件叠加。无 overlay 时返回原定义。 */
+export function loadResolvedWorkflowDefinition(
+  projectRoot: string,
+  pluginOverlays: readonly WorkflowOverlay[] = [],
+): WorkflowDefinition {
+  const base = loadWorkflowDefinition(projectRoot)
+  const fileOverlay = loadWorkflowOverlayFile(projectRoot)
+  const overlays = [...pluginOverlays, ...(fileOverlay ? [fileOverlay] : [])]
+  if (overlays.length === 0) return base
+  return validateWorkflowDefinition(applyWorkflowOverlays(base, overlays))
 }
 
 /** 读取并严格校验 workflow.yaml，同时检测重复节点和依赖环。 */
@@ -206,7 +291,16 @@ export function validateWorkflowDefinition(value: unknown): WorkflowDefinition {
   if (!result.success) {
     throw new Error(`workflow.yaml 校验失败: ${result.error.issues.map((issue) => issue.message).join("; ")}`)
   }
-  const definition = result.data as unknown as WorkflowDefinition
+  const parsed = result.data
+  const definition: WorkflowDefinition = {
+    version: parsed.version,
+    name: parsed.name,
+    nodeIdMapping: parsed.nodeIdMapping,
+    nodes: parsed.nodes as unknown as WorkflowNodeSpec[],
+    ...(parsed.plugins !== undefined && parsed.plugins.length > 0
+      ? { plugins: parsed.plugins as WorkflowPluginRef[] }
+      : {}),
+  }
   const keys = new Set<string>()
   for (const node of definition.nodes) {
     if (keys.has(node.key)) throw new Error(`工作流节点 key 重复: ${node.key}`)

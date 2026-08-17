@@ -73,6 +73,9 @@ importers:
       '@octopus/core':
         specifier: workspace:*
         version: link:../core
+      '@octopus/plugin':
+        specifier: workspace:*
+        version: link:../plugin
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -139,6 +142,9 @@ importers:
       '@octopus/core':
         specifier: workspace:*
         version: link:../core
+      '@octopus/plugin':
+        specifier: workspace:*
+        version: link:../plugin
     devDependencies:
       '@types/node':
         specifier: ^22.2.0
@@ -161,6 +167,25 @@ importers:
     devDependencies:
       '@types/node':
         specifier: ^22.20.0
+        version: 22.20.0
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+
+  packages/plugin:
+    dependencies:
+      '@octopus/agent-layer':
+        specifier: workspace:*
+        version: link:../agent-layer
+      '@octopus/core':
+        specifier: workspace:*
+        version: link:../core
+      '@octopus/integration':
+        specifier: workspace:*
+        version: link:../integration
+    devDependencies:
+      '@types/node':
+        specifier: ^22.2.0
         version: 22.20.0
       typescript:
         specifier: ^5.6.0
@@ -193,6 +218,9 @@ importers:
       '@octopus/integration':
         specifier: workspace:*
         version: link:../integration
+      '@octopus/plugin':
+        specifier: workspace:*
+        version: link:../plugin
       '@octopus/task-library':
         specifier: workspace:*
         version: link:../task-library

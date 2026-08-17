@@ -10,6 +10,7 @@ import { Phase } from "@octopus/core/phase.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { DEFAULT_WORKFLOW_SPEC } from "@octopus/core/spec.js"
 import { WorkflowEngine } from "./index.js"
+import type { CapabilityHandler } from "./capabilities.js"
 
 let testStoreDir: string
 
@@ -278,6 +279,57 @@ describe("Checklist 推荐落库", () => {
     expect(after.checklists[Phase.DEPLOYMENT]!.items).toHaveLength(0)
     expect(step.capabilityRuns?.[0]?.kind).toBe("ai")
     expect(step.capabilityRuns?.[0]?.ok).toBe(true)
+  })
+})
+
+describe("自定义能力", () => {
+  it("按 name 分发插件注册的 custom handler", async () => {
+    const store = createStateStore({ storeDir: testStoreDir })
+    const customHandlers = new Map<string, CapabilityHandler>()
+    customHandlers.set("sample.ping", async (ref) => ({
+      kind: "custom",
+      ref: ref.kind === "custom" ? ref.name : "",
+      ok: true,
+      summary: "pong",
+    }))
+    const engine = new WorkflowEngine({
+      store,
+      pluginHost: {
+        plugins: [{ id: "sample", version: "1.0.0" }],
+        overlays: [],
+        integrations: {},
+        customHandlers,
+        kindHandlers: new Map(),
+      },
+    })
+    const state = engine.initProject("cap_custom")
+    const stepId = state.steps[0]!.id
+    store.update(state.projectId, (current) => {
+      const step = current.steps.find((item) => item.id === stepId)
+      if (step) step.capabilities = [{ kind: "custom", name: "sample.ping" }]
+      return current
+    })
+
+    const after = await engine.runStepCapabilities(state.projectId, stepId)
+    const step = after.steps.find((item) => item.id === stepId)!
+    expect(step.capabilityRuns?.[0]).toMatchObject({ kind: "custom", ref: "sample.ping", ok: true, summary: "pong" })
+  })
+
+  it("未注册的 custom 记为失败且不抛错", async () => {
+    const store = createStateStore({ storeDir: testStoreDir })
+    const engine = new WorkflowEngine({ store })
+    const state = engine.initProject("cap_custom_missing")
+    const stepId = state.steps[0]!.id
+    store.update(state.projectId, (current) => {
+      const step = current.steps.find((item) => item.id === stepId)
+      if (step) step.capabilities = [{ kind: "custom", name: "missing.op" }]
+      return current
+    })
+    const after = await engine.runStepCapabilities(state.projectId, stepId)
+    expect(after.steps.find((item) => item.id === stepId)?.capabilityRuns?.[0]).toMatchObject({
+      kind: "custom",
+      ok: false,
+    })
   })
 })
 

@@ -9,6 +9,7 @@ import { mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 import type { StateStore } from "@octopus/context/index.js"
 import { createExecutionStore } from "@octopus/context/execution.js"
+import type { WorkflowDefinition } from "@octopus/core/execution.js"
 import {
   loadWorkflowDefinition,
   resolveWorkflowNodeKey,
@@ -36,7 +37,10 @@ export class NodeExecutionService {
   private readonly executions
   private readonly storeDir: string
 
-  constructor(private readonly store: StateStore) {
+  constructor(
+    private readonly store: StateStore,
+    private readonly loadDefinition: (projectRoot: string) => WorkflowDefinition = loadWorkflowDefinition,
+  ) {
     this.storeDir = resolve(store.getStorePath())
     this.executions = createExecutionStore(this.storeDir)
     const cutoff = new Date(Date.now() - NodeExecutionService.retentionDays * 24 * 60 * 60 * 1000).toISOString()
@@ -105,7 +109,7 @@ export class NodeExecutionService {
     }
     const projectRoot = state.projectRoot
     if (!projectRoot) throw new Error(`项目 ${projectId} 未配置源码根目录，请重新 init --root`)
-    const definition = loadWorkflowDefinition(projectRoot)
+    const definition = this.loadDefinition(projectRoot)
     const workspace = syncWorkflowWorkspace(projectRoot, definition)
     const nodeKey = resolveWorkflowNodeKey(definition, nodeId)
     const runDir = join(this.storeDir, "runs", projectId, nodeId.replaceAll("/", "_"))

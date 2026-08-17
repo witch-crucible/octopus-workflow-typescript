@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Phase } from "@octopus/core/phase.js"
@@ -9,7 +9,10 @@ import {
   appendWorkflowNode,
   definitionFromBuiltInSpec,
   initializeWorkflowFile,
+  loadResolvedWorkflowDefinition,
   loadWorkflowDefinition,
+  loadWorkflowPluginRefs,
+  saveWorkflowDefinition,
 } from "./workflow.js"
 
 const temporaryDirectories: string[] = []
@@ -76,5 +79,47 @@ describe("项目工作流节点写入", () => {
     if (!existing) throw new Error("内置工作流必须包含节点")
     expect(() => appendWorkflowNode(projectRoot, existing)).toThrow("节点 key 重复")
     expect(loadWorkflowDefinition(projectRoot).nodes).toHaveLength(before.nodes.length)
+  })
+})
+
+describe("工作流叠加", () => {
+  it("无 overlay 文件时 resolved 与基础定义相同", () => {
+    const projectRoot = createProjectRoot()
+    const base = loadWorkflowDefinition(projectRoot)
+    expect(loadResolvedWorkflowDefinition(projectRoot)).toEqual(base)
+  })
+
+  it("读取并回写 workflow.yaml 的 plugins 字段", () => {
+    const projectRoot = createProjectRoot()
+    const definition = loadWorkflowDefinition(projectRoot)
+    saveWorkflowDefinition(projectRoot, { ...definition, plugins: ["./octopus-plugins/acme.js"] })
+    expect(loadWorkflowPluginRefs(projectRoot)).toEqual(["./octopus-plugins/acme.js"])
+    expect(loadWorkflowDefinition(projectRoot).plugins).toEqual(["./octopus-plugins/acme.js"])
+  })
+
+  it("应用 workflow.overlay.yaml 的 add / disable", () => {
+    const projectRoot = createProjectRoot()
+    writeFileSync(join(projectRoot, "workflow.overlay.yaml"), [
+      "disable:",
+      "  - weekly-feature-demo",
+      "add:",
+      "  - key: extra-qa-gate",
+      "    phase: Testing",
+      "    name: Extra QA Gate",
+      "    description: Overlay extra gate",
+      "    responsibleRoles:",
+      "      - QA",
+      "    dependsOn:",
+      "      - smoke-demo-validation",
+      "    actions:",
+      "      - type: manual",
+      "",
+    ].join("\n"))
+    const resolved = loadResolvedWorkflowDefinition(projectRoot)
+    expect(resolved.nodes.some((node) => node.key === "weekly-feature-demo")).toBe(false)
+    expect(resolved.nodes.some((node) => node.key === "extra-qa-gate")).toBe(true)
+    expect(resolved.nodeIdMapping["extra-qa-gate"]).toBe("overlay:extra-qa-gate")
+    const afterDemo = resolved.nodes.find((node) => node.dependsOn.includes("weekly-feature-demo"))
+    expect(afterDemo).toBeUndefined()
   })
 })

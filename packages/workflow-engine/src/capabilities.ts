@@ -6,37 +6,15 @@
  */
 
 import type { CapabilityRef } from "@octopus/core/spec.js"
-import type { WorkflowState } from "@octopus/core/workflow.js"
-import type { StepRuntime } from "@octopus/core/step.js"
 import { AIAssistantType } from "@octopus/core/agent.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
 import { ChecklistItemStatus, createEmptyChecklist } from "@octopus/core/checklist.js"
 import { ChecklistItemId, ObservationId, ArtifactId } from "@octopus/core/branded-ids.js"
 import { ArtifactType } from "@octopus/core/artifact.js"
 import { Role } from "@octopus/core/role.js"
-import type { AIClient } from "@octopus/agent-layer/index.js"
-import type { IntegrationService } from "@octopus/integration/index.js"
+import type { CapabilityContext, CapabilityHandler, CapabilityResult } from "@octopus/plugin/types.js"
 
-/** capability 分发上下文 */
-export interface CapabilityContext {
-  state: WorkflowState
-  step: StepRuntime
-  aiClient?: AIClient | undefined
-  integrations: Record<string, IntegrationService>
-  /** 显式输入：仅 AI 能力消费；未提供时回退为“步骤名称：步骤描述” */
-  input?: string
-}
-
-/** capability 分发结果 */
-export interface CapabilityResult {
-  kind: string
-  ref: string
-  ok: boolean
-  summary?: string
-}
-
-/** capability 处理器 */
-export type CapabilityHandler = (ref: CapabilityRef, ctx: CapabilityContext) => Promise<CapabilityResult>
+export type { CapabilityContext, CapabilityHandler, CapabilityResult }
 
 const uid = () => `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 const truncate = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s)
@@ -128,14 +106,26 @@ const integrationHandler: CapabilityHandler = async (ref, ctx) => {
   }
 }
 
+function createCustomHandler(customHandlers: ReadonlyMap<string, CapabilityHandler>): CapabilityHandler {
+  return async (ref, ctx) => {
+    if (ref.kind !== "custom") return { kind: ref.kind, ref: "", ok: false }
+    const handler = customHandlers.get(ref.name)
+    if (!handler) {
+      return { kind: "custom", ref: ref.name, ok: false, summary: `未注册自定义能力: ${ref.name}` }
+    }
+    return handler(ref, ctx)
+  }
+}
+
 /** capability 注册表 */
 export class CapabilityRegistry {
   private readonly handlers = new Map<string, CapabilityHandler>()
 
-  constructor() {
+  constructor(customHandlers: ReadonlyMap<string, CapabilityHandler> = new Map()) {
     this.handlers.set("ai", aiHandler)
     this.handlers.set("heinrich", heinrichHandler)
     this.handlers.set("integration", integrationHandler)
+    this.handlers.set("custom", createCustomHandler(customHandlers))
   }
 
   /** 注册/覆盖某类能力的处理器 */

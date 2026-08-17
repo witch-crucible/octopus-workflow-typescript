@@ -91,6 +91,11 @@ function capabilityToAction(capability: CapabilityRef): NodeAction {
   if (capability.kind === "integration") {
     return { type: "integration", service: capability.service, operation: capability.op }
   }
+  if (capability.kind === "custom") {
+    return capability.input === undefined
+      ? { type: "custom", name: capability.name }
+      : { type: "custom", name: capability.name, input: capability.input }
+  }
   return capability.level === undefined
     ? { type: "heinrich", delta: capability.delta }
     : { type: "heinrich", delta: capability.delta, level: capability.level }
@@ -114,6 +119,11 @@ function actionToCapability(action: NodeAction): CapabilityRef | undefined {
     return action.level === undefined
       ? { kind: "heinrich", delta: action.delta }
       : { kind: "heinrich", delta: action.delta, level: action.level }
+  }
+  if (action.type === "custom") {
+    return action.input === undefined
+      ? { kind: "custom", name: action.name }
+      : { kind: "custom", name: action.name, input: action.input }
   }
   return undefined
 }

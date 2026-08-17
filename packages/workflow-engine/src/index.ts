@@ -40,6 +40,8 @@ import {
   appendWorkflowNode,
   initializeWorkflowFile,
   loadWorkflowDefinition,
+  loadResolvedWorkflowDefinition,
+  loadWorkflowPluginRefs,
   resolveWorkflowNodeId,
   resolveWorkflowNodeKey,
 } from "@octopus/context/workflow.js"
@@ -54,12 +56,15 @@ import type { AIClient } from "@octopus/agent-layer/index.js"
 import { createAIClient } from "@octopus/agent-layer/index.js"
 import type { AIEventHandler, AIEventPayload, AIGateResult } from "@octopus/core/agent.js"
 import type { IntegrationService } from "@octopus/integration/index.js"
+import type { PluginHost } from "@octopus/plugin/index.js"
+import { emptyPluginHost, loadPlugins } from "@octopus/plugin/index.js"
 import { CapabilityRegistry } from "./capabilities.js"
 import type { CapabilityContext } from "./capabilities.js"
 import { NodeExecutionService } from "./execution.js"
 import type {
   IntegrationHealth,
   NodeRun,
+  WorkflowDefinition,
   WorkflowExecutionSnapshot,
   WorkflowNodeSpec,
 } from "@octopus/core/execution.js"
@@ -169,6 +174,8 @@ export interface WorkflowEngineConfig {
   heinrichThreshold?: number
   /** 外部集成服务表（capability 的 integration handler 按 service 名解析） */
   integrations?: Record<string, IntegrationService>
+  /** 已激活的插件宿主；缺省为空，主路径与现在一致 */
+  pluginHost?: PluginHost
 }
 
 /** 创建节点后的配置及运行态结果。 */
@@ -190,6 +197,7 @@ export class WorkflowEngine {
   private readonly heinrichThreshold: number
   private readonly registry: CapabilityRegistry
   private readonly integrations: Record<string, IntegrationService>
+  private readonly pluginHost: PluginHost
   private readonly nodeExecution: NodeExecutionService
   private aiHandlers: Array<(event: {
     type: "onPhaseAdvance" | "onPhaseRollback"
@@ -204,9 +212,31 @@ export class WorkflowEngine {
     this.strictPermissions = config.strictPermissions ?? false
     this.aiGatingEnabled = config.aiGatingEnabled ?? false
     this.heinrichThreshold = config.heinrichThreshold ?? 3
-    this.registry = new CapabilityRegistry()
-    this.integrations = config.integrations ?? {}
-    this.nodeExecution = new NodeExecutionService(this.store)
+    this.pluginHost = config.pluginHost ?? emptyPluginHost()
+    this.integrations = { ...this.pluginHost.integrations, ...config.integrations }
+    this.registry = new CapabilityRegistry(this.pluginHost.customHandlers)
+    for (const [kind, handler] of this.pluginHost.kindHandlers) {
+      this.registry.register(kind, handler)
+    }
+    this.nodeExecution = new NodeExecutionService(
+      this.store,
+      (projectRoot) => this.loadDefinition(projectRoot),
+    )
+  }
+
+  /** 已加载插件摘要。 */
+  listPlugins(): readonly { id: string; version: string }[] {
+    return this.pluginHost.plugins
+  }
+
+  /** 读取叠加插件与项目 overlay 后的工作流定义。 */
+  getWorkflowDefinition(projectId: string): WorkflowDefinition {
+    const state = this.getState(projectId)
+    return this.loadDefinition(state.projectRoot ?? process.cwd())
+  }
+
+  private loadDefinition(projectRoot: string): WorkflowDefinition {
+    return loadResolvedWorkflowDefinition(projectRoot, this.pluginHost.overlays)
   }
 
   /** 节点运行与监控服务。 */
@@ -238,14 +268,14 @@ export class WorkflowEngine {
   resolveNodeId(projectId: string, nodeKey: string): string {
     const state = this.getState(projectId)
     if (!state.projectRoot) throw new Error(`项目 ${projectId} 未配置源码根目录，请重新 init --root`)
-    return resolveWorkflowNodeId(loadWorkflowDefinition(state.projectRoot), nodeKey)
+    return resolveWorkflowNodeId(this.loadDefinition(state.projectRoot), nodeKey)
   }
 
   /** 将内部运行态 ID 反查为英文节点键。 */
   resolveNodeKey(projectId: string, nodeId: string): string {
     const state = this.getState(projectId)
     if (!state.projectRoot) throw new Error(`项目 ${projectId} 未配置源码根目录，请重新 init --root`)
-    return resolveWorkflowNodeKey(loadWorkflowDefinition(state.projectRoot), nodeId)
+    return resolveWorkflowNodeKey(this.loadDefinition(state.projectRoot), nodeId)
   }
 
   /** 自动并行运行所有 READY 节点。 */
@@ -268,6 +298,10 @@ export class WorkflowEngine {
       throw new Error(`不能向已完成阶段 ${node.phase} 创建节点`)
     }
 
+    const resolved = this.loadDefinition(state.projectRoot)
+    if (resolved.nodes.some((candidate) => candidate.key === node.key)) {
+      throw new Error(`节点已存在: ${node.key}`)
+    }
     const definition = loadWorkflowDefinition(state.projectRoot)
     const nodesByKey = new Map(definition.nodes.map((candidate) => [candidate.key, candidate]))
     if (nodesByKey.has(node.key)) throw new Error(`节点已存在: ${node.key}`)
@@ -393,7 +427,7 @@ export class WorkflowEngine {
   /** 初始化新项目 */
   initProject(name: string, description?: string, projectRoot?: string): WorkflowState {
     const definition = projectRoot
-      ? (initializeWorkflowFile(projectRoot), loadWorkflowDefinition(projectRoot))
+      ? (initializeWorkflowFile(projectRoot), this.loadDefinition(projectRoot))
       : undefined
     const state = this.store.createProject(name, description, projectRoot)
 
@@ -646,7 +680,7 @@ export class WorkflowEngine {
 
     // 生成下一阶段的步骤（唯一真相源）
     const existingIds = new Set(state.steps.map((s) => s.id))
-    const definition = state.projectRoot ? loadWorkflowDefinition(state.projectRoot) : undefined
+    const definition = state.projectRoot ? this.loadDefinition(state.projectRoot) : undefined
     const nextSteps = definition
       ? createStepsFromDefinition(state.projectId, definition, next)
       : createStepsForPhase(state.projectId, next)
@@ -1253,19 +1287,34 @@ export class WorkflowEngine {
   }
 }
 
+function firstProjectRoot(store: StateStore): string | undefined {
+  const projectId = store.listProjects()[0]
+  if (!projectId) return undefined
+  return store.load(projectId).projectRoot
+}
+
 /**
  * 从配置创建 WorkflowEngine 实例。
  *
- * 组合根：装配 StateStore + AIClient。放在引擎包内以避免
- * context 反向依赖 workflow-engine 造成的循环依赖。
+ * 组合根：装配 StateStore + AIClient + 项目插件。无插件时与旧行为等价。
  */
-export function createWorkflowEngineFromConfig(config: OctopusConfig): WorkflowEngine {
+export async function createWorkflowEngineFromConfig(
+  config: OctopusConfig,
+  options?: { projectRoot?: string },
+): Promise<WorkflowEngine> {
   const store = createStateStore({ storeDir: config.storeDir })
+  const projectRoot = options?.projectRoot ?? firstProjectRoot(store) ?? process.cwd()
+  const pluginHost = await loadPlugins(
+    [...loadWorkflowPluginRefs(projectRoot), ...config.plugins],
+    { projectRoot },
+  )
   return new WorkflowEngine({
     store,
     aiClient: createAIClient(toAIClientConfig(config)),
     strictPermissions: config.workflow.strictPermissions,
     aiGatingEnabled: config.workflow.aiGatingEnabled,
     heinrichThreshold: config.workflow.heinrichThreshold,
+    integrations: pluginHost.integrations,
+    pluginHost,
   })
 }

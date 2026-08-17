@@ -15,11 +15,16 @@ export function buildMonitorCommands(program: Command, engine: WorkflowEngine): 
     .action((projectId: string | undefined, options: { json?: boolean }) => {
       const pid = resolveProjectId(engine, projectId)
       if (!pid) return
-      const data = { snapshot: engine.getExecutionSnapshot(pid), health: engine.getIntegrationHealth() }
+      const data = {
+        snapshot: engine.getExecutionSnapshot(pid),
+        health: engine.getIntegrationHealth(),
+        plugins: engine.listPlugins(),
+      }
       if (options.json) console.log(JSON.stringify(data, null, 2))
       else {
         console.log(`\n运行状态: ${data.snapshot.schedulerStatus}`)
         console.log(`活动运行: ${data.snapshot.activeRuns.length}`)
+        console.log(`插件: ${data.plugins.length > 0 ? data.plugins.map((plugin) => `${plugin.id}@${plugin.version}`).join(", ") : "无"}`)
         for (const health of data.health) console.log(`集成 ${health.service}: ${health.healthy ? "✅" : "❌"} ${health.message}`)
         console.log()
       }

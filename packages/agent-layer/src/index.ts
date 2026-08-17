@@ -233,7 +233,7 @@ export class AIClient {
   }
 
   /** 根据功能类型从模块注册表查找并执行对应 AI 模块 */
-  async callAssistant(type: AIAssistantType, input: string): Promise<AIResponse> {
+  async callAssistant(type: string, input: string): Promise<AIResponse> {
     return executeAIAssistantModule(type, input, this)
   }
 }

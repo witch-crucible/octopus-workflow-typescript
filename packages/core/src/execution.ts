@@ -5,7 +5,6 @@
  * 节点命令始终在其专属目录执行，公共目录通过环境变量提供只读契约。
  */
 
-import type { AIAssistantType } from "./agent.js"
 import type { HeinrichLevel } from "./risk.js"
 import type { Phase } from "./phase.js"
 import type { Role } from "./role.js"
@@ -23,7 +22,7 @@ export type NodeAction =
     }
   | {
       readonly type: "ai"
-      readonly assistant: AIAssistantType
+      readonly assistant: string
       readonly input?: string
       /** AI 结果相对于节点工作目录的输出文件。 */
       readonly outputFile?: string
@@ -37,6 +36,22 @@ export type NodeAction =
       readonly input?: Readonly<Record<string, unknown>>
     }
   | { readonly type: "heinrich"; readonly delta: number; readonly level?: HeinrichLevel }
+  | {
+      readonly type: "custom"
+      readonly name: string
+      readonly input?: Readonly<Record<string, unknown>>
+    }
+
+/** 工作流文件中的插件引用。路径相对项目根；包名从项目 node_modules 解析。 */
+export type WorkflowPluginRef =
+  | string
+  | {
+      readonly id?: string
+      readonly path?: string
+      readonly package?: string
+      readonly enabled?: boolean
+      readonly options?: Readonly<Record<string, unknown>>
+    }
 
 /** 工作流节点定义。 */
 export interface WorkflowNodeSpec {
@@ -57,6 +72,8 @@ export interface WorkflowDefinition {
   /** 英文节点键到内部运行态 ID 的稳定映射。 */
   readonly nodeIdMapping: Readonly<Record<string, string>>
   readonly nodes: readonly WorkflowNodeSpec[]
+  /** 项目级插件引用；缺省表示不加载插件。 */
+  readonly plugins?: readonly WorkflowPluginRef[]
 }
 
 /** 节点运行态。READY 根据依赖动态派生，不写入持久化状态。 */

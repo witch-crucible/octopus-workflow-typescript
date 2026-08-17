@@ -12,8 +12,6 @@ import { Role } from "@octopus/core/role.js"
 import { AIAssistantType } from "@octopus/core/agent.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
 import {
-  definitionFromBuiltInSpec,
-  loadWorkflowDefinition,
   resolveWorkflowNodeId,
   resolveWorkflowNodeKey,
 } from "@octopus/context/workflow.js"
@@ -106,7 +104,7 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
       if (!pid) return
       const state = engine.getState(pid)
       const snapshot = engine.getExecutionSnapshot(pid)
-      const definition = state.projectRoot ? loadWorkflowDefinition(state.projectRoot) : definitionFromBuiltInSpec()
+      const definition = engine.getWorkflowDefinition(pid)
       const keyForId = (nodeId: string): string => resolveWorkflowNodeKey(definition, nodeId)
       const rows = state.steps.map((step) => ({
         key: keyForId(step.id),
@@ -149,7 +147,7 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
       const pid = resolveProjectId(engine, projectId)
       if (!pid) return
       const state = engine.getState(pid)
-      const definition = state.projectRoot ? loadWorkflowDefinition(state.projectRoot) : definitionFromBuiltInSpec()
+      const definition = engine.getWorkflowDefinition(pid)
       const nodeId = resolveWorkflowNodeId(definition, nodeKey)
       const step = state.steps.find((candidate) => candidate.id === nodeId)
       if (!step) throw new Error(`节点尚未激活: ${nodeKey}`)

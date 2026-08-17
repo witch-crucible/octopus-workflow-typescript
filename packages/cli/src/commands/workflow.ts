@@ -2,7 +2,7 @@
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
-import { loadWorkflowDefinition, syncWorkflowWorkspace } from "@octopus/context/workflow.js"
+import { syncWorkflowWorkspace } from "@octopus/context/workflow.js"
 
 export function buildWorkflowCommands(program: Command, engine: WorkflowEngine): void {
   const workflow = program.command("workflow").description("工作流定义与 DAG 调度")
@@ -13,9 +13,7 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
     .action((projectId?: string) => {
       const pid = resolveProjectId(engine, projectId)
       if (!pid) return
-      const state = engine.getState(pid)
-      const root = state.projectRoot ?? process.cwd()
-      const definition = loadWorkflowDefinition(root)
+      const definition = engine.getWorkflowDefinition(pid)
       console.log(`✅ 工作流有效: ${definition.name} (${definition.nodes.length} 个节点)`)
     })
 
@@ -27,7 +25,7 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
       if (!pid) return
       const state = engine.getState(pid)
       const root = state.projectRoot ?? process.cwd()
-      const definition = loadWorkflowDefinition(root)
+      const definition = engine.getWorkflowDefinition(pid)
       const workspace = syncWorkflowWorkspace(root, definition)
       console.log(`✅ 工作区已同步: ${workspace.nodesPath}`)
     })

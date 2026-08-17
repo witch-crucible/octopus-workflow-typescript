@@ -27,7 +27,7 @@ export type CapabilityRef =
   /** AI 辅助：调用 agent-layer 的对应助手 */
   | {
       readonly kind: "ai"
-      readonly assistant: AIAssistantType
+      readonly assistant: string
       readonly input?: string
       readonly outputFile?: string
       readonly ifExists?: "overwrite" | "extend"
@@ -36,6 +36,8 @@ export type CapabilityRef =
   | { readonly kind: "integration"; readonly service: string; readonly op: string }
   /** Heinrich 标记：完成步骤时增加对应条数 */
   | { readonly kind: "heinrich"; readonly delta: number; readonly level?: HeinrichLevel }
+  /** 插件注册的自定义能力，按 name 分发 */
+  | { readonly kind: "custom"; readonly name: string; readonly input?: Readonly<Record<string, unknown>> }
 
 /** 步骤定义 —— 在 StageDef 基础上增加声明式 capabilities */
 export interface StepSpec extends StageDef {

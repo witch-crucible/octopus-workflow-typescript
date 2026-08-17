@@ -47,6 +47,9 @@ export interface AgentCallRecord {
   error?: string
 }
 
+/** AI 助手标识。内置 12 类见 `AIAssistantType`；插件可注册额外字符串 id。 */
+export type AssistantId = string
+
 /** AI 辅助功能类型枚举 —— 映射 PlantUML 中的 AI 介入点 */
 export enum AIAssistantType {
   /** 会议纪要 */

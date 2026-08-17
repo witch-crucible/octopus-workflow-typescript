@@ -8,14 +8,17 @@
 import { closeSync, openSync, mkdirSync } from "node:fs"
 import { spawn } from "node:child_process"
 import { loadConfig } from "@octopus/context/config.js"
-import { createStateStore, loadWorkflowDefinition, syncWorkflowWorkspace } from "@octopus/context/index.js"
-import { resolveWorkflowNodeKey } from "@octopus/context/workflow.js"
+import { createStateStore, syncWorkflowWorkspace } from "@octopus/context/index.js"
+import { loadResolvedWorkflowDefinition, loadWorkflowPluginRefs, resolveWorkflowNodeKey } from "@octopus/context/workflow.js"
 import { createExecutionStore } from "@octopus/context/execution.js"
 import type { NodeAction, NodeRunStatus, WorkflowEvent } from "@octopus/core/execution.js"
+import type { StepRuntime } from "@octopus/core/step.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
 import { ObservationId } from "@octopus/core/branded-ids.js"
 import { createAIClient } from "@octopus/agent-layer/index.js"
+import type { PluginHost } from "@octopus/plugin/index.js"
+import { loadPlugins } from "@octopus/plugin/index.js"
 import { prepareAIOutput, writeAIOutput } from "./ai-output.js"
 
 interface WorkerArgs {
@@ -35,10 +38,14 @@ async function main(): Promise<void> {
   if (!step) throw new Error(`节点不存在: ${run.nodeId}`)
 
   const projectRoot = state.projectRoot ?? process.cwd()
-  const definition = loadWorkflowDefinition(projectRoot)
+  const config = loadConfig(args.storeDir)
+  const pluginHost = await loadPlugins(
+    [...loadWorkflowPluginRefs(projectRoot), ...config.plugins],
+    { projectRoot },
+  )
+  const definition = loadResolvedWorkflowDefinition(projectRoot, pluginHost.overlays)
   const workspace = syncWorkflowWorkspace(projectRoot, definition)
   const nodePath = workspace.nodePath(resolveWorkflowNodeKey(definition, step.id))
-  const config = loadConfig(args.storeDir)
   const actions = step.actions ?? [{ type: "manual" as const }]
   const heartbeat = setInterval(() => {
     const active = executionStore.getRun(args.runId)
@@ -79,6 +86,8 @@ async function main(): Promise<void> {
         fallbackAIInput: `${step.name}：${step.description}`,
         stdoutPath: run.stdoutPath,
         stderrPath: run.stderrPath,
+        pluginHost,
+        step,
         assignChild: (processHandle) => { child = processHandle },
       })
       appendEvent(executionStore, args, "ACTION_FINISHED", { index, type: action.type, ...result })
@@ -148,6 +157,8 @@ interface ActionContext {
   fallbackAIInput: string
   stdoutPath: string
   stderrPath: string
+  pluginHost: PluginHost
+  step: StepRuntime
   assignChild: (child: ReturnType<typeof spawn>) => void
 }
 
@@ -185,7 +196,40 @@ async function executeAction(
     })
     return {}
   }
-  throw new WorkerFailure("FAILED", `未注册集成动作: ${action.service}.${action.operation}`)
+  if (action.type === "integration") {
+    const service = context.pluginHost.integrations[action.service]
+    if (!service) throw new WorkerFailure("FAILED", `未注册集成: ${action.service}`)
+    const fn = (service as unknown as Record<string, unknown>)[action.operation]
+    if (typeof fn !== "function") {
+      throw new WorkerFailure("FAILED", `集成无操作: ${action.operation}`)
+    }
+    try {
+      const out = await (fn as (...args: unknown[]) => unknown).call(service, action.input)
+      return { summary: JSON.stringify(out ?? {}).slice(0, 500) }
+    } catch (cause) {
+      throw new WorkerFailure("FAILED", (cause as Error).message)
+    }
+  }
+  if (action.type === "custom") {
+    const handler = context.pluginHost.customHandlers.get(action.name)
+    if (!handler) throw new WorkerFailure("FAILED", `未注册自定义能力: ${action.name}`)
+    const state = context.stateStore.load(context.stateProjectId)
+    const step = state.steps.find((candidate) => candidate.id === context.step.id) ?? context.step
+    const result = await handler(
+      action.input === undefined
+        ? { kind: "custom", name: action.name }
+        : { kind: "custom", name: action.name, input: action.input },
+      {
+        state,
+        step,
+        integrations: { ...context.pluginHost.integrations },
+      },
+    )
+    context.stateStore.save(state)
+    if (!result.ok) throw new WorkerFailure("FAILED", result.summary ?? `自定义能力失败: ${action.name}`)
+    return { summary: result.summary ?? "" }
+  }
+  throw new WorkerFailure("FAILED", `未知动作类型: ${(action as NodeAction).type}`)
 }
 
 function executeCommand(
