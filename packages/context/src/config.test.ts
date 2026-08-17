@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { loadConfig } from "./config.js"
+import { ConfigError } from "@octopus/core/errors.js"
+import { DEFAULT_CONFIG, loadConfig } from "./config.js"
 
 const temporaryDirectories: string[] = []
 const originalStoreDir = process.env["OCTOPUS_STORE_DIR"]
@@ -56,6 +57,48 @@ describe("loadConfig", () => {
       storeDir,
       workflow: { strictPermissions: true },
       ai: { defaultModel: "sonnet" },
+    })
+  })
+
+  it("配置 JSON 损坏时应抛出 ConfigError 且消息含配置文件路径", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), "{ not valid json")
+
+    expect(() => loadConfig(storeDir)).toThrow(ConfigError)
+    expect(() => loadConfig(storeDir)).toThrow(/config\.json/)
+  })
+
+  it("配置 JSON 顶层不是对象时应抛出 ConfigError", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify([1, 2, 3]))
+
+    expect(() => loadConfig(storeDir)).toThrow(ConfigError)
+  })
+
+  it("配置文件不存在时应回退默认值", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+
+    expect(loadConfig(storeDir)).toEqual({ ...DEFAULT_CONFIG, storeDir })
+  })
+
+  it("合法配置 JSON 应正常合并到默认值", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      ai: { defaultModel: "sonnet", retries: 3 },
+      workflow: { strictPermissions: true },
+    }))
+
+    expect(loadConfig(storeDir)).toMatchObject({
+      ai: { defaultModel: "sonnet", retries: 3, defaultTimeout: 120_000 },
+      workflow: { strictPermissions: true, aiGatingEnabled: false, heinrichThreshold: 3 },
     })
   })
 })

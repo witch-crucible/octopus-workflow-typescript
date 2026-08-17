@@ -16,6 +16,8 @@ export interface GitIntegrationConfig {
   gitPath?: string
   /** 默认远程名称 */
   remoteName?: string
+  /** Git 命令执行目录（默认继承进程当前目录） */
+  cwd?: string
 }
 
 const DEFAULT_CONFIG: GitIntegrationConfig = {
@@ -30,16 +32,22 @@ export class GitClient implements GitIntegration {
   readonly name = "git"
   private readonly gitPath: string
   private readonly remoteName: string
+  private readonly cwd: string | undefined
 
   constructor(config?: GitIntegrationConfig) {
     this.gitPath = config?.gitPath ?? DEFAULT_CONFIG.gitPath!
     this.remoteName = config?.remoteName ?? DEFAULT_CONFIG.remoteName!
+    this.cwd = config?.cwd
+  }
+
+  private execOptions(): { encoding: "utf-8"; cwd?: string } {
+    return this.cwd ? { encoding: "utf-8", cwd: this.cwd } : { encoding: "utf-8" }
   }
 
   /** 健康检查 —— 验证 git 是否可用 */
   async healthCheck(): Promise<IntegrationResult> {
     try {
-      await execFileAsync(this.gitPath, ["--version"], { encoding: "utf-8" })
+      await execFileAsync(this.gitPath, ["--version"], this.execOptions())
       return { success: true, message: "Git 可用" }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
@@ -50,7 +58,7 @@ export class GitClient implements GitIntegration {
   /** 获取仓库根目录 */
   async getRepoRoot(): Promise<IntegrationResult> {
     try {
-      const { stdout } = await execFileAsync(this.gitPath, ["rev-parse", "--show-toplevel"], { encoding: "utf-8" })
+      const { stdout } = await execFileAsync(this.gitPath, ["rev-parse", "--show-toplevel"], this.execOptions())
       return { success: true, message: "获取仓库根目录成功", data: { root: stdout.trim() } }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
@@ -61,7 +69,7 @@ export class GitClient implements GitIntegration {
   /** 获取当前分支 */
   async getCurrentBranch(): Promise<IntegrationResult> {
     try {
-      const { stdout } = await execFileAsync(this.gitPath, ["branch", "--show-current"], { encoding: "utf-8" })
+      const { stdout } = await execFileAsync(this.gitPath, ["branch", "--show-current"], this.execOptions())
       return { success: true, message: "获取当前分支成功", data: { branch: stdout.trim() } }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
@@ -72,7 +80,7 @@ export class GitClient implements GitIntegration {
   /** 获取变更文件列表 */
   async getChangedFiles(): Promise<IntegrationResult> {
     try {
-      const { stdout } = await execFileAsync(this.gitPath, ["status", "--porcelain"], { encoding: "utf-8" })
+      const { stdout } = await execFileAsync(this.gitPath, ["status", "--porcelain"], this.execOptions())
       const files = stdout.trim().split("\n").filter(Boolean).map((line) => {
         const status = line.slice(0, 2)
         const path = line.slice(3)
@@ -89,7 +97,7 @@ export class GitClient implements GitIntegration {
   async createReleaseBranch(baseBranch: string, releaseVersion: string): Promise<IntegrationResult> {
     try {
       const branchName = `release/${releaseVersion}`
-      await execFileAsync(this.gitPath, ["checkout", "-b", branchName, baseBranch], { encoding: "utf-8" })
+      await execFileAsync(this.gitPath, ["checkout", "-b", branchName, baseBranch], this.execOptions())
       return { success: true, message: `分支 ${branchName} 已创建`, data: { branchName, baseBranch, releaseVersion } }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
@@ -97,21 +105,42 @@ export class GitClient implements GitIntegration {
     }
   }
 
-  /** 合并分支 */
+  /** 合并分支 —— 将 source 合并进 target：先切换到 target，合并完成后切回原分支 */
   async mergeBranches(source: string, target: string): Promise<IntegrationResult> {
+    const previousBranch = await this.currentBranchName()
     try {
-      await execFileAsync(this.gitPath, ["merge", "--no-ff", source, "--no-edit"], { encoding: "utf-8" })
+      await execFileAsync(this.gitPath, ["checkout", target], this.execOptions())
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      return { success: false, message: `切换到目标分支 ${target} 失败: ${message}`, error: message }
+    }
+    try {
+      await execFileAsync(this.gitPath, ["merge", "--no-ff", source, "--no-edit"], this.execOptions())
       return { success: true, message: `${source} 已合并到 ${target}`, data: { source, target } }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause)
+      await execFileAsync(this.gitPath, ["merge", "--abort"], this.execOptions()).catch(() => undefined)
       return { success: false, message: `合并失败: ${message}`, error: message }
+    } finally {
+      if (previousBranch) {
+        await execFileAsync(this.gitPath, ["checkout", previousBranch], this.execOptions()).catch(() => undefined)
+      }
+    }
+  }
+
+  private async currentBranchName(): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync(this.gitPath, ["branch", "--show-current"], this.execOptions())
+      return stdout.trim()
+    } catch {
+      return ""
     }
   }
 
   /** 检查分支是否存在 */
   branchExists(name: string): boolean {
     try {
-      execFileSync(this.gitPath, ["rev-parse", "--verify", name], { encoding: "utf-8" })
+      execFileSync(this.gitPath, ["rev-parse", "--verify", name], this.execOptions())
       return true
     } catch {
       return false

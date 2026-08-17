@@ -77,13 +77,19 @@ function loadFromFile(storeDir: string): Partial<OctopusConfig> {
     return {}
   }
 
+  let parsed: unknown
   try {
     const raw = readFileSync(configPath, "utf-8")
-    const parsed = JSON.parse(raw) as Partial<OctopusConfig>
-    return parsed
-  } catch {
-    return {}
+    parsed = JSON.parse(raw)
+  } catch (cause) {
+    throw new ConfigError(`无法解析配置文件 ${configPath}`, configPath, cause)
   }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new ConfigError(`配置文件 ${configPath} 顶层必须是对象`, configPath)
+  }
+
+  return parsed as Partial<OctopusConfig>
 }
 
 /** 合并配置 */

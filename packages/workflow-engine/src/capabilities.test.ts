@@ -6,6 +6,7 @@ import { createStateStore } from "@octopus/context/index.js"
 import type { AIClient } from "@octopus/agent-layer/index.js"
 import { getAIAssistantModule } from "@octopus/agent-layer/index.js"
 import type { AIAssistantType, AIResponse } from "@octopus/core/agent.js"
+import type { IntegrationService } from "@octopus/integration/index.js"
 import { Phase } from "@octopus/core/phase.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { DEFAULT_WORKFLOW_SPEC } from "@octopus/core/spec.js"
@@ -126,6 +127,7 @@ describe("runStepCapabilities", () => {
       store: createStateStore({ storeDir: testStoreDir }),
     })
     const state = engine.initProject("cap_concurrent")
+    const originalSnapshot = JSON.stringify(state)
 
     const capabilityRun = engine.runStepCapabilities(state.projectId, "10.6")
     await started
@@ -135,6 +137,8 @@ describe("runStepCapabilities", () => {
     resolveAI?.({ result: "不应覆盖并发状态" })
 
     await expect(capabilityRun).rejects.toThrow("执行期间项目状态已变更")
+    // 调用方持有的原始 state 对象未被 capability 副作用污染
+    expect(JSON.stringify(state)).toBe(originalSnapshot)
     const latest = engine.getState(state.projectId)
     expect(latest.steps.find((candidate) => candidate.id === "10.1")?.status).toBe(TaskStatus.COMPLETED)
     expect(latest.artifacts.some((artifact) => artifact.content === "不应覆盖并发状态")).toBe(false)
@@ -239,6 +243,60 @@ describe("runStepCapabilities 显式输入", () => {
     expect(step.capabilityRuns?.[0]?.kind).toBe("integration")
     expect(step.capabilityRuns?.[0]?.ok).toBe(false)
     expect(step.capabilityRuns?.[1]?.kind).toBe("heinrich")
+  })
+})
+
+describe("Integration 能力透传输入", () => {
+  /** 记录调用参数的假集成服务 */
+  function makeRecordingService(received: unknown[][]) {
+    return {
+      name: "fakeService",
+      healthCheck: async () => ({ success: true, message: "ok" }),
+      runOp: async (...args: unknown[]) => {
+        received.push(args)
+        return { success: true, message: "done" }
+      },
+    } as unknown as IntegrationService
+  }
+
+  it("integration capability 有 input 时 op 收到该 input", async () => {
+    const store = createStateStore({ storeDir: testStoreDir })
+    const received: unknown[][] = []
+    const engine = new WorkflowEngine({
+      store,
+      integrations: { fakeService: makeRecordingService(received) },
+    })
+    const state = engine.initProject("cap_int_input")
+    const stepId = state.steps[0]!.id
+    store.update(state.projectId, (current) => {
+      const step = current.steps.find((item) => item.id === stepId)
+      if (step) step.capabilities = [{ kind: "integration", service: "fakeService", op: "runOp" }]
+      return current
+    })
+
+    await engine.runStepCapabilities(state.projectId, stepId, "EXPLICIT INPUT")
+
+    expect(received).toEqual([["EXPLICIT INPUT"]])
+  })
+
+  it("integration capability 无 input 时不传参（保持零参兼容）", async () => {
+    const store = createStateStore({ storeDir: testStoreDir })
+    const received: unknown[][] = []
+    const engine = new WorkflowEngine({
+      store,
+      integrations: { fakeService: makeRecordingService(received) },
+    })
+    const state = engine.initProject("cap_int_zeroarg")
+    const stepId = state.steps[0]!.id
+    store.update(state.projectId, (current) => {
+      const step = current.steps.find((item) => item.id === stepId)
+      if (step) step.capabilities = [{ kind: "integration", service: "fakeService", op: "runOp" }]
+      return current
+    })
+
+    await engine.runStepCapabilities(state.projectId, stepId)
+
+    expect(received).toEqual([[]])
   })
 })
 

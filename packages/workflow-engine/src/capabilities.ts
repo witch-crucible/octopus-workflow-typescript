@@ -99,7 +99,11 @@ const integrationHandler: CapabilityHandler = async (ref, ctx) => {
     return { kind: "integration", ref: label, ok: false, summary: `集成无操作: ${ref.op}` }
   }
   try {
-    const out = await (fn as (...args: unknown[]) => unknown).call(service)
+    const input = (ref as { input?: Readonly<Record<string, unknown>> }).input ?? ctx.input
+    const out =
+      input === undefined
+        ? await (fn as (...args: unknown[]) => unknown).call(service)
+        : await (fn as (...args: unknown[]) => unknown).call(service, input)
     return { kind: "integration", ref: label, ok: true, summary: truncate(JSON.stringify(out ?? {})) }
   } catch (err) {
     return { kind: "integration", ref: label, ok: false, summary: (err as Error).message }

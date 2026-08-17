@@ -390,14 +390,17 @@ export class WorkflowEngine {
       return state
     }
 
+    // 在克隆上执行全部 capability 副作用：并发校验失败时不污染调用方持有的 state
+    const working = structuredClone(state)
+    const workingStep = working.steps.find((s) => s.id === stepId)!
     const ctx: CapabilityContext = {
-      state,
-      step,
+      state: working,
+      step: workingStep,
       aiClient: this.aiClient,
       integrations: this.integrations,
       ...(input !== undefined ? { input } : {}),
     }
-    const runs = step.capabilityRuns ?? []
+    const runs = workingStep.capabilityRuns ?? []
     for (const ref of caps) {
       const result = await this.registry.dispatch(ref, ctx)
       runs.push({
@@ -408,17 +411,18 @@ export class WorkflowEngine {
         ...(result.summary !== undefined ? { summary: result.summary } : {}),
       })
     }
-    step.capabilityRuns = runs
-    step.updatedAt = new Date().toISOString()
+    workingStep.capabilityRuns = runs
+    workingStep.updatedAt = new Date().toISOString()
 
     // capability 可能改变 Heinrich 条数，检查审计触发
-    this.checkHeinrichAuditTrigger(state, step.phase)
+    this.checkHeinrichAuditTrigger(working, workingStep.phase)
 
+    // 乐观校验：仅当本次读取的原始快照仍是最新时才落库，否则交由调用方重试
     return this.store.update(projectId, (current) => {
       if (JSON.stringify(current) !== expectedState) {
         throw new Error(`步骤 ${stepId} 执行期间项目状态已变更，请确认最新状态后重试`)
       }
-      return state
+      return working
     })
   }
 
