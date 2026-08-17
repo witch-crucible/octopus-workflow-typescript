@@ -9,8 +9,13 @@ Octopus 工作流引擎的 **macOS 桌面外壳**（Electron）。
 ## 开发
 
 ```bash
-pnpm --filter @octopus/desktop start      # 编译并启动窗口
+pnpm --filter @octopus/desktop start      # 编译、为 Electron 重建原生模块并启动窗口
 ```
+
+`better-sqlite3` 是原生模块，必须按 **Electron 的 Node ABI** 编译（与系统 Node 的 ABI 不同）。
+`start` / `dist:mac` 会自动跑 `rebuild:native`。若只跑了 `pnpm install` 或用系统 Node
+测过 CLI/单测，再开桌面端时若出现 `NODE_MODULE_VERSION` 报错，重新 `start` 即可；
+之后若 CLI/测试又报同样错误，在仓库根目录执行 `pnpm rebuild better-sqlite3`。
 
 ## 浏览器界面
 

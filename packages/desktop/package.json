@@ -7,15 +7,17 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "start": "pnpm build && electron .",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3",
+    "start": "pnpm build && pnpm rebuild:native && electron .",
     "web": "pnpm build && node dist/web.js",
-    "dist:mac": "pnpm build && electron-builder --mac"
+    "dist:mac": "pnpm build && pnpm rebuild:native && electron-builder --mac"
   },
   "dependencies": {
     "@octopus/context": "workspace:*",
     "@octopus/workflow-engine": "workspace:*"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
     "@types/node": "^22.2.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
