@@ -12,4 +12,5 @@ coverage/
 .qwen/
 .omo/run-continuation/
 .octo_engine_test/
+.octo_cap_test/
 .octo/
