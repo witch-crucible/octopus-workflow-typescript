@@ -85,6 +85,18 @@ export interface ProjectStatusSummary {
   }
 }
 
+/** 项目管理中心列表项（比 ProjectStatusSummary 更轻，含描述与路径） */
+export interface ProjectSummary {
+  projectId: ProjectId
+  projectName: string
+  description: string
+  currentPhase: Phase
+  totalTasks: number
+  completedTasks: number
+  projectRoot?: string
+  updatedAt: string
+}
+
 // ── 派生视图 ──
 
 /** 把 StepRuntime 派生为 Task 视图（供前端与旧 API 兼容） */

@@ -32,7 +32,11 @@ if (!window.octopus) {
   window.octopus = {
     canInit: () => invoke("canInit"),
     listProjects: () => invoke("listProjects"),
+    listProjectSummaries: () => invoke("listProjectSummaries"),
     init: (name, description, projectRoot) => invoke("init", name, description, projectRoot),
+    updateProject: (projectId, patch) => invoke("updateProject", projectId, patch),
+    updateNodeSchedule: (projectId, nodeId, schedule) => invoke("updateNodeSchedule", projectId, nodeId, schedule),
+    deleteProject: (projectId) => invoke("deleteProject", projectId),
     status: (projectId) => invoke("status", projectId),
     snapshot: (projectId) => invoke("snapshot", projectId),
     state: (projectId) => invoke("state", projectId),

@@ -27,13 +27,14 @@ node packages/cli/dist/index.js status
 node packages/cli/dist/index.js node list
 ```
 
-`init` 创建项目状态并初始化工作流目录；一个状态库只允许初始化一个项目，已有项目时请直接执行 `status`。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令），多数命令在只有一个项目时可省略 `projectId`，可用 `octopus --help` 或 `octopus <command> --help` 查看完整参数。
+`init` 创建项目状态并初始化工作流目录；同一状态库可有多个项目。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令），多数命令在只有一个项目时可省略 `projectId`，可用 `octopus --help` 或 `octopus <command> --help` 查看完整参数。`octopus project list` / `octopus project delete <id> --yes` 用于列出和删除项目状态（不删源码目录）。
 
 ## 核心命令
 
 | 命令 | 用途 |
 | --- | --- |
 | `octopus status` | 查看项目与阶段摘要 |
+| `octopus project list` / `octopus project delete` | 列出或删除项目状态 |
 | `octopus phase/task/checklist/heinrich` | 管理阶段、任务、清单与风险记录 |
 | `octopus node create/list/show/run/complete` | 定义、查看和执行工作流节点 |
 | `octopus node cancel/retry/logs` | 管理节点运行及日志 |

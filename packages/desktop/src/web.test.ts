@@ -1,12 +1,53 @@
+import { type ChildProcess, spawn } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
-import { request } from "node:http"
+import { createServer, request } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runInNewContext } from "node:vm"
 import { afterEach, describe, expect, it } from "vitest"
-import { createOctopusWebServer } from "./web.js"
+import { createOctopusWebServer, stopExistingOctopusWeb } from "./web.js"
 
 const temporaryDirectories: string[] = []
+const childProcesses: ChildProcess[] = []
+
+async function reservedPort(): Promise<number> {
+  return new Promise((resolvePort, reject) => {
+    const probe = createServer()
+    probe.once("error", reject)
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address()
+      if (!address || typeof address === "string") {
+        probe.close()
+        reject(new Error("无法分配测试端口"))
+        return
+      }
+      const port = address.port
+      probe.close((error) => error ? reject(error) : resolvePort(port))
+    })
+  })
+}
+
+async function waitForChildListen(host: string, port: number): Promise<void> {
+  const deadline = Date.now() + 4000
+  while (Date.now() < deadline) {
+    try {
+      await fetch(`http://${host}:${port}/`, { signal: AbortSignal.timeout(200) })
+      return
+    } catch {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 40))
+    }
+  }
+  throw new Error(`测试子进程未在 ${host}:${port} 监听`)
+}
+
+function spawnListener(port: number, script: string): ChildProcess {
+  const child = spawn(process.execPath, ["-e", script], {
+    env: { ...process.env, TEST_PORT: String(port) },
+    stdio: "ignore",
+  })
+  childProcesses.push(child)
+  return child
+}
 
 async function invoke(url: string, method: string, ...args: unknown[]): Promise<Response> {
   return fetch(`${url}/api`, {
@@ -50,12 +91,17 @@ async function rawInvoke(
 
 describe("Octopus Web", () => {
   afterEach(() => {
+    for (const child of childProcesses.splice(0)) {
+      if (child.pid !== undefined) {
+        try { process.kill(child.pid, "SIGKILL") } catch { /* 已退出 */ }
+      }
+    }
     for (const directory of temporaryDirectories.splice(0)) {
       rmSync(directory, { recursive: true, force: true })
     }
   })
 
-  it("应提供真实项目状态并拒绝同一状态库重复初始化", async () => {
+  it("应提供真实项目状态并允许同一状态库创建多个项目", async () => {
     const root = mkdtempSync(join(tmpdir(), "octopus-web-"))
     temporaryDirectories.push(root)
     const server = await createOctopusWebServer({
@@ -87,8 +133,42 @@ describe("Octopus Web", () => {
       })
 
       const repeated = await invoke(url, "init", "Repeated Project", undefined, join(root, "project-two"))
-      expect(repeated.status).toBe(409)
-      expect(await repeated.json()).toMatchObject({ error: expect.stringContaining("状态库已有项目，禁止执行 init") })
+      expect(repeated.status).toBe(200)
+      const repeatedBody = await repeated.json() as { result: { projectId: string } }
+
+      const summaries = await (await invoke(url, "listProjectSummaries")).json() as {
+        result: Array<{ projectId: string; projectName: string; completedTasks: number; totalTasks: number }>
+      }
+      expect(summaries.result.map((item) => item.projectId)).toEqual(
+        expect.arrayContaining([initializedBody.result.projectId, repeatedBody.result.projectId]),
+      )
+      expect(summaries.result[0]?.totalTasks).toBeGreaterThan(0)
+
+      const renamed = await invoke(url, "updateProject", initializedBody.result.projectId, { name: "Renamed Web Project" })
+      expect(renamed.status).toBe(200)
+      expect(await renamed.json()).toMatchObject({
+        result: { projectId: initializedBody.result.projectId, projectName: "Renamed Web Project" },
+      })
+
+      const stateBody = await (await invoke(url, "state", initializedBody.result.projectId)).json() as {
+        result: { steps: Array<{ id: string }> }
+      }
+      const nodeId = stateBody.result.steps[0]?.id
+      expect(nodeId).toBeTruthy()
+      const scheduled = await invoke(url, "updateNodeSchedule", initializedBody.result.projectId, nodeId, {
+        plannedStart: "2026-04-01",
+        plannedEnd: "2026-04-03",
+      })
+      expect(scheduled.status).toBe(200)
+      expect(await scheduled.json()).toMatchObject({
+        result: { nodeId, plannedStart: "2026-04-01", plannedEnd: "2026-04-03" },
+      })
+
+      const deleted = await invoke(url, "deleteProject", repeatedBody.result.projectId)
+      expect(deleted.status).toBe(200)
+      expect(await (await invoke(url, "listProjects")).json()).toEqual({
+        result: [initializedBody.result.projectId],
+      })
     } finally {
       await server.close()
     }
@@ -146,6 +226,41 @@ describe("Octopus Web", () => {
     } finally {
       await server.close()
     }
+  })
+
+  it("应结束占用端口的上一份 Octopus Web，并拒绝杀死无关进程", async () => {
+    const host = "127.0.0.1"
+    const octopusPort = await reservedPort()
+    const foreignPort = await reservedPort()
+
+    spawnListener(octopusPort, `
+      require("http").createServer((request, response) => {
+        if (request.url === "/api" && request.method === "POST") {
+          response.setHeader("Content-Type", "application/json")
+          response.end(JSON.stringify({ result: [] }))
+          return
+        }
+        response.statusCode = 404
+        response.end()
+      }).listen(process.env.TEST_PORT, "127.0.0.1")
+    `)
+    const foreign = spawnListener(foreignPort, `
+      require("http").createServer((_request, response) => {
+        response.end("other")
+      }).listen(process.env.TEST_PORT, "127.0.0.1")
+    `)
+    await waitForChildListen(host, octopusPort)
+    await waitForChildListen(host, foreignPort)
+
+    expect(await stopExistingOctopusWeb(host, octopusPort)).toBe(true)
+    await expect(fetch(`http://${host}:${octopusPort}/`, { signal: AbortSignal.timeout(400) }))
+      .rejects.toThrow()
+
+    await expect(stopExistingOctopusWeb(host, foreignPort)).rejects.toThrow(/已被进程/)
+    expect(foreign.exitCode).toBeNull()
+    expect(await (await fetch(`http://${host}:${foreignPort}/`)).text()).toBe("other")
+
+    expect(await stopExistingOctopusWeb(host, octopusPort)).toBe(false)
   })
 
   it("浏览器 transport 遇到非法 JSON 时应拒绝而不是悬挂", async () => {

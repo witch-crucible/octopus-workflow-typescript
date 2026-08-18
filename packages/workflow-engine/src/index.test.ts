@@ -247,6 +247,100 @@ describe("WorkflowEngine", () => {
     })
   })
 
+  describe("project lifecycle", () => {
+    it("同一状态库可创建多个项目并列出摘要", () => {
+      const engine = createEngine()
+      const first = engine.initProject("生命周期甲", "描述甲")
+      const second = engine.initProject("生命周期乙", "描述乙")
+      const summaries = engine.listProjectSummaries()
+      expect(summaries.map((item) => item.projectId)).toEqual(
+        expect.arrayContaining([first.projectId, second.projectId]),
+      )
+      const firstSummary = summaries.find((item) => item.projectId === first.projectId)
+      expect(firstSummary).toMatchObject({
+        projectName: "生命周期甲",
+        description: "描述甲",
+        currentPhase: Phase.REQUIREMENTS_ANALYSIS,
+      })
+      expect(firstSummary?.totalTasks).toBeGreaterThan(0)
+    })
+
+    it("updateProject 可改名称与描述", () => {
+      const engine = createEngine()
+      const state = engine.initProject("待改名", "旧描述")
+      const updated = engine.updateProject(state.projectId, { name: "新名称", description: "新描述" })
+      expect(updated.projectName).toBe("新名称")
+      expect(updated.description).toBe("新描述")
+      expect(engine.getState(state.projectId).projectName).toBe("新名称")
+    })
+
+    it("deleteProject 后不再出现在列表中", () => {
+      const engine = createEngine()
+      const state = engine.initProject("待删除项目")
+      engine.deleteProject(state.projectId)
+      expect(engine.listProjects()).not.toContain(state.projectId)
+      expect(engine.listProjectSummaries().some((item) => item.projectId === state.projectId)).toBe(false)
+    })
+  })
+
+  describe("updateNodeSchedule", () => {
+    it("可写入成对的计划日期", () => {
+      const engine = createEngine()
+      const state = engine.initProject("排期写入")
+      const nodeId = state.steps[0]!.id
+      const updated = engine.updateNodeSchedule(state.projectId, nodeId, {
+        plannedStart: "2026-03-01",
+        plannedEnd: "2026-03-05",
+      })
+      const step = updated.steps.find((item) => item.id === nodeId)
+      expect(step?.plannedStart).toBe("2026-03-01")
+      expect(step?.plannedEnd).toBe("2026-03-05")
+      expect(engine.getState(state.projectId).steps.find((item) => item.id === nodeId)?.plannedStart).toBe("2026-03-01")
+    })
+
+    it("可清除计划日期", () => {
+      const engine = createEngine()
+      const state = engine.initProject("排期清除")
+      const nodeId = state.steps[0]!.id
+      engine.updateNodeSchedule(state.projectId, nodeId, {
+        plannedStart: "2026-03-01",
+        plannedEnd: "2026-03-05",
+      })
+      const cleared = engine.updateNodeSchedule(state.projectId, nodeId, {
+        plannedStart: null,
+        plannedEnd: null,
+      })
+      const step = cleared.steps.find((item) => item.id === nodeId)
+      expect(step?.plannedStart).toBeUndefined()
+      expect(step?.plannedEnd).toBeUndefined()
+    })
+
+    it("结束早于开始或只给一端时失败", () => {
+      const engine = createEngine()
+      const state = engine.initProject("排期校验")
+      const nodeId = state.steps[0]!.id
+      expect(() => engine.updateNodeSchedule(state.projectId, nodeId, {
+        plannedStart: "2026-03-05",
+        plannedEnd: "2026-03-01",
+      })).toThrow("计划结束日期不能早于开始日期")
+      expect(() => engine.updateNodeSchedule(state.projectId, nodeId, {
+        plannedStart: "2026-03-01",
+      })).toThrow("计划起止日期必须成对提供")
+    })
+
+    it("未知节点失败；旧状态缺字段仍可加载", () => {
+      const engine = createEngine()
+      const state = engine.initProject("排期未知节点")
+      expect(() => engine.updateNodeSchedule(state.projectId, "missing-node", {
+        plannedStart: "2026-03-01",
+        plannedEnd: "2026-03-02",
+      })).toThrow("节点不存在")
+      const step = engine.getState(state.projectId).steps[0]
+      expect(step?.plannedStart).toBeUndefined()
+      expect(step?.plannedEnd).toBeUndefined()
+    })
+  })
+
   describe("canAdvance", () => {
     it("任务和清单都完成时允许前进", () => {
       const engine = createEngine()

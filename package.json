@@ -9,8 +9,8 @@
     "web": "pnpm --filter @octopus/desktop web",
     "lint": "biome lint --diagnostic-level=error packages/",
     "lint:fix": "biome lint --write --diagnostic-level=error packages/",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "node scripts/ensure-sqlite.mjs node && vitest run",
+    "test:watch": "node scripts/ensure-sqlite.mjs node && vitest",
     "verify": "bash scripts/verify.sh",
     "clean": "pnpm -r exec rm -rf dist tsconfig.tsbuildinfo"
   },

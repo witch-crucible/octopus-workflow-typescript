@@ -8,9 +8,9 @@
   "scripts": {
     "build": "tsc",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
-    "start": "pnpm build && pnpm rebuild:native && electron .",
-    "web": "pnpm build && node dist/web.js",
-    "dist:mac": "pnpm build && pnpm rebuild:native && electron-builder --mac"
+    "start": "pnpm build && node ../../scripts/ensure-sqlite.mjs electron && electron .",
+    "web": "pnpm build && node ../../scripts/ensure-sqlite.mjs node && node dist/web.js",
+    "dist:mac": "pnpm build && node ../../scripts/ensure-sqlite.mjs electron && electron-builder --mac"
   },
   "dependencies": {
     "@octopus/context": "workspace:*",

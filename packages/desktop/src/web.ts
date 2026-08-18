@@ -4,12 +4,16 @@
  * 仅监听本机回环地址，页面通过同源 JSON API 访问经过白名单限制的引擎能力。
  */
 
+import { execFile } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 import { loadConfig } from "@octopus/context/config.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
+
+const execFileAsync = promisify(execFile)
 
 const moduleDirectory = dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = resolve(moduleDirectory, "../../..")
@@ -59,6 +63,99 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined
 }
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
+}
+
+async function findListenerPid(host: string, port: number): Promise<number | undefined> {
+  try {
+    const { stdout } = await execFileAsync("lsof", [
+      "-nP",
+      `-iTCP@${host}:${port}`,
+      "-sTCP:LISTEN",
+      "-t",
+    ], { encoding: "utf-8" })
+    const pid = Number.parseInt(stdout.trim().split(/\n/, 1)[0] ?? "", 10)
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function processCommand(pid: number): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf-8",
+    })
+    const command = stdout.trim()
+    return command === "" ? undefined : command
+  } catch {
+    return undefined
+  }
+}
+
+async function isOctopusWebServer(host: string, port: number): Promise<boolean> {
+  try {
+    const response = await fetch(`http://${host}:${port}/api`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: "listProjects", args: [] }),
+      signal: AbortSignal.timeout(800),
+    })
+    if (!response.ok) return false
+    const body = await response.json() as { result?: unknown }
+    return Array.isArray(body.result)
+  } catch {
+    return false
+  }
+}
+
+function terminatePid(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
+  }
+}
+
+async function waitUntilPidGone(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return true
+    }
+    await sleep(40)
+  }
+  return false
+}
+
+/** 结束占用该端口的上一份 Octopus Web；端口空闲则返回 false。非本服务占用时抛错。 */
+export async function stopExistingOctopusWeb(host: string, port: number): Promise<boolean> {
+  const pid = await findListenerPid(host, port)
+  if (pid === undefined || pid === process.pid) return false
+
+  const command = await processCommand(pid)
+  const ours = await isOctopusWebServer(host, port) || Boolean(command?.includes("dist/web.js"))
+  if (!ours) {
+    const occupant = command ? `${pid}（${command}）` : String(pid)
+    throw new Error(`${host}:${port} 已被进程 ${occupant} 占用，可设置 OCTOPUS_WEB_PORT 换端口，或结束该进程后重试`)
+  }
+
+  terminatePid(pid, "SIGTERM")
+  if (!await waitUntilPidGone(pid, 2000)) {
+    terminatePid(pid, "SIGKILL")
+    await waitUntilPidGone(pid, 1000)
+  }
+
+  const remaining = await findListenerPid(host, port)
+  if (remaining !== undefined) {
+    throw new Error(`无法释放 ${host}:${port}（仍被进程 ${remaining} 占用）`)
+  }
+  return true
+}
+
 async function readRequest(request: IncomingMessage): Promise<WebRequest> {
   if (request.headers["content-type"]?.split(";", 1)[0] !== "application/json") {
     throw new WebError(415, "请求必须使用 application/json")
@@ -88,19 +185,17 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
   const engine = await createWorkflowEngineFromConfig(config, { projectRoot: defaultProjectRoot })
 
   const listProjects = (): string[] => engine.listProjects()
-  const initializationAllowed = (): boolean => listProjects().length === 0
 
   const invoke = async (method: string, args: unknown[]): Promise<unknown> => {
     const projectId = (): string => requiredString(args[0], "projectId")
     switch (method) {
       case "canInit":
-        return initializationAllowed()
+        return true
       case "listProjects":
         return listProjects()
+      case "listProjectSummaries":
+        return engine.listProjectSummaries()
       case "init": {
-        if (!initializationAllowed()) {
-          throw new WebError(409, "状态库已有项目，禁止执行 init")
-        }
         const state = engine.initProject(
           requiredString(args[0], "name"),
           optionalString(args[1]),
@@ -113,6 +208,42 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
           taskCount: state.steps.length,
         }
       }
+      case "updateProject": {
+        const patch = args[1] && typeof args[1] === "object" ? args[1] as { name?: unknown; description?: unknown } : {}
+        const state = engine.updateProject(projectId(), {
+          ...(typeof patch.name === "string" ? { name: patch.name } : {}),
+          ...(typeof patch.description === "string" ? { description: patch.description } : {}),
+        })
+        return {
+          projectId: state.projectId,
+          projectName: state.projectName,
+          description: state.description,
+        }
+      }
+      case "updateNodeSchedule": {
+        const nodeId = requiredString(args[1], "nodeId")
+        const schedule = args[2] && typeof args[2] === "object"
+          ? args[2] as { plannedStart?: unknown; plannedEnd?: unknown }
+          : {}
+        const patch: { plannedStart?: string | null; plannedEnd?: string | null } = {}
+        if (schedule.plannedStart === null || typeof schedule.plannedStart === "string") {
+          patch.plannedStart = schedule.plannedStart
+        }
+        if (schedule.plannedEnd === null || typeof schedule.plannedEnd === "string") {
+          patch.plannedEnd = schedule.plannedEnd
+        }
+        const state = engine.updateNodeSchedule(projectId(), nodeId, patch)
+        const step = state.steps.find((item) => item.id === nodeId)
+        return {
+          projectId: state.projectId,
+          nodeId,
+          plannedStart: step?.plannedStart ?? null,
+          plannedEnd: step?.plannedEnd ?? null,
+        }
+      }
+      case "deleteProject":
+        engine.deleteProject(projectId())
+        return { deleted: true, projectId: projectId() }
       case "status":
         return engine.getProjectStatus(projectId())
       case "snapshot":
@@ -153,6 +284,7 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
     ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
     ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
     ["/renderer.js", { file: "renderer.js", type: "text/javascript; charset=utf-8" }],
+    ["/gantt.js", { file: "gantt.js", type: "text/javascript; charset=utf-8" }],
     ["/browser-api.js", { file: "browser-api.js", type: "text/javascript; charset=utf-8" }],
   ])
 
@@ -223,12 +355,17 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
 
 const entryPath = process.argv[1] ? resolve(process.argv[1]) : undefined
 if (entryPath === fileURLToPath(import.meta.url)) {
-  void createOctopusWebServer({
-    ...(process.env["OCTOPUS_WEB_PORT"] ? { port: Number(process.env["OCTOPUS_WEB_PORT"]) } : {}),
-  }).then((server) => server.listen())
-    .then((url) => console.log(`🐙 Octopus Web 已启动：${url}`))
-    .catch((error: unknown) => {
-      console.error(`❌ Octopus Web 启动失败：${error instanceof Error ? error.message : String(error)}`)
-      process.exit(1)
-    })
+  const host = "127.0.0.1"
+  const port = process.env["OCTOPUS_WEB_PORT"] ? Number(process.env["OCTOPUS_WEB_PORT"]) : 4173
+  void (async () => {
+    if (await stopExistingOctopusWeb(host, port)) {
+      console.log(`已结束占用 ${host}:${port} 的上一份 Octopus Web 进程`)
+    }
+    const server = await createOctopusWebServer({ port })
+    const url = await server.listen()
+    console.log(`🐙 Octopus Web 已启动：${url}`)
+  })().catch((error: unknown) => {
+    console.error(`❌ Octopus Web 启动失败：${error instanceof Error ? error.message : String(error)}`)
+    process.exit(1)
+  })
 }

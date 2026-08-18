@@ -16,9 +16,6 @@ export function buildInitCommand(program: Command, engine: WorkflowEngine): void
     .option("--json", "以 JSON 格式输出")
     .action((projectName: string, options: { description?: string; root?: string; json?: boolean }) => {
       try {
-        if (engine.listProjects().length > 0) {
-          throw new Error("状态库已有项目，禁止执行 init")
-        }
         const projectRoot = resolve(options.root ?? process.cwd())
         const state = engine.initProject(projectName, options.description, projectRoot)
         if (options.json) {

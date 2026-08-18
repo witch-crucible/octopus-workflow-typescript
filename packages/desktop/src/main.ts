@@ -24,11 +24,11 @@ function listProjects(): string[] {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("octopus:canInit", () => listProjects().length === 0)
+  ipcMain.handle("octopus:canInit", () => true)
   ipcMain.handle("octopus:listProjects", () => listProjects())
+  ipcMain.handle("octopus:listProjectSummaries", () => engine.listProjectSummaries())
 
   ipcMain.handle("octopus:init", (_e, name: string, description?: string, projectRoot?: string) => {
-    if (listProjects().length > 0) throw new Error("状态库已有项目，禁止执行 init")
     const state = engine.initProject(name, description, projectRoot ?? app.getPath("documents"))
     return {
       projectId: state.projectId,
@@ -36,6 +36,34 @@ function registerIpc(): void {
       currentPhase: state.currentPhase,
       taskCount: state.steps.length,
     }
+  })
+
+  ipcMain.handle("octopus:updateProject", (_e, projectId: string, patch: { name?: string; description?: string }) => {
+    const state = engine.updateProject(projectId, patch ?? {})
+    return {
+      projectId: state.projectId,
+      projectName: state.projectName,
+      description: state.description,
+    }
+  })
+
+  ipcMain.handle(
+    "octopus:updateNodeSchedule",
+    (_e, projectId: string, nodeId: string, schedule: { plannedStart?: string | null; plannedEnd?: string | null }) => {
+      const state = engine.updateNodeSchedule(projectId, nodeId, schedule ?? {})
+      const step = state.steps.find((item) => item.id === nodeId)
+      return {
+        projectId: state.projectId,
+        nodeId,
+        plannedStart: step?.plannedStart ?? null,
+        plannedEnd: step?.plannedEnd ?? null,
+      }
+    },
+  )
+
+  ipcMain.handle("octopus:deleteProject", (_e, projectId: string) => {
+    engine.deleteProject(projectId)
+    return { deleted: true, projectId }
   })
 
   ipcMain.handle("octopus:status", (_e, projectId: string) => engine.getProjectStatus(projectId))

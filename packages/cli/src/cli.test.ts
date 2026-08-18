@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { Command } from "commander"
 import { buildInitCommand } from "./commands/init.js"
+import { buildProjectCommands } from "./commands/project.js"
 import { buildStatusCommand } from "./commands/status.js"
 import { buildPhaseCommands } from "./commands/phase.js"
 import { buildAiCommands } from "./commands/ai.js"
@@ -90,14 +91,46 @@ describe("CLI 命令验证", () => {
     consoleErrorSpy.mockRestore()
   })
 
-  it("init 应在状态库已有项目时拒绝创建项目", () => {
+  it("init 应允许在同一状态库创建第二个项目", () => {
     const engine = createEngine()
     engine.initProject("已存在项目")
-    const initProjectSpy = vi.spyOn(engine, "initProject")
     const program = new Command()
     buildInitCommand(program, engine)
-    const projectRoot = mkdtempSync(join(tmpdir(), "octopus-cli-existing-state-"))
+    const projectRoot = mkdtempSync(join(tmpdir(), "octopus-cli-second-project-"))
     temporaryProjectRoots.push(projectRoot)
+
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    program.parse(["node", "octopus", "init", "第二个项目", "--root", projectRoot, "--json"])
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    const parsed = JSON.parse(String(consoleLogSpy.mock.calls[0]?.[0]))
+    expect(parsed.projectName).toBe("第二个项目")
+    expect(engine.listProjects()).toHaveLength(2)
+    expect(existsSync(join(projectRoot, "workflow.yaml"))).toBe(true)
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("project list 在空库时应提示暂无项目", () => {
+    const engine = createEngine()
+    const program = new Command()
+    buildProjectCommands(program, engine)
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+
+    program.parse(["node", "octopus", "project", "list"])
+
+    expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining("暂无项目"))
+    consoleLogSpy.mockRestore()
+  })
+
+  it("project delete 无 --yes 时应拒绝，带 --yes 时应删除", () => {
+    const engine = createEngine()
+    const state = engine.initProject("待删项目")
+    const program = new Command()
+    buildProjectCommands(program, engine)
 
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => {
@@ -105,17 +138,18 @@ describe("CLI 命令验证", () => {
     })
 
     expect(() => {
-      program.parse(["node", "octopus", "init", "重复初始化", "--root", projectRoot])
+      program.parse(["node", "octopus", "project", "delete", state.projectId])
     }).toThrow("process.exit")
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("--yes"))
+    expect(engine.listProjects()).toContain(state.projectId)
 
-    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("状态库已有项目，禁止执行 init"))
-    expect(exitSpy).toHaveBeenCalledWith(1)
-    expect(initProjectSpy).not.toHaveBeenCalled()
-    expect(existsSync(join(projectRoot, "workflow.yaml"))).toBe(false)
-
-    initProjectSpy.mockRestore()
     consoleErrorSpy.mockRestore()
     exitSpy.mockRestore()
+
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    program.parse(["node", "octopus", "project", "delete", state.projectId, "--yes"])
+    expect(engine.listProjects()).not.toContain(state.projectId)
+    consoleLogSpy.mockRestore()
   })
 
   it("status 命令应在无项目时返回错误", () => {

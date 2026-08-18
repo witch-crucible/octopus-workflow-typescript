@@ -4,6 +4,8 @@
  *
  * 命令结构：
  *   octopus init <name>         — 创建项目
+ *   octopus project list        — 列出项目
+ *   octopus project delete <id> — 删除项目状态
  *   octopus status              — 项目状态
  *   octopus phase list          — 阶段列表
  *   octopus phase advance       — 前进阶段
@@ -19,6 +21,7 @@ import { Command } from "commander"
 import { loadConfig } from "@octopus/context/config.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
 import { buildInitCommand } from "./commands/init.js"
+import { buildProjectCommands } from "./commands/project.js"
 import { buildStatusCommand } from "./commands/status.js"
 import { buildPhaseCommands } from "./commands/phase.js"
 import { buildTaskCommands } from "./commands/task.js"
@@ -44,6 +47,7 @@ async function main(): Promise<void> {
 
   // 注册子命令
   buildInitCommand(program, engine)
+  buildProjectCommands(program, engine)
   buildStatusCommand(program, engine)
   buildPhaseCommands(program, engine)
   buildTaskCommands(program, engine)

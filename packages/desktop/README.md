@@ -25,7 +25,7 @@ Electron 无法启动或只需要本地浏览器展示时，在仓库根目录�
 pnpm web
 ```
 
-然后访问 `http://127.0.0.1:4173`。服务只监听 `127.0.0.1`，默认读取仓库根目录的 `.octo/state.sqlite`；使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改状态目录。页面复用 Electron renderer，但通过同源 HTTP API 访问真实工作流引擎。
+然后访问 `http://127.0.0.1:4173`。默认进入项目管理中心，可创建、打开、编辑和删除多个项目。打开项目后可在工作台切换**流程图**与 Teambition 风格**甘特图**（左侧树表 + 右侧时间条，支持日/周/月、只读、拖拽排期）。服务只监听 `127.0.0.1`，默认读取仓库根目录的 `.octo/state.sqlite`；使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改状态目录。页面复用 Electron renderer，但通过同源 HTTP API 访问真实工作流引擎。删除项目只清状态库记录，不会删除 `workflow.yaml`。
 
 ## 打包为 macOS 应用
 
@@ -44,8 +44,8 @@ pnpm --filter @octopus/desktop dist:mac   # 输出 .dmg 到 packages/desktop/rel
 
 ## 当前已接能力
 
-- 列出项目（`listProjects`）
-- 创建项目（`init`）
+- 项目管理中心：列出 / 创建 / 打开 / 改名 / 删除项目
+- 工作台双视图：角色泳道流程图 + Teambition 风格甘特图（节点计划起止可拖拽保存）
 - 查看项目状态：阶段进度、任务/清单统计、海因里希三角（`status`）
 - 通过系统文件对话框导出版本化任务 JSON（`exportTasks`）
 - 确认后按 `stageId` 合并导入任务进度（`importTasks`）

@@ -3,6 +3,8 @@
 const projectsEl = document.getElementById("projects")
 const graphEl = document.getElementById("graph")
 const graphScalerEl = document.getElementById("graphScaler")
+const graphWrapEl = document.getElementById("graphWrap")
+const graphFullscreenRootEl = document.getElementById("graphFullscreenRoot")
 const summaryEl = document.getElementById("summary")
 const detailsEl = document.getElementById("details")
 const emptyEl = document.getElementById("empty")
@@ -11,6 +13,20 @@ const projectLabelEl = document.getElementById("projectLabel")
 const flowHintEl = document.getElementById("flowHint")
 const zoomLabelEl = document.getElementById("zoomLabel")
 const roleLegendEl = document.getElementById("roleLegend")
+const themeToggleEl = document.getElementById("themeToggle")
+const fullscreenGraphEl = document.getElementById("fullscreenGraph")
+const hubViewEl = document.getElementById("hubView")
+const workspaceViewEl = document.getElementById("workspaceView")
+const hubCardsEl = document.getElementById("hubCards")
+const hubEmptyEl = document.getElementById("hubEmpty")
+const hubFilterEl = document.getElementById("hubFilter")
+const backToHubEl = document.getElementById("backToHub")
+const sidebarToHubEl = document.getElementById("sidebarToHub")
+const viewPulseEl = document.getElementById("viewPulse")
+const viewSubtitleEl = document.getElementById("viewSubtitle")
+const workspaceTabsEl = document.getElementById("workspaceTabs")
+const graphPaneEl = document.getElementById("graphPane")
+const ganttPaneEl = document.getElementById("ganttPane")
 
 let selectedProject
 let selectedNode
@@ -18,9 +34,23 @@ let currentState
 let currentSnapshot
 let currentStatus
 let currentRuns = []
+/** 项目级全部运行（甘特图实际条）；节点详情仍用 currentRuns */
+let projectRuns = []
+let currentView = "hub"
+/** 工作台子视图：graph | gantt（打开项目默认甘特图） */
+let workspaceMode = "gantt"
+let hubFilter = ""
+let lastCreatedId = ""
+let summaries = []
 const projectMeta = new Map()
-/** 流程图缩放比例（默认放大，避免文字过小发糊） */
-let graphZoom = 1.4
+/** 流程图缩放比例（宽屏默认放大，避免文字过小发糊；窄屏自动降低） */
+let graphZoom = window.innerWidth < 900 ? 1 : 1.4
+/** 上次自动滚入视口的当前节点集合签名，避免轮询刷新打断用户滚动 */
+let lastScrolledCurrentKey = ""
+let ganttMounted = false
+
+const THEME_STORAGE_KEY = "octopus.ui.theme"
+const ACCENT = "#409eff"
 
 /** 阶段顺序 */
 const PHASE_ORDER = [
@@ -35,16 +65,16 @@ const PHASE_ORDER = [
 /** 角色泳道顺序 */
 const ROLE_ORDER = ["PM", "BA", "SA", "AI", "DEV", "QA", "OP", "HEI"]
 
-/** 角色色条 */
+/** 角色色条（贴近 Element Plus 语义色） */
 const ROLE_COLORS = {
-  PM: "#55a7ff",
-  BA: "#47d7a1",
-  SA: "#7dd3fc",
-  AI: "#c4b5fd",
-  DEV: "#fbbf24",
-  QA: "#fb7185",
-  OP: "#94a3b8",
-  HEI: "#f0abfc",
+  PM: "#409eff",
+  BA: "#67c23a",
+  SA: "#36cfc9",
+  AI: "#9b59b6",
+  DEV: "#e6a23c",
+  QA: "#f56c6c",
+  OP: "#909399",
+  HEI: "#c45656",
 }
 
 /** 阶段中文名 */
@@ -296,45 +326,424 @@ function findNodeName(nodeId) {
   return node ? nodeNameZh(node) : nodeId
 }
 
-async function refreshProjects(selectId) {
-  const ids = await window.octopus.listProjects()
-  projectsEl.innerHTML = ""
-  if (!ids.length) {
-    projectsEl.innerHTML = `<div class="empty-state">暂无项目。请在上方创建，或使用 CLI：<br /><code>node packages/cli/dist/index.js init "项目名" --root .</code></div>`
-    projectLabelEl.textContent = "未选择项目"
-    statusEl.textContent = "未选择项目"
-    statusEl.className = "badge"
-    summaryEl.innerHTML = ""
-    graphEl.replaceChildren()
-    return
+function preferredTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY)
+    if (saved === "light" || saved === "dark") return saved
+  } catch {
+    // ignore storage errors（隐私模式等）
   }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+}
 
-  for (const id of ids) {
-    let meta = projectMeta.get(id)
-    if (!meta) {
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light"
+  document.documentElement.setAttribute("data-theme", next)
+  document.documentElement.style.colorScheme = next
+  if (themeToggleEl) {
+    themeToggleEl.textContent = next === "dark" ? "☀" : "☾"
+    themeToggleEl.setAttribute("aria-pressed", next === "dark" ? "true" : "false")
+    themeToggleEl.title = next === "dark" ? "切换为白昼主题" : "切换为黑夜主题"
+    themeToggleEl.setAttribute("aria-label", themeToggleEl.title)
+  }
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, next)
+  } catch {
+    // ignore
+  }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light"
+  applyTheme(current === "dark" ? "light" : "dark")
+}
+
+function isNativeFullscreen() {
+  return Boolean(document.fullscreenElement || document.webkitFullscreenElement)
+}
+
+function isCssFullscreen() {
+  return Boolean(graphFullscreenRootEl?.classList.contains("is-expanded"))
+}
+
+function isGraphFullscreen() {
+  return isNativeFullscreen() || isCssFullscreen()
+}
+
+function setCssFullscreen(active) {
+  if (!graphFullscreenRootEl) return
+  graphFullscreenRootEl.classList.toggle("is-expanded", active)
+  document.body.classList.toggle("graph-expanded", active)
+}
+
+function syncFullscreenButton() {
+  if (!fullscreenGraphEl) return
+  const active = isGraphFullscreen()
+  fullscreenGraphEl.setAttribute("aria-pressed", active ? "true" : "false")
+  fullscreenGraphEl.textContent = active ? "⛶ 退出全屏" : "⛶ 全屏"
+  fullscreenGraphEl.title = active ? "退出全屏（Esc）" : "全屏查看流程图"
+}
+
+async function toggleGraphFullscreen() {
+  const target = graphFullscreenRootEl || graphWrapEl
+  if (!target) return
+  try {
+    if (isNativeFullscreen()) {
+      if (document.exitFullscreen) await document.exitFullscreen()
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen()
+      setCssFullscreen(false)
+    } else if (isCssFullscreen()) {
+      setCssFullscreen(false)
+    } else {
       try {
-        const status = await window.octopus.status(id)
-        meta = { projectName: status.projectName, currentPhase: status.currentPhase }
-        projectMeta.set(id, meta)
+        if (target.requestFullscreen) await target.requestFullscreen()
+        else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen()
+        else setCssFullscreen(true)
       } catch {
-        meta = { projectName: id, currentPhase: "" }
+        // 浏览器拒绝 Fullscreen API 时回退为 CSS 铺满
+        setCssFullscreen(true)
       }
     }
+  } catch (error) {
+    showError(error)
+  } finally {
+    syncFullscreenButton()
+  }
+}
+
+function scrollCurrentNodeIntoView() {
+  if (!graphWrapEl || !graphEl) return
+  const currentGroup = graphEl.querySelector(".node.current")
+  if (!currentGroup) return
+  const transform = currentGroup.getAttribute("transform") || ""
+  const match = /translate\(([-\d.]+),\s*([-\d.]+)\)/.exec(transform)
+  if (!match) return
+  const x = Number(match[1]) * graphZoom
+  const y = Number(match[2]) * graphZoom
+  const pad = 48
+  const viewLeft = graphWrapEl.scrollLeft
+  const viewTop = graphWrapEl.scrollTop
+  const viewRight = viewLeft + graphWrapEl.clientWidth
+  const viewBottom = viewTop + graphWrapEl.clientHeight
+  if (x < viewLeft + pad || x > viewRight - pad) {
+    graphWrapEl.scrollLeft = Math.max(0, x - graphWrapEl.clientWidth / 3)
+  }
+  if (y < viewTop + pad || y > viewBottom - pad) {
+    graphWrapEl.scrollTop = Math.max(0, y - graphWrapEl.clientHeight / 3)
+  }
+}
+
+function routeFromHash() {
+  const raw = location.hash.replace(/^#/, "")
+  if (raw === "hub" || raw === "") return { view: "hub" }
+  const modeMatch = /^project\/([^/]+)\/(gantt|graph)$/.exec(raw)
+  if (modeMatch) {
+    return {
+      view: "workspace",
+      projectId: decodeURIComponent(modeMatch[1]),
+      mode: modeMatch[2],
+    }
+  }
+  const match = /^project\/([^/]+)$/.exec(raw)
+  if (match) {
+    return {
+      view: "workspace",
+      projectId: decodeURIComponent(match[1]),
+      mode: "gantt",
+    }
+  }
+  return { view: "hub" }
+}
+
+function setHash(hash, replace) {
+  const next = hash.startsWith("#") ? hash : `#${hash}`
+  if (replace) history.replaceState(null, "", next)
+  else if (location.hash !== next) location.hash = next
+}
+
+function goToHub() {
+  setHash("hub")
+}
+
+function goToProject(projectId, mode = "gantt") {
+  const base = `project/${encodeURIComponent(projectId)}`
+  setHash(mode === "graph" ? `${base}/graph` : `${base}/gantt`)
+}
+
+function setWorkspaceMode(mode) {
+  workspaceMode = mode === "gantt" ? "gantt" : "graph"
+  if (graphPaneEl) graphPaneEl.hidden = workspaceMode !== "graph"
+  if (ganttPaneEl) ganttPaneEl.hidden = workspaceMode !== "gantt"
+  for (const el of document.querySelectorAll(".graph-mode-only")) {
+    el.hidden = workspaceMode !== "graph"
+  }
+  if (workspaceTabsEl) {
+    for (const button of workspaceTabsEl.querySelectorAll("[data-mode]")) {
+      const active = button.dataset.mode === workspaceMode
+      button.classList.toggle("active", active)
+      button.setAttribute("aria-selected", String(active))
+    }
+  }
+  if (viewPulseEl) viewPulseEl.textContent = workspaceMode === "gantt" ? "甘特图" : "实时监控"
+  if (viewSubtitleEl) {
+    viewSubtitleEl.textContent = workspaceMode === "gantt"
+      ? "软件交付工作流 · Teambition 风格时间排期"
+      : "软件交付工作流 · 节点依赖图与执行状态"
+  }
+  document.title = workspaceMode === "gantt"
+    ? "Octopus Workflow · 甘特图"
+    : "Octopus Workflow · 工作流监控"
+}
+
+function ensureGanttMounted() {
+  if (ganttMounted || !ganttPaneEl || !window.OctopusGantt) return
+  window.OctopusGantt.mount(ganttPaneEl, {
+    onSelectNode: (nodeId) => {
+      showNode(nodeId).catch(showError)
+    },
+    onSchedule: (nodeId, schedule) => {
+      updateNodeSchedule(nodeId, schedule).catch(showError)
+    },
+    onError: (message) => {
+      statusEl.textContent = message
+      statusEl.className = "badge warn"
+    },
+  })
+  ganttMounted = true
+}
+
+async function updateNodeSchedule(nodeId, schedule) {
+  if (!selectedProject || !window.octopus.updateNodeSchedule) return
+  await window.octopus.updateNodeSchedule(selectedProject, nodeId, schedule)
+  statusEl.textContent = schedule.plannedStart ? "排期已保存" : "已清除排期"
+  statusEl.className = "badge good"
+  await showProject(selectedProject)
+}
+
+function renderGantt() {
+  if (!window.OctopusGantt || !currentState) return
+  ensureGanttMounted()
+  window.OctopusGantt.render({
+    steps: currentState.steps || [],
+    runs: projectRuns,
+    snapshot: currentSnapshot || {},
+    selectedNodeId: selectedNode,
+    labels: {
+      phaseOrder: PHASE_ORDER,
+      phaseLabel,
+      roleLabel,
+      statusLabel,
+      nodeName: nodeNameZh,
+    },
+  })
+}
+
+function setChrome(view) {
+  currentView = view
+  if (hubViewEl) hubViewEl.hidden = view !== "hub"
+  if (workspaceViewEl) workspaceViewEl.hidden = view !== "workspace"
+  if (backToHubEl) backToHubEl.hidden = view !== "workspace"
+  if (view === "hub") {
+    if (viewPulseEl) viewPulseEl.textContent = "项目管理"
+    if (viewSubtitleEl) viewSubtitleEl.textContent = "统一管理状态库中的项目"
+    document.title = "Octopus Workflow · 项目管理中心"
+  } else {
+    setWorkspaceMode(workspaceMode)
+  }
+}
+
+function formatUpdatedAt(value) {
+  if (!value) return ""
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN")
+}
+
+async function loadSummaries() {
+  if (window.octopus.listProjectSummaries) {
+    summaries = await window.octopus.listProjectSummaries()
+  } else {
+    const ids = await window.octopus.listProjects()
+    summaries = []
+    for (const id of ids) {
+      try {
+        const status = await window.octopus.status(id)
+        summaries.push({
+          projectId: id,
+          projectName: status.projectName,
+          description: "",
+          currentPhase: status.currentPhase,
+          totalTasks: status.totalTasks ?? 0,
+          completedTasks: status.completedTasks ?? 0,
+          updatedAt: "",
+        })
+      } catch {
+        summaries.push({
+          projectId: id,
+          projectName: id,
+          description: "",
+          currentPhase: "",
+          totalTasks: 0,
+          completedTasks: 0,
+          updatedAt: "",
+        })
+      }
+    }
+  }
+  for (const item of summaries) {
+    projectMeta.set(item.projectId, { projectName: item.projectName, currentPhase: item.currentPhase })
+  }
+}
+
+function renderSidebar(selectId) {
+  projectsEl.innerHTML = ""
+  if (!summaries.length) {
+    projectsEl.innerHTML = `<div class="empty-state">暂无项目。请返回项目管理中心创建。</div>`
+    return
+  }
+  for (const item of summaries) {
     const div = document.createElement("div")
-    div.className = `project${id === selectId || (!selectId && id === ids[0]) ? " active" : ""}`
-    div.dataset.projectId = id
-    div.innerHTML = `<div class="name">${escapeHtml(meta.projectName || id)}</div><div class="meta">${escapeHtml(id)}${meta.currentPhase ? ` · ${escapeHtml(phaseLabel(meta.currentPhase))}` : ""}</div>`
-    div.onclick = () => showProject(id)
+    div.className = `project${item.projectId === selectId ? " active" : ""}`
+    div.dataset.projectId = item.projectId
+    div.innerHTML = `<div class="name">${escapeHtml(item.projectName || item.projectId)}</div><div class="meta">${escapeHtml(item.projectId)}${item.currentPhase ? ` · ${escapeHtml(phaseLabel(item.currentPhase))}` : ""}</div>`
+    div.onclick = () => goToProject(item.projectId, workspaceMode)
     projectsEl.appendChild(div)
   }
-  await showProject(selectId || ids[0])
+}
+
+function renderHub() {
+  if (!hubCardsEl || !hubEmptyEl) return
+  const query = hubFilter.trim().toLowerCase()
+  const filtered = summaries.filter((item) => {
+    if (!query) return true
+    return [item.projectName, item.projectId, item.description, item.projectRoot]
+      .some((field) => String(field || "").toLowerCase().includes(query))
+  })
+  if (!summaries.length) {
+    hubEmptyEl.hidden = false
+    hubCardsEl.innerHTML = ""
+    return
+  }
+  hubEmptyEl.hidden = true
+  if (!filtered.length) {
+    hubCardsEl.innerHTML = `<div class="empty-state">没有匹配「${escapeHtml(hubFilter)}」的项目</div>`
+    return
+  }
+  hubCardsEl.innerHTML = filtered.map((item) => `
+    <article class="hub-card${item.projectId === lastCreatedId ? " highlight" : ""}" data-project-id="${escapeHtml(item.projectId)}">
+      <div class="name">${escapeHtml(item.projectName || item.projectId)}</div>
+      <p class="desc">${escapeHtml(item.description || "暂无描述")}</p>
+      <div class="progress">${escapeHtml(phaseLabel(item.currentPhase))} · 节点 ${item.completedTasks}/${item.totalTasks}</div>
+      <div class="meta">${escapeHtml(item.projectId)}${item.projectRoot ? `<br />${escapeHtml(item.projectRoot)}` : ""}${item.updatedAt ? `<br />更新于 ${escapeHtml(formatUpdatedAt(item.updatedAt))}` : ""}</div>
+      <div class="hub-card-edit" hidden>
+        <input class="edit-name" value="${escapeHtml(item.projectName || "")}" placeholder="项目名称" />
+        <input class="edit-desc" value="${escapeHtml(item.description || "")}" placeholder="项目描述" />
+        <div class="hub-card-actions">
+          <button type="button" data-save>保存</button>
+          <button type="button" class="secondary" data-cancel-edit>取消</button>
+        </div>
+      </div>
+      <div class="hub-card-actions hub-card-main-actions">
+        <button type="button" data-open>打开</button>
+        <button type="button" class="secondary" data-edit>编辑</button>
+        <button type="button" class="danger" data-delete>删除</button>
+      </div>
+    </article>
+  `).join("")
+
+  for (const card of hubCardsEl.querySelectorAll(".hub-card")) {
+    const projectId = card.dataset.projectId
+    const editPanel = card.querySelector(".hub-card-edit")
+    const actions = card.querySelector(".hub-card-main-actions")
+    card.querySelector("[data-open]").onclick = () => goToProject(projectId)
+    card.querySelector("[data-edit]").onclick = () => {
+      editPanel.hidden = false
+      if (actions) actions.hidden = true
+    }
+    card.querySelector("[data-cancel-edit]").onclick = () => {
+      editPanel.hidden = true
+      if (actions) actions.hidden = false
+    }
+    card.querySelector("[data-save]").onclick = async () => {
+      const name = card.querySelector(".edit-name").value.trim()
+      const description = card.querySelector(".edit-desc").value
+      if (!name) {
+        statusEl.textContent = "项目名称不能为空"
+        statusEl.className = "badge warn"
+        return
+      }
+      try {
+        await window.octopus.updateProject(projectId, { name, description })
+        statusEl.textContent = "项目已更新"
+        statusEl.className = "badge good"
+        await showHub()
+      } catch (error) {
+        showError(error)
+      }
+    }
+    card.querySelector("[data-delete]").onclick = async () => {
+      const item = summaries.find((entry) => entry.projectId === projectId)
+      const label = item?.projectName || projectId
+      if (!window.confirm(`删除项目「${label}」的状态？\n只删除状态库记录，不会删除源码目录或 workflow.yaml。此操作不可恢复。`)) {
+        return
+      }
+      try {
+        await window.octopus.deleteProject(projectId)
+        if (lastCreatedId === projectId) lastCreatedId = ""
+        if (selectedProject === projectId) selectedProject = undefined
+        statusEl.textContent = "项目已删除"
+        statusEl.className = "badge good"
+        if (currentView === "workspace") goToHub()
+        else await showHub()
+      } catch (error) {
+        showError(error)
+      }
+    }
+  }
+}
+
+async function showHub() {
+  selectedProject = undefined
+  selectedNode = undefined
+  await loadSummaries()
+  setChrome("hub")
+  renderHub()
+  projectLabelEl.textContent = "项目管理中心"
+  statusEl.textContent = summaries.length ? `${summaries.length} 个项目` : "暂无项目"
+  statusEl.className = "badge"
+}
+
+async function openWorkspace(projectId, mode = "gantt") {
+  await loadSummaries()
+  if (!summaries.some((item) => item.projectId === projectId)) {
+    setHash("hub", true)
+    await showHub()
+    statusEl.textContent = "项目不存在或已删除"
+    statusEl.className = "badge warn"
+    return
+  }
+  workspaceMode = mode === "graph" ? "graph" : "gantt"
+  setChrome("workspace")
+  renderSidebar(projectId)
+  await showProject(projectId)
+}
+
+async function applyRoute() {
+  const route = routeFromHash()
+  if (route.view === "workspace") await openWorkspace(route.projectId, route.mode || "gantt")
+  else await showHub()
 }
 
 async function showProject(id) {
   if (!id) return
+  if (workspaceMode === "gantt" && window.OctopusGantt?.isDragging?.()) return
   selectedProject = id
   currentState = await window.octopus.state(id)
   currentSnapshot = await window.octopus.snapshot(id)
+  try {
+    projectRuns = await window.octopus.runs(id)
+  } catch {
+    projectRuns = []
+  }
   try {
     currentStatus = await window.octopus.status(id)
     projectMeta.set(id, {
@@ -352,7 +761,8 @@ async function showProject(id) {
   const projectName = currentState.projectName || currentStatus?.projectName || id
   projectLabelEl.textContent = `${projectName} · ${phaseLabel(currentState.currentPhase)}`
   renderSummary()
-  renderGraph()
+  if (workspaceMode === "gantt") renderGantt()
+  else renderGraph()
   if (selectedNode) await showNode(selectedNode)
 }
 
@@ -378,8 +788,12 @@ function renderSummary() {
 
   const phase = phaseLabel(currentState.currentPhase)
   const phaseHint = PHASE_HINTS[currentState.currentPhase] || ""
-  flowHintEl.textContent = `当前阶段：${phase}${phaseHint ? `（${phaseHint}）` : ""}（整行高亮）。上方=角色（人），左侧=阶段；当前/可运行节点加粗描边。`
-  applyGraphZoom()
+  if (flowHintEl) {
+    flowHintEl.textContent = workspaceMode === "gantt"
+      ? `当前阶段：${phase}${phaseHint ? `（${phaseHint}）` : ""}。甘特图按计划起止排期；未排期节点在底部抽屉，可在左侧填写日期。`
+      : `当前阶段：${phase}${phaseHint ? `（${phaseHint}）` : ""}（整行高亮）。上方=角色（人），左侧=阶段；当前节点脉冲描边，可运行节点加粗描边。可用全屏与黑白主题。`
+  }
+  if (workspaceMode === "graph") applyGraphZoom()
 }
 
 function metric(value, label, tip) {
@@ -444,7 +858,7 @@ function renderRoleLegend(roles) {
     return
   }
   roleLegendEl.innerHTML = roles.map((role) => {
-    const color = ROLE_COLORS[role] || "#6f84a5"
+    const color = ROLE_COLORS[role] || "#64748b"
     return `<span class="role-chip"><span class="swatch" style="background:${color}"></span>${escapeHtml(roleLabel(role))}（${escapeHtml(role)}）</span>`
   }).join("")
 }
@@ -522,7 +936,7 @@ function renderGraph() {
     markerHeight: "9",
     orient: "auto-start-reverse",
   })
-  marker.appendChild(svgEl("path", { d: "M 0 0 L 12 6 L 0 12 z", fill: "#6f8eb3" }))
+  marker.appendChild(svgEl("path", { d: "M 0 0 L 12 6 L 0 12 z", fill: "var(--edge, #c0c4cc)" }))
   const markerActive = svgEl("marker", {
     id: "arrow-active",
     viewBox: "0 0 12 12",
@@ -532,7 +946,7 @@ function renderGraph() {
     markerHeight: "9",
     orient: "auto-start-reverse",
   })
-  markerActive.appendChild(svgEl("path", { d: "M 0 0 L 12 6 L 0 12 z", fill: "#55a7ff" }))
+  markerActive.appendChild(svgEl("path", { d: "M 0 0 L 12 6 L 0 12 z", fill: ACCENT }))
   defs.appendChild(marker)
   defs.appendChild(markerActive)
   graphEl.appendChild(defs)
@@ -557,7 +971,7 @@ function renderGraph() {
   const roleBounds = []
   roles.forEach((role, index) => {
     const x = originX + phaseHeaderW + index * roleColW
-    const color = ROLE_COLORS[role] || "#6f84a5"
+    const color = ROLE_COLORS[role] || "#64748b"
     const isActiveRole = currentRoleSet.has(role)
     graphEl.appendChild(svgEl("rect", {
       x, y: originY, width: roleColW, height: roleHeaderH,
@@ -569,7 +983,7 @@ function renderGraph() {
     }))
     if (isActiveRole) {
       graphEl.appendChild(svgEl("rect", {
-        x, y: originY + roleHeaderH - 3, width: roleColW, height: 3, fill: "#55a7ff",
+        x, y: originY + roleHeaderH - 3, width: roleColW, height: 3, fill: ACCENT,
       }))
     }
     addSvgText(graphEl, x + 16, originY + 34, roleLabel(role), "role-header-text")
@@ -598,7 +1012,7 @@ function renderGraph() {
     }))
     if (isCurrent) {
       graphEl.appendChild(svgEl("rect", {
-        x: originX, y: phaseY, width: 6, height: h, fill: "#55a7ff",
+        x: originX, y: phaseY, width: 6, height: h, fill: ACCENT,
       }))
     }
     addSvgText(
@@ -696,6 +1110,11 @@ function renderGraph() {
 
   renderRoleLegend(roles)
   applyGraphZoom()
+  const currentKey = (currentSnapshot?.currentNodeIds || []).slice().sort().join("|")
+  if (currentKey && currentKey !== lastScrolledCurrentKey) {
+    lastScrolledCurrentKey = currentKey
+    requestAnimationFrame(scrollCurrentNodeIntoView)
+  }
 }
 
 function addNode(node, x, y, width, height, roleColor) {
@@ -709,12 +1128,17 @@ function addNode(node, x, y, width, height, roleColor) {
     "aria-label": `${nodeNameZh(node)}，${roleLabel(node.responsibleRole)}，${statusLabel(node.status)}${current ? "，当前" : ""}`,
   })
 
-  const color = roleColor || ROLE_COLORS[node.responsibleRole] || "#6f84a5"
+  const color = roleColor || ROLE_COLORS[node.responsibleRole] || "#909399"
+  if (current) {
+    group.appendChild(svgEl("rect", {
+      x: -6, y: -6, width: width + 12, height: height + 12, rx: 14, class: "current-ring",
+    }))
+  }
   group.appendChild(svgEl("rect", {
-    x: 0, y: 0, width, height, rx: 14, class: "card",
+    x: 0, y: 0, width, height, rx: 8, class: "card",
   }))
   group.appendChild(svgEl("path", {
-    d: `M 14 0 H 8 Q 0 0 0 14 V ${height - 14} Q 0 ${height} 8 ${height} H 14 Z`,
+    d: `M 12 0 H 8 Q 0 0 0 8 V ${height - 8} Q 0 ${height} 8 ${height} H 12 Z`,
     fill: color,
     class: "role-bar",
   }))
@@ -755,6 +1179,8 @@ async function showNode(nodeId) {
   if (!node) return
 
   currentRuns = await window.octopus.runs(selectedProject, nodeId)
+  if (workspaceMode === "gantt") renderGantt()
+  else if (workspaceMode === "graph") renderGraph()
   emptyEl.style.display = "none"
 
   const deps = node.dependsOn.length
@@ -764,11 +1190,13 @@ async function showNode(nodeId) {
   const isReady = currentSnapshot.readyNodeIds.includes(node.id)
   const isWaiting = currentSnapshot.waitingNodeIds.includes(node.id)
 
+  const current = isCurrentNode(node.id)
   detailsEl.innerHTML = `
     <div class="detail">
       <p class="title">${escapeHtml(nodeNameZh(node))}</p>
       <p class="desc">${escapeHtml(nodeDescZh(node))}</p>
       <div class="pill-row">
+        ${current ? `<span class="badge info">● 当前节点</span>` : ""}
         <span class="badge ${node.status === "COMPLETED" ? "good" : node.status === "BLOCKED" ? "bad" : isReady ? "info" : "warn"}">${escapeHtml(statusLabel(node.status))}${isReady ? " · 可运行" : isWaiting ? " · 等待中" : ""}</span>
         <span class="badge">${escapeHtml(phaseLabel(node.phase))}</span>
         <span class="badge">${escapeHtml(roleLabel(node.responsibleRole))}</span>
@@ -792,7 +1220,7 @@ async function showNode(nodeId) {
         <button id="completeNode" class="secondary" title="将手动节点标记为完成">✓ 手动完成</button>
         <button id="openNode" class="secondary" title="在文件管理器中打开节点目录">打开目录</button>
       </div>
-      <h3 style="margin-top:16px">运行历史</h3>
+      <div class="detail-section-title">运行历史</div>
       ${currentRuns.length === 0
         ? `<p class="muted" style="margin:0">暂无运行记录。点击「运行节点」开始执行。</p>`
         : currentRuns.slice(0, 6).map((run) => `
@@ -801,8 +1229,8 @@ async function showNode(nodeId) {
               <span class="badge ${run.status === "SUCCEEDED" ? "good" : run.status === "FAILED" || run.status === "TIMED_OUT" ? "bad" : "warn"}">${escapeHtml(runStatusLabel(run.status))}</span>
               ${run.forced ? `<span class="badge warn">强制执行</span>` : ""}
             </div>
-            <div class="muted" style="font-size:11px;margin-top:6px;font-family:ui-monospace,monospace">${escapeHtml(run.id)}</div>
-            ${run.error ? `<div style="color:var(--red);font-size:12px;margin-top:6px">${escapeHtml(run.error)}</div>` : ""}
+            <div class="run-id">${escapeHtml(run.id)}</div>
+            ${run.error ? `<div class="run-error">${escapeHtml(run.error)}</div>` : ""}
             <div class="actions">
               <button data-retry="${escapeHtml(run.id)}" class="secondary">重试</button>
               <button data-cancel="${escapeHtml(run.id)}" class="danger">取消</button>
@@ -884,8 +1312,8 @@ document.getElementById("create").onclick = async () => {
     document.getElementById("name").value = ""
     document.getElementById("desc").value = ""
     document.getElementById("root").value = ""
-    await configureRuntime()
-    await refreshProjects(result.projectId)
+    lastCreatedId = result.projectId
+    await showHub()
     statusEl.textContent = "项目已创建"
     statusEl.className = "badge good"
   } catch (error) {
@@ -952,23 +1380,68 @@ document.getElementById("runWorkflow").onclick = async () => {
   }
 }
 
-document.getElementById("zoomIn").onclick = () => setGraphZoom(graphZoom + 0.15)
-document.getElementById("zoomOut").onclick = () => setGraphZoom(graphZoom - 0.15)
-document.getElementById("zoomReset").onclick = () => setGraphZoom(1.4)
-
-async function configureRuntime() {
-  if (window.octopus.canInit && !await window.octopus.canInit()) {
-    document.getElementById("initPanel").hidden = true
-  } else {
-    document.getElementById("initPanel").hidden = false
-  }
+function defaultGraphZoom() {
+  return window.innerWidth < 900 ? 1 : 1.4
 }
 
+document.getElementById("zoomIn").onclick = () => setGraphZoom(graphZoom + 0.15)
+document.getElementById("zoomOut").onclick = () => setGraphZoom(graphZoom - 0.15)
+document.getElementById("zoomReset").onclick = () => setGraphZoom(defaultGraphZoom())
+
+if (themeToggleEl) themeToggleEl.onclick = () => toggleTheme()
+if (fullscreenGraphEl) fullscreenGraphEl.onclick = () => toggleGraphFullscreen()
+document.addEventListener("fullscreenchange", () => {
+  if (!isNativeFullscreen()) setCssFullscreen(false)
+  syncFullscreenButton()
+})
+document.addEventListener("webkitfullscreenchange", () => {
+  if (!isNativeFullscreen()) setCssFullscreen(false)
+  syncFullscreenButton()
+})
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && isCssFullscreen()) {
+    setCssFullscreen(false)
+    syncFullscreenButton()
+  }
+})
+
+if (hubFilterEl) {
+  hubFilterEl.addEventListener("input", () => {
+    hubFilter = hubFilterEl.value
+    renderHub()
+  })
+}
+if (backToHubEl) backToHubEl.onclick = () => goToHub()
+if (sidebarToHubEl) sidebarToHubEl.onclick = () => goToHub()
+if (workspaceTabsEl) {
+  workspaceTabsEl.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-mode]")
+    if (!button || !selectedProject) return
+    goToProject(selectedProject, button.dataset.mode)
+  })
+}
+window.addEventListener("hashchange", () => {
+  applyRoute().catch(showError)
+})
+
 setInterval(() => {
-  if (selectedProject) showProject(selectedProject).catch(() => {})
+  if (currentView === "workspace" && selectedProject) {
+    showProject(selectedProject).catch(() => {})
+  }
 }, 2000)
 
+function syncNarrowGanttLayout() {
+  const narrow = window.innerWidth < 900
+  document.body.classList.toggle("is-narrow-gantt", narrow)
+  if (workspaceMode === "gantt" && currentState) renderGantt()
+}
+window.addEventListener("resize", syncNarrowGanttLayout)
+syncNarrowGanttLayout()
+
+applyTheme(preferredTheme())
+syncFullscreenButton()
 applyGraphZoom()
-configureRuntime().then(() => refreshProjects()).catch((error) => {
+if (!location.hash) history.replaceState(null, "", "#hub")
+applyRoute().catch((error) => {
   showError(error)
 })

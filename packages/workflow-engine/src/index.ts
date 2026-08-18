@@ -11,7 +11,7 @@
  * - 前进前必须满足退出条件：所有任务已完成 + 清单已核验
  */
 
-import type { WorkflowState, ProjectStatusSummary } from "@octopus/core/workflow.js"
+import type { WorkflowState, ProjectStatusSummary, ProjectSummary } from "@octopus/core/workflow.js"
 import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER } from "@octopus/core/phase.js"
 import type {
   Task,
@@ -90,6 +90,17 @@ function isWriteLockError(cause: unknown): boolean {
 
 function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && !Number.isNaN(Date.parse(value))
+}
+
+/** 本地日历日 YYYY-MM-DD（不做时区换算）。 */
+function isDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [yearText, monthText, dayText] = value.split("-")
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const date = new Date(year, month - 1, day)
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
 }
 
 function validateTaskExportDocument(document: unknown): TaskExportDocument {
@@ -282,6 +293,88 @@ export class WorkflowEngine {
   /** 列出状态库中的项目 ID。 */
   listProjects(): string[] {
     return this.store.listProjects()
+  }
+
+  /** 列出项目管理中心所需的项目摘要。 */
+  listProjectSummaries(): ProjectSummary[] {
+    return this.listProjects().map((projectId) => {
+      const state = this.getState(projectId)
+      return {
+        projectId: state.projectId,
+        projectName: state.projectName,
+        description: state.description,
+        currentPhase: state.currentPhase,
+        totalTasks: state.steps.length,
+        completedTasks: state.steps.filter((step) => step.status === TaskStatus.COMPLETED).length,
+        ...(state.projectRoot !== undefined ? { projectRoot: state.projectRoot } : {}),
+        updatedAt: state.updatedAt,
+      }
+    })
+  }
+
+  /** 更新项目名称或描述，不改 projectId / projectRoot。 */
+  updateProject(projectId: string, patch: { name?: string; description?: string }): WorkflowState {
+    const name = patch.name === undefined ? undefined : patch.name.trim()
+    if (name !== undefined && name === "") {
+      throw new Error("项目名称必须是非空字符串")
+    }
+    return this.transactionalUpdate(projectId, (current) => {
+      if (name !== undefined) current.projectName = name
+      if (patch.description !== undefined) current.description = patch.description
+      return current
+    })
+  }
+
+  /**
+   * 更新节点计划起止日期（甘特图排期）。
+   * 两个都空则清除排期；否则必须成对提供 YYYY-MM-DD，且结束不早于开始。
+   */
+  updateNodeSchedule(
+    projectId: string,
+    nodeId: string,
+    schedule: { plannedStart?: string | null; plannedEnd?: string | null },
+  ): WorkflowState {
+    const startRaw = schedule.plannedStart
+    const endRaw = schedule.plannedEnd
+    const startEmpty = startRaw === undefined || startRaw === null || startRaw === ""
+    const endEmpty = endRaw === undefined || endRaw === null || endRaw === ""
+    const clearing = startEmpty && endEmpty
+
+    let plannedStart: string | undefined
+    let plannedEnd: string | undefined
+    if (!clearing) {
+      if (startEmpty || endEmpty || typeof startRaw !== "string" || typeof endRaw !== "string") {
+        throw new Error("计划起止日期必须成对提供，格式为 YYYY-MM-DD")
+      }
+      if (!isDateOnly(startRaw) || !isDateOnly(endRaw)) {
+        throw new Error("计划起止日期必须成对提供，格式为 YYYY-MM-DD")
+      }
+      if (endRaw < startRaw) {
+        throw new Error("计划结束日期不能早于开始日期")
+      }
+      plannedStart = startRaw
+      plannedEnd = endRaw
+    }
+
+    return this.transactionalUpdate(projectId, (current) => {
+      const step = current.steps.find((item) => item.id === nodeId)
+      if (!step) throw new Error(`节点不存在: ${nodeId}`)
+      if (clearing || plannedStart === undefined || plannedEnd === undefined) {
+        delete step.plannedStart
+        delete step.plannedEnd
+      } else {
+        step.plannedStart = plannedStart
+        step.plannedEnd = plannedEnd
+      }
+      step.updatedAt = new Date().toISOString()
+      return current
+    })
+  }
+
+  /** 删除项目状态及运行记录，不删除磁盘上的 workflow.yaml。 */
+  deleteProject(projectId: string): void {
+    this.getState(projectId)
+    this.store.deleteProject(projectId)
   }
 
   /** 获取当前节点、READY 节点和活动运行摘要。 */

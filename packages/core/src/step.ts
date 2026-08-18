@@ -49,6 +49,10 @@ export interface StepRuntime {
   updatedAt: string
   /** 完成时间（ISO 8601） */
   completedAt?: string
+  /** 计划开始日期（YYYY-MM-DD，本地日历日） */
+  plannedStart?: string
+  /** 计划结束日期（YYYY-MM-DD，本地日历日） */
+  plannedEnd?: string
   /** 备注 */
   notes?: string
   /** capability 分发审计记录（Phase 3 使用） */
