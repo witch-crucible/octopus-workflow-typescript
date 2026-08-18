@@ -264,6 +264,9 @@ def test_web_pages_and_redaction(tmp_path: Path):
         resp = client.get(path)
         assert resp.status_code == 200, path
         assert secret not in resp.text
+        if path != "/health":
+            assert "data-theme-toggle" in resp.text
+            assert "msw-theme" in resp.text
 
     detail = client.get("/bulletins/APSB-TEST")
     assert "业务影响范围" in detail.text
@@ -369,3 +372,20 @@ def test_web_pages_and_redaction(tmp_path: Path):
     # With testing=False, testclient host is still allowlisted via special-case;
     # explicitly verify middleware reject path via unit test above.
     assert TestClient(blocked).get("/").status_code == 200
+
+
+def test_web_dark_mode_css(tmp_path: Path):
+    settings, store, secret = _seed_web(tmp_path)
+    app = create_app(
+        root=tmp_path,
+        config_dir=tmp_path / "config",
+        settings=settings,
+        store=store,
+        testing=True,
+    )
+    css = TestClient(app).get("/static/app.css")
+    assert css.status_code == 200
+    assert "color-scheme" in css.text
+    assert '[data-theme="dark"]' in css.text
+    assert "prefers-color-scheme: dark" in css.text
+    assert ":root[data-theme=\"dark\"]" in css.text

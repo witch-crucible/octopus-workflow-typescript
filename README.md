@@ -1,6 +1,6 @@
 # Octopus Workflow
 
-Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎。它把研发过程建模为可版本化的 DAG，并持久化节点状态、运行记录和审计事件。
+Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，把研发过程建模为可版本化的 DAG，并持久化节点状态、运行记录和审计事件。
 
 ```text
 需求分析 → 设计 → 开发 → 测试 → 部署 → 维护
@@ -27,9 +27,7 @@ node packages/cli/dist/index.js status
 node packages/cli/dist/index.js node list
 ```
 
-`init` 会创建项目状态并初始化工作流目录；一个状态库只允许初始化一个项目，已有项目时请直接执行 `status`。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。
-
-下文用 `octopus` 代表 `node packages/cli/dist/index.js`；仓库不会自动安装全局命令。多数命令在只有一个项目时可省略 `projectId`。
+`init` 创建项目状态并初始化工作流目录；一个状态库只允许初始化一个项目，已有项目时请直接执行 `status`。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令），多数命令在只有一个项目时可省略 `projectId`，可用 `octopus --help` 或 `octopus <command> --help` 查看完整参数。
 
 ## 核心命令
 
@@ -44,8 +42,6 @@ node packages/cli/dist/index.js node list
 | `octopus ai` | 独立调用 AI 助手 |
 | `octopus monitor` | 查看运行事件与集成健康度 |
 
-使用 `octopus --help` 或 `octopus <command> --help` 查看完整参数。
-
 ## 工作流与数据
 
 - `packages/core/src/spec.ts`：内置六阶段工作流规格，也是缺少项目定义时的回退来源。
@@ -54,23 +50,18 @@ node packages/cli/dist/index.js node list
 - `.octo/state.sqlite`：CLI 和 Web 默认使用的项目状态、运行记录与事件数据库。
 - `.octo/config.json`：可选的本地配置。
 - `workflow.overlay.yaml`：可选的项目级节点叠加（增/禁/改），不必复制整份 DAG。
-
-自定义节点的 `key` 必须是英文 kebab-case，`name` 和 `description` 也必须使用英文；内部运行态 ID 由 `workflow.yaml` 的 `nodeIdMapping` 维护。
+- 自定义节点 `key` 必须是英文 kebab-case，`name` / `description` 也必须使用英文；内部运行态 ID 由 `workflow.yaml` 的 `nodeIdMapping` 维护。
 
 ## 项目定制
 
-未配置插件且没有 `workflow.overlay.yaml` 时，行为与原来完全一致。不同项目用外挂叠加节点并注册 AI / 集成 / 自定义能力，不必改引擎主流程。
-
-插件引用按顺序合并：`workflow.yaml` 的 `plugins` → `.octo/config.json` 的 `plugins`；最后再应用项目根目录的 `workflow.overlay.yaml`。
+不同项目用外挂叠加节点并注册 AI / 集成 / 自定义能力，不必改引擎主流程；未配置插件且没有 `workflow.overlay.yaml` 时，行为与原来完全一致。插件引用按顺序合并：`workflow.yaml` 的 `plugins` → `.octo/config.json` 的 `plugins`，最后再应用项目根目录的 `workflow.overlay.yaml`。
 
 ```yaml
-# workflow.yaml 片段
 plugins:
   - ./octopus-plugins/acme-checks.js
 ```
 
 ```yaml
-# workflow.overlay.yaml
 disable:
   - weekly-feature-demo
 add:
@@ -85,9 +76,7 @@ add:
         name: acme.qaGate
 ```
 
-插件导出 `default` 或 `octopusPlugin`，在 `activate(ctx)` 里叠加节点、注册新的 AI 模块 id、集成服务或自定义能力名称。不能覆盖内置 12 类 AI 模块，也不能覆盖 `ai` / `heinrich` 能力处理器。路径相对项目根，包名从该项目的 `node_modules` 解析。加载失败则进程退出。
-
-测试夹具 `packages/plugin/fixtures/sample-plugin/` 是一份可复制的最小插件。本仓库默认不启用任何插件。
+插件导出 `default` 或 `octopusPlugin`，在 `activate(ctx)` 里叠加节点、注册新的 AI 模块 id、集成服务或自定义能力名称；不能覆盖内置 12 类 AI 模块，也不能覆盖 `ai` / `heinrich` 能力处理器。路径相对项目根，包名从该项目的 `node_modules` 解析，加载失败则进程退出。测试夹具 `packages/plugin/fixtures/sample-plugin/` 是一份可复制的最小插件，本仓库默认不启用任何插件。
 
 可用环境变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`。
 

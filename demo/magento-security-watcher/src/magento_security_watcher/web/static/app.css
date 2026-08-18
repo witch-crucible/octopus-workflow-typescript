@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: #e8eef3;
   --bg-elevated: #f7fafc;
   --ink: #1a2332;
@@ -13,9 +14,74 @@
   --warn: #b45309;
   --line: #c5d0da;
   --shadow: 0 1px 0 rgba(26, 35, 50, 0.04);
+  --header-bg: rgba(247, 250, 252, 0.92);
+  --thead-bg: rgba(232, 238, 243, 0.65);
+  --head-soft: rgba(232, 238, 243, 0.45);
+  --bg-glow-accent: rgba(13, 148, 136, 0.14);
+  --bg-glow-blue: rgba(30, 64, 120, 0.08);
+  --grid-line: rgba(26, 35, 50, 0.03);
+  --field-bg: #ffffff;
   --font: "IBM Plex Sans", "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
   --radius: 4px;
+}
+
+/* 暗色模式（深蓝灰低饱和）。
+   两个入口的变量值必须保持一致：
+   1) :root[data-theme="dark"] —— 手动锁定深色；
+   2) @media (prefers-color-scheme: dark) 下的 :root:not([data-theme="light"])
+      —— 自动跟随系统（该选择器同时覆盖无 data-theme 与 data-theme="dark" 两种情形）。 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1524;
+  --bg-elevated: #151f31;
+  --ink: #e2eaf4;
+  --muted: #8ea0b5;
+  --accent: #2dd4bf;
+  --accent-soft: rgba(45, 212, 191, 0.12);
+  --sev-critical: #f87171;
+  --sev-high: #fb923c;
+  --sev-medium: #fbbf24;
+  --sev-low: #94a3b8;
+  --ok: #2dd4bf;
+  --warn: #fbbf24;
+  --line: #2a3950;
+  --shadow: 0 1px 0 rgba(2, 6, 12, 0.3);
+  --header-bg: rgba(21, 31, 49, 0.92);
+  --thead-bg: rgba(42, 57, 80, 0.55);
+  --head-soft: rgba(42, 57, 80, 0.4);
+  --bg-glow-accent: rgba(45, 212, 191, 0.08);
+  --bg-glow-blue: rgba(59, 130, 246, 0.06);
+  --grid-line: rgba(140, 160, 181, 0.05);
+  --field-bg: #0f1829;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    /* 与 :root[data-theme="dark"] 保持一致，勿单独修改 */
+    --bg: #0d1524;
+    --bg-elevated: #151f31;
+    --ink: #e2eaf4;
+    --muted: #8ea0b5;
+    --accent: #2dd4bf;
+    --accent-soft: rgba(45, 212, 191, 0.12);
+    --sev-critical: #f87171;
+    --sev-high: #fb923c;
+    --sev-medium: #fbbf24;
+    --sev-low: #94a3b8;
+    --ok: #2dd4bf;
+    --warn: #fbbf24;
+    --line: #2a3950;
+    --shadow: 0 1px 0 rgba(2, 6, 12, 0.3);
+    --header-bg: rgba(21, 31, 49, 0.92);
+    --thead-bg: rgba(42, 57, 80, 0.55);
+    --head-soft: rgba(42, 57, 80, 0.4);
+    --bg-glow-accent: rgba(45, 212, 191, 0.08);
+    --bg-glow-blue: rgba(59, 130, 246, 0.06);
+    --grid-line: rgba(140, 160, 181, 0.05);
+    --field-bg: #0f1829;
+  }
 }
 
 *,
@@ -35,10 +101,10 @@ body {
   color: var(--ink);
   background-color: var(--bg);
   background-image:
-    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(13, 148, 136, 0.14), transparent 55%),
-    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(30, 64, 120, 0.08), transparent 50%),
-    linear-gradient(rgba(26, 35, 50, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(26, 35, 50, 0.03) 1px, transparent 1px);
+    radial-gradient(ellipse 80% 50% at 10% -10%, var(--bg-glow-accent), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, var(--bg-glow-blue), transparent 50%),
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
   background-size: auto, auto, 24px 24px, 24px 24px;
   line-height: 1.5;
 }
@@ -58,7 +124,7 @@ a:hover {
   gap: 1.5rem;
   padding: 1rem 1.75rem;
   border-bottom: 1px solid var(--line);
-  background: rgba(247, 250, 252, 0.92);
+  background: var(--header-bg);
   backdrop-filter: blur(8px);
   position: sticky;
   top: 0;
@@ -205,7 +271,7 @@ table.data th {
   letter-spacing: 0.04em;
   color: var(--muted);
   font-weight: 600;
-  background: rgba(232, 238, 243, 0.65);
+  background: var(--thead-bg);
 }
 table.data tbody tr {
   transition: background-color 0.15s ease;
@@ -332,6 +398,24 @@ table.data tbody tr:last-child td {
   padding: 0.28rem 0.65rem;
   font-size: 0.78rem;
 }
+.theme-toggle {
+  display: inline-block;
+  flex: 0 0 auto;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .finding-list {
   display: flex;
   flex-direction: column;
@@ -363,7 +447,7 @@ table.data tbody tr:last-child td {
   padding: 0.3rem 0.45rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: #fff;
+  background: var(--field-bg);
   color: var(--ink);
   min-width: 8rem;
 }
@@ -420,7 +504,7 @@ details.fold > summary a:hover {
   align-items: center;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--line);
-  background: rgba(232, 238, 243, 0.45);
+  background: var(--head-soft);
 }
 .finding-body {
   padding: 0.85rem 1rem 1rem;
@@ -543,12 +627,22 @@ pre.raw {
 }
 
 @media print {
-  :root {
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: light;
     --bg: #fff;
     --bg-elevated: #fff;
     --ink: #111;
     --muted: #444;
     --line: #ccc;
+    --shadow: 0 1px 0 rgba(26, 35, 50, 0.04);
+    --header-bg: rgba(255, 255, 255, 0.92);
+    --thead-bg: rgba(232, 238, 243, 0.65);
+    --head-soft: rgba(232, 238, 243, 0.45);
+    --field-bg: #ffffff;
+    --bg-glow-accent: rgba(13, 148, 136, 0.14);
+    --bg-glow-blue: rgba(30, 64, 120, 0.08);
+    --grid-line: rgba(26, 35, 50, 0.03);
   }
 
   body {
