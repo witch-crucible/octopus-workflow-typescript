@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs"
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 import { TASK_STATUS_LABELS } from "@octopus/core/task.js"
 import type { NodeAction, WorkflowNodeSpec } from "@octopus/core/execution.js"
 import { Phase } from "@octopus/core/phase.js"
@@ -46,7 +47,7 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
     .description("创建任务节点并写入项目工作流")
     .argument("<nodeKey>", "英文节点 key（kebab-case）")
     .argument("<name>", "节点名称")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--description <text>", "节点描述")
     .option("--phase <phase>", "所属阶段，默认当前阶段")
     .option("--role <role>", "负责角色，可重复", collect, [])
@@ -63,9 +64,9 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
     .option("--delta <count>", "Heinrich 计数增量")
     .option("--level <level>", "Heinrich 等级：MAJOR、MINOR、TRIVIAL")
     .option("--json", "以 JSON 输出")
-    .action((nodeKey: string, name: string, projectId: string | undefined, options: CreateNodeOptions) => {
+    .action((nodeKey: string, name: string, requirementId: string | undefined, options: CreateNodeOptions) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
         const state = engine.getState(pid)
         const phase = parseEnumValue(Phase, options.phase ?? state.currentPhase, "阶段")
@@ -97,10 +98,10 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
 
   node.command("list")
     .description("列出节点及当前/可运行节点")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 输出")
-    .action((projectId: string | undefined, options: { json?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action((requirementId: string | undefined, options: { json?: boolean }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const state = engine.getState(pid)
       const snapshot = engine.getExecutionSnapshot(pid)
@@ -118,7 +119,7 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
       }))
       if (options.json) {
         console.log(JSON.stringify({
-          projectId: pid,
+          requirementId: pid,
           snapshot: {
             currentNodeKeys: snapshot.currentNodeIds.map(keyForId),
             readyNodeKeys: snapshot.readyNodeIds.map(keyForId),
@@ -141,10 +142,10 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
   node.command("show")
     .description("查看节点详情和运行历史")
     .argument("<nodeKey>", "英文节点 key")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 输出")
-    .action((nodeKey: string, projectId: string | undefined, options: { json?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action((nodeKey: string, requirementId: string | undefined, options: { json?: boolean }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const state = engine.getState(pid)
       const definition = engine.getWorkflowDefinition(pid)
@@ -152,7 +153,7 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
       const step = state.steps.find((candidate) => candidate.id === nodeId)
       if (!step) throw new Error(`节点尚未激活: ${nodeKey}`)
       const data = {
-        projectId: pid,
+        requirementId: pid,
         node: {
           key: nodeKey,
           phase: step.phase,
@@ -187,12 +188,12 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
   node.command("run")
     .description("独立运行一个节点")
     .argument("<nodeKey>", "英文节点 key")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--force", "忽略未完成依赖并记录审计")
     .option("--json", "以 JSON 输出")
-    .action((nodeKey: string, projectId: string | undefined, options: { force?: boolean; json?: boolean }) => {
+    .action((nodeKey: string, requirementId: string | undefined, options: { force?: boolean; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
         const run = engine.runNode(pid, nodeKey, options.force === undefined ? {} : { force: options.force })
         const { nodeId: _nodeId, ...publicRun } = run
@@ -207,11 +208,11 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
   node.command("complete")
     .description("完成手动节点")
     .argument("<nodeKey>", "英文节点 key")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--force", "忽略未完成依赖")
-    .action((nodeKey: string, projectId: string | undefined, options: { force?: boolean }) => {
+    .action((nodeKey: string, requirementId: string | undefined, options: { force?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
         engine.completeManualNode(pid, nodeKey, options.force === true)
         console.log(`✅ 手动节点 ${nodeKey} 已完成`)
@@ -224,10 +225,10 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
   node.command("cancel")
     .description("取消活动运行")
     .argument("<runId>", "运行 ID")
-    .argument("[projectId]", "项目 ID")
-    .action((runId: string, projectId: string | undefined) => {
+    .argument("[requirementId]", "需求 ID")
+    .action((runId: string, requirementId: string | undefined) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
         const run = engine.execution.cancelRun(pid, runId)
         console.log(`✅ 运行 ${run.id} 已取消`)
@@ -240,11 +241,11 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
   node.command("retry")
     .description("重试失败运行")
     .argument("<runId>", "运行 ID")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--force", "忽略未完成依赖")
-    .action((runId: string, projectId: string | undefined, options: { force?: boolean }) => {
+    .action((runId: string, requirementId: string | undefined, options: { force?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
         const run = engine.execution.retryRun(pid, runId, options.force === undefined ? {} : { force: options.force })
         console.log(`✅ 已创建重试运行: ${run.id}`)
@@ -257,10 +258,10 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
   node.command("logs")
     .description("查看运行日志")
     .argument("<runId>", "运行 ID")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--stderr", "查看 stderr")
-    .action((runId: string, projectId: string | undefined, options: { stderr?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action((runId: string, requirementId: string | undefined, options: { stderr?: boolean }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const run = engine.execution.listRuns(pid).find((candidate) => candidate.id === runId)
       if (!run) throw new Error(`运行不存在: ${runId}`)
@@ -337,12 +338,3 @@ function parsePositiveInteger(value: string, label: string): number {
   return parsed
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine["store"].listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    return null
-  }
-  return projects[0] ?? null
-}

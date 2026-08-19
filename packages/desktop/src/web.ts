@@ -5,12 +5,13 @@
  */
 
 import { execFile } from "node:child_process"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { loadConfig } from "@octopus/context/config.js"
+import { getWorkflowWorkspace } from "@octopus/context/workflow.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
 
 const execFileAsync = promisify(execFile)
@@ -61,6 +62,10 @@ function requiredString(value: unknown, name: string): string {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {}
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -184,97 +189,182 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
   const config = { ...loadConfig(storeDir), storeDir }
   const engine = await createWorkflowEngineFromConfig(config, { projectRoot: defaultProjectRoot })
 
-  const listProjects = (): string[] => engine.listProjects()
-
   const invoke = async (method: string, args: unknown[]): Promise<unknown> => {
     const projectId = (): string => requiredString(args[0], "projectId")
+    const requirementId = (): string => requiredString(args[0], "requirementId")
+    const schedulePatch = (raw: unknown): { plannedStart?: string | null; plannedEnd?: string | null } => {
+      const schedule = asObject(raw)
+      const patch: { plannedStart?: string | null; plannedEnd?: string | null } = {}
+      if (schedule["plannedStart"] === null || typeof schedule["plannedStart"] === "string") {
+        patch.plannedStart = schedule["plannedStart"] as string | null
+      }
+      if (schedule["plannedEnd"] === null || typeof schedule["plannedEnd"] === "string") {
+        patch.plannedEnd = schedule["plannedEnd"] as string | null
+      }
+      return patch
+    }
+
     switch (method) {
       case "canInit":
         return true
+
+      // ── Project ──
       case "listProjects":
-        return listProjects()
+        return engine.listProjects()
       case "listProjectSummaries":
         return engine.listProjectSummaries()
-      case "init": {
-        const state = engine.initProject(
-          requiredString(args[0], "name"),
-          optionalString(args[1]),
-          optionalString(args[2]) ?? defaultProjectRoot,
-        )
+      case "createProject": {
+        const project = engine.createProject(requiredString(args[0], "name"), optionalString(args[1]))
         return {
-          projectId: state.projectId,
-          projectName: state.projectName,
-          currentPhase: state.currentPhase,
-          taskCount: state.steps.length,
+          projectId: project.projectId,
+          name: project.name,
+          description: project.description,
+          updatedAt: project.updatedAt,
         }
       }
-      case "updateProject": {
-        const patch = args[1] && typeof args[1] === "object" ? args[1] as { name?: unknown; description?: unknown } : {}
-        const state = engine.updateProject(projectId(), {
-          ...(typeof patch.name === "string" ? { name: patch.name } : {}),
-          ...(typeof patch.description === "string" ? { description: patch.description } : {}),
+      case "getProject":
+        return engine.getProject(projectId())
+      case "updateProjectMeta": {
+        const patch = asObject(args[1])
+        const project = engine.updateProjectMeta(projectId(), {
+          ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
+          ...(typeof patch["description"] === "string" ? { description: patch["description"] } : {}),
         })
         return {
-          projectId: state.projectId,
-          projectName: state.projectName,
-          description: state.description,
-        }
-      }
-      case "updateNodeSchedule": {
-        const nodeId = requiredString(args[1], "nodeId")
-        const schedule = args[2] && typeof args[2] === "object"
-          ? args[2] as { plannedStart?: unknown; plannedEnd?: unknown }
-          : {}
-        const patch: { plannedStart?: string | null; plannedEnd?: string | null } = {}
-        if (schedule.plannedStart === null || typeof schedule.plannedStart === "string") {
-          patch.plannedStart = schedule.plannedStart
-        }
-        if (schedule.plannedEnd === null || typeof schedule.plannedEnd === "string") {
-          patch.plannedEnd = schedule.plannedEnd
-        }
-        const state = engine.updateNodeSchedule(projectId(), nodeId, patch)
-        const step = state.steps.find((item) => item.id === nodeId)
-        return {
-          projectId: state.projectId,
-          nodeId,
-          plannedStart: step?.plannedStart ?? null,
-          plannedEnd: step?.plannedEnd ?? null,
+          projectId: project.projectId,
+          name: project.name,
+          description: project.description,
         }
       }
       case "deleteProject":
         engine.deleteProject(projectId())
         return { deleted: true, projectId: projectId() }
-      case "status":
-        return engine.getProjectStatus(projectId())
-      case "snapshot":
-        return engine.getExecutionSnapshot(projectId())
-      case "state":
-        return engine.getState(projectId())
+      case "bindProjectTeambition": {
+        const opts = asObject(args[1])
+        return engine.bindProjectTeambition(projectId(), {
+          ...(typeof opts["projectId"] === "string" ? { projectId: opts["projectId"] } : {}),
+          ...(typeof opts["prefix"] === "string" ? { prefix: opts["prefix"] } : {}),
+        })
+      }
+      case "unbindProjectTeambition":
+        return engine.unbindProjectTeambition(projectId())
+      case "listTeambitionCardStatuses":
+        return engine.listTeambitionCardStatuses(projectId())
+
+      // ── Requirement ──
+      case "listRequirements":
+        return engine.listRequirements(optionalString(args[0]))
+      case "listRequirementSummaries":
+        return engine.listRequirementSummaries(optionalString(args[0]))
+      case "initRequirement": {
+        const state = engine.initRequirement(
+          requiredString(args[0], "projectId"),
+          requiredString(args[1], "name"),
+          optionalString(args[2]),
+          optionalString(args[3]) ?? defaultProjectRoot,
+        )
+        return {
+          projectId: state.projectId,
+          requirementId: state.requirementId,
+          requirementName: state.requirementName,
+          currentPhase: state.currentPhase,
+          taskCount: state.steps.length,
+        }
+      }
+      case "updateRequirement": {
+        const patch = asObject(args[1])
+        const state = engine.updateRequirement(requirementId(), {
+          ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
+          ...(typeof patch["description"] === "string" ? { description: patch["description"] } : {}),
+        })
+        return {
+          projectId: state.projectId,
+          requirementId: state.requirementId,
+          requirementName: state.requirementName,
+          description: state.description,
+        }
+      }
+      case "deleteRequirement":
+        engine.deleteRequirement(requirementId())
+        return { deleted: true, requirementId: requirementId() }
+      case "getRequirementStatus":
+        return engine.getRequirementStatus(requirementId())
+      case "getState":
+        return engine.getState(requirementId())
+      case "getExecutionSnapshot":
+        return engine.getExecutionSnapshot(requirementId())
+      case "updateNodeSchedule": {
+        const nodeId = requiredString(args[1], "nodeId")
+        const state = engine.updateNodeSchedule(requirementId(), nodeId, schedulePatch(args[2]))
+        const step = state.steps.find((item) => item.id === nodeId)
+        return {
+          requirementId: state.requirementId,
+          nodeId,
+          plannedStart: step?.plannedStart ?? null,
+          plannedEnd: step?.plannedEnd ?? null,
+        }
+      }
       case "runNode":
-        return engine.execution.runNode(projectId(), requiredString(args[1], "nodeId"), args[2] === true ? { force: true } : {})
+        return engine.execution.runNode(
+          requirementId(),
+          requiredString(args[1], "nodeId"),
+          args[2] === true ? { force: true } : {},
+        )
       case "runWorkflow":
-        return engine.runWorkflow(projectId(), {
+        return engine.runWorkflow(requirementId(), {
           ...(args[1] === true ? { force: true } : {}),
           ...(typeof args[2] === "number" ? { maxParallel: args[2] } : {}),
         })
       case "completeNode":
-        return engine.execution.completeManualNode(projectId(), requiredString(args[1], "nodeId"), args[2] === true)
+        return engine.execution.completeManualNode(
+          requirementId(),
+          requiredString(args[1], "nodeId"),
+          args[2] === true,
+        )
       case "cancelRun":
-        return engine.execution.cancelRun(projectId(), requiredString(args[1], "runId"))
+        return engine.execution.cancelRun(requirementId(), requiredString(args[1], "runId"))
       case "retryRun":
-        return engine.execution.retryRun(projectId(), requiredString(args[1], "runId"), args[2] === true ? { force: true } : {})
+        return engine.execution.retryRun(
+          requirementId(),
+          requiredString(args[1], "runId"),
+          args[2] === true ? { force: true } : {},
+        )
       case "runs":
-        return engine.execution.listRuns(projectId(), optionalString(args[1]))
+        return engine.execution.listRuns(requirementId(), optionalString(args[1]))
       case "events":
-        return engine.execution.eventsAfter(projectId(), typeof args[1] === "number" ? args[1] : 0)
+        return engine.execution.eventsAfter(requirementId(), typeof args[1] === "number" ? args[1] : 0)
+      case "bindRequirementTask": {
+        const opts = asObject(args[1])
+        return engine.bindRequirementTask(requirementId(), {
+          ...(typeof opts["taskRef"] === "string" ? { taskRef: opts["taskRef"] } : {}),
+          ...(typeof opts["taskId"] === "string" ? { taskId: opts["taskId"] } : {}),
+        })
+      }
+      case "unbindRequirementTask":
+        return engine.unbindRequirementTask(requirementId())
+      case "getRequirementTeambitionStatus":
+        return engine.getRequirementTeambitionStatus(requirementId())
+      case "updateRequirementTeambitionStatus":
+        return engine.updateRequirementTeambitionStatus(
+          requirementId(),
+          requiredString(args[1], "statusId"),
+          optionalString(args[2]),
+        )
       case "health":
         return engine.checkIntegrationHealth()
+      case "resolveNodeWorkspace": {
+        const state = engine.getState(requirementId())
+        if (!state.projectRoot) throw new WebError(400, "需求没有源码根目录")
+        const nodeKey = engine.resolveNodeKey(requirementId(), requiredString(args[1], "nodeId"))
+        const path = getWorkflowWorkspace(state.projectRoot).nodePath(nodeKey)
+        return { nodeKey, path, exists: existsSync(path) }
+      }
       case "exportTasks": {
-        const document = engine.exportTasks(projectId())
+        const document = engine.exportTasks(requirementId())
         return { document, taskCount: document.tasks.length }
       }
       case "importTasks":
-        return engine.importTasks(projectId(), args[1])
+        return engine.importTasks(requirementId(), args[1])
       default:
         throw new WebError(404, `不支持的 API 方法：${method}`)
     }
@@ -286,6 +376,9 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
     ["/renderer.js", { file: "renderer.js", type: "text/javascript; charset=utf-8" }],
     ["/gantt.js", { file: "gantt.js", type: "text/javascript; charset=utf-8" }],
     ["/browser-api.js", { file: "browser-api.js", type: "text/javascript; charset=utf-8" }],
+    ["/app-icon.png", { file: "app-icon.png", type: "image/png" }],
+    ["/logo.png", { file: "logo.png", type: "image/png" }],
+    ["/mascot.jpg", { file: "mascot.jpg", type: "image/jpeg" }],
   ])
 
   let currentUrl = `http://${host}:${requestedPort}`

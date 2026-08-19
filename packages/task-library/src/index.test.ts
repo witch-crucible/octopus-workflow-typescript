@@ -17,7 +17,7 @@ describe("createStepsFromDefinition", () => {
   it("从 workflow actions 恢复 AI、integration 与 Heinrich capabilities", () => {
     const node: WorkflowNodeSpec = {
       key: "compatibility-node",
-      phase: Phase.DEVELOPMENT,
+      phase: Phase.IMPLEMENTATION,
       name: "Compatibility Node",
       description: "Restores capabilities from actions",
       responsibleRoles: [Role.DEV],
@@ -43,7 +43,7 @@ describe("createStepsFromDefinition", () => {
       nodes: [node],
     }
 
-    const step = createStepsFromDefinition("proj_test", definition, Phase.DEVELOPMENT)[0]!
+    const step = createStepsFromDefinition("proj_test", definition, Phase.IMPLEMENTATION)[0]!
 
     expect(step.actions).toBe(node.actions)
     expect(step.capabilities).toEqual([
@@ -62,7 +62,7 @@ describe("createStepsFromDefinition", () => {
   it("manual 与 command actions 不生成 capabilities", () => {
     const node: WorkflowNodeSpec = {
       key: "execution-only-node",
-      phase: Phase.DEVELOPMENT,
+      phase: Phase.IMPLEMENTATION,
       name: "Execution Only Node",
       description: "Keeps execution-only actions",
       responsibleRoles: [Role.DEV],
@@ -79,17 +79,23 @@ describe("createStepsFromDefinition", () => {
       nodes: [node],
     }
 
-    const step = createStepsFromDefinition("proj_test", definition, Phase.DEVELOPMENT)[0]!
+    const step = createStepsFromDefinition("proj_test", definition, Phase.IMPLEMENTATION)[0]!
     expect(step.capabilities).toBeUndefined()
   })
 })
 
 describe("createStepsForPhase", () => {
-  it("REQUIREMENTS_ANALYSIS 阶段生成13个步骤", () => {
-    const steps = createStepsForPhase("proj_test", Phase.REQUIREMENTS_ANALYSIS)
-    expect(steps.length).toBe(13)
-    expect(steps[0]!.phase).toBe(Phase.REQUIREMENTS_ANALYSIS)
+  it("INTENTION 阶段生成2个步骤", () => {
+    const steps = createStepsForPhase("proj_test", Phase.INTENTION)
+    expect(steps.length).toBe(2)
+    expect(steps[0]!.phase).toBe(Phase.INTENTION)
     expect(steps[0]!.status).toBe(TaskStatus.PENDING)
+  })
+
+  it("RESEARCH 阶段生成11个步骤", () => {
+    const steps = createStepsForPhase("proj_test", Phase.RESEARCH)
+    expect(steps.length).toBe(11)
+    expect(steps[0]!.phase).toBe(Phase.RESEARCH)
   })
 
   it("DESIGN 阶段生成9个步骤（含 20.2a）", () => {
@@ -98,7 +104,7 @@ describe("createStepsForPhase", () => {
   })
 
   it("每个步骤都有必填字段", () => {
-    const steps = createStepsForPhase("proj_test", Phase.DEVELOPMENT)
+    const steps = createStepsForPhase("proj_test", Phase.IMPLEMENTATION)
     for (const step of steps) {
       expect(step.id).toBeTruthy()
       expect(step.taskId).toBeTruthy()
@@ -108,7 +114,7 @@ describe("createStepsForPhase", () => {
   })
 
   it("文档生成节点配置为存在时扩展文档", () => {
-    const step = createStepsForPhase("proj_test", Phase.DEVELOPMENT)
+    const step = createStepsForPhase("proj_test", Phase.IMPLEMENTATION)
       .find((candidate) => candidate.id === "30.9")
     expect(step?.actions).toEqual([expect.objectContaining({
       type: "ai",
@@ -120,15 +126,16 @@ describe("createStepsForPhase", () => {
 })
 
 describe("createAllSteps", () => {
-  it("为所有6个阶段生成步骤", () => {
+  it("为所有9个阶段生成步骤映射", () => {
     const all = createAllSteps("proj_test")
-    expect(Object.keys(all)).toHaveLength(6)
+    expect(Object.keys(all)).toHaveLength(9)
+    expect(all[Phase.COMPLETED]).toEqual([])
   })
 })
 
 describe("getStepsByRole", () => {
   it("按角色过滤步骤", () => {
-    const steps = createStepsForPhase("proj_test", Phase.REQUIREMENTS_ANALYSIS)
+    const steps = createStepsForPhase("proj_test", Phase.INTENTION)
     const pmSteps = getStepsByRole(steps, "PM")
     for (const s of pmSteps) {
       expect(s.responsibleRole).toBe("PM")

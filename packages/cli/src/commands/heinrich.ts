@@ -2,14 +2,15 @@
  * `octopus heinrich` —— 海因里希三角管理命令。
  *
  * 子命令:
- *   show [projectId]                   — 展示海因里希三角
- *   log <level> <desc> [projectId]     — 记录风险观测
- *   resolve <obsId> [projectId]        — 解决观测
- *   assess [projectId]                 — 质量评估
+ *   show [requirementId]                   — 展示海因里希三角
+ *   log <level> <desc> [requirementId]     — 记录风险观测
+ *   resolve <obsId> [requirementId]        — 解决观测
+ *   assess [requirementId]                 — 质量评估
  */
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 import { HeinrichLevel, QualityVerdict } from "@octopus/core/risk.js"
 import { Phase } from "@octopus/core/phase.js"
 
@@ -22,19 +23,19 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
   heinrichCmd
     .command("show")
     .description("展示海因里希三角")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--observations", "同时显示观测记录")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId?: string, options?: { observations?: boolean; json?: boolean }) => {
+    .action((requirementId?: string, options?: { observations?: boolean; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const record = engine.getHeinrichRecord(pid)
 
         if (options?.json) {
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             majorDefects: record.majorDefects,
             minorDefects: record.minorDefects,
             trivialDefects: record.trivialDefects,
@@ -78,11 +79,11 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
     .argument("<level>", "风险等级 (MAJOR|MINOR|TRIVIAL)")
     .argument("<description>", "描述")
     .argument("[phase]", "所属阶段（默认为当前阶段）")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((level: string, description: string, phaseName?: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((level: string, description: string, phaseName?: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const heinrichLevel = Object.values(HeinrichLevel).find((l) => l === level.toUpperCase())
@@ -101,7 +102,7 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
 
         if (options?.json) {
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             level: heinrichLevel,
             description,
             phase,
@@ -124,18 +125,18 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
     .command("resolve")
     .description("解决风险观测")
     .argument("<obsId>", "观测 ID")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((obsId: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((obsId: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         engine.resolveObservation(pid, obsId)
 
         if (options?.json) {
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             obsId,
             resolved: true,
           }, null, 2))
@@ -154,12 +155,12 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
     .command("marker")
     .description("记录海因里希条数标记")
     .argument("[phase]", "所属阶段（默认当前阶段）")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--description <text>", "标记描述")
     .option("--json", "以 JSON 格式输出")
-    .action((phaseName?: string, projectId?: string, options?: { description?: string; json?: boolean }) => {
+    .action((phaseName?: string, requirementId?: string, options?: { description?: string; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.getState(pid)
@@ -171,7 +172,7 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
 
         if (options?.json) {
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             phase,
             triggerCount: updated.heinrich.triggerCounts[phase],
             description: options?.description,
@@ -190,18 +191,18 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
   heinrichCmd
     .command("assess")
     .description("质量评估")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId?: string, options?: { json?: boolean }) => {
+    .action((requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const assessment = engine.assessQuality(pid)
 
         if (options?.json) {
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             expectedMinor: assessment.expectedMinor,
             expectedTrivial: assessment.expectedTrivial,
             actualMinor: assessment.actualMinor,
@@ -234,13 +235,3 @@ export function buildHeinrichCommands(program: Command, engine: WorkflowEngine):
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine["store"].listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    process.exit(1)
-    return null
-  }
-  return projects[0] ?? null
-}

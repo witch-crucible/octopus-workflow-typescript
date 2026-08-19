@@ -38,16 +38,35 @@ function fakeAIClient(result: string): { client: AIClient; calls: AIAssistantTyp
 }
 
 /** 完成某阶段全部任务并前进，直到到达目标阶段 */
-function advanceToPhase(engine: WorkflowEngine, projectId: string, target: Phase): void {
-  while (engine.getState(projectId).currentPhase !== target) {
-    const current = engine.getState(projectId).currentPhase
-    for (const task of engine.getTasks(projectId, { phase: current })) {
+
+function enterResearch(engine: WorkflowEngine, requirementId: string): void {
+  for (const task of engine.getTasks(requirementId, { phase: Phase.INTENTION })) {
+    if (task.status !== TaskStatus.COMPLETED) engine.completeTask(requirementId, task.id)
+  }
+  engine.advancePhase(requirementId)
+}
+
+function advanceToPhase(engine: WorkflowEngine, requirementId: string, target: Phase): void {
+  while (engine.getState(requirementId).currentPhase !== target) {
+    const current = engine.getState(requirementId).currentPhase
+    for (const task of engine.getTasks(requirementId, { phase: current })) {
       if (task.status !== TaskStatus.COMPLETED) {
-        engine.completeTask(projectId, task.id)
+        engine.completeTask(requirementId, task.id)
       }
     }
-    engine.advancePhase(projectId)
+    engine.advancePhase(requirementId)
   }
+}
+
+
+function initNamedRequirement(
+  engine: WorkflowEngine,
+  name: string,
+  description?: string,
+  projectRoot?: string,
+) {
+  const project = engine.createProject(name, description)
+  return engine.initRequirement(project.projectId, name, description, projectRoot)
 }
 
 describe("runStepCapabilities", () => {
@@ -57,10 +76,11 @@ describe("runStepCapabilities", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       aiClient: client,
     })
-    const state = engine.initProject("cap_ai")
+    const state = initNamedRequirement(engine, "cap_ai")
+    enterResearch(engine, state.requirementId)
 
     // 步骤 10.6 声明了 ai(MEETING_MINUTES)
-    const after = await engine.runStepCapabilities(state.projectId, "10.6")
+    const after = await engine.runStepCapabilities(state.requirementId, "10.6")
 
     expect(calls).toHaveLength(1)
     const step = after.steps.find((s) => s.id === "10.6")!
@@ -75,9 +95,10 @@ describe("runStepCapabilities", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       aiClient: client,
     })
-    const state = engine.initProject("cap_project_root", undefined, join(testStoreDir, "source"))
+    const state = initNamedRequirement(engine, "cap_project_root", undefined, join(testStoreDir, "source"))
+    enterResearch(engine, state.requirementId)
 
-    const after = await engine.runStepCapabilities(state.projectId, "10.6")
+    const after = await engine.runStepCapabilities(state.requirementId, "10.6")
 
     expect(calls).toHaveLength(1)
     expect(inputs).toEqual(["AI Meeting Minutes：AI generates meeting minutes from the recorded discussion"])
@@ -88,9 +109,9 @@ describe("runStepCapabilities", () => {
     const engine = new WorkflowEngine({
       store: createStateStore({ storeDir: testStoreDir }),
     })
-    const state = engine.initProject("cap_none")
+    const state = initNamedRequirement(engine, "cap_none")
     // 步骤 10.1 无 capabilities
-    const after = await engine.runStepCapabilities(state.projectId, "10.1")
+    const after = await engine.runStepCapabilities(state.requirementId, "10.1")
     const step = after.steps.find((s) => s.id === "10.1")!
     expect(step.capabilityRuns).toBeUndefined()
   })
@@ -99,8 +120,9 @@ describe("runStepCapabilities", () => {
     const engine = new WorkflowEngine({
       store: createStateStore({ storeDir: testStoreDir }),
     })
-    const state = engine.initProject("cap_no_ai")
-    const after = await engine.runStepCapabilities(state.projectId, "10.6")
+    const state = initNamedRequirement(engine, "cap_no_ai")
+    enterResearch(engine, state.requirementId)
+    const after = await engine.runStepCapabilities(state.requirementId, "10.6")
     const step = after.steps.find((s) => s.id === "10.6")!
     expect(step.capabilityRuns?.[0]?.ok).toBe(false)
   })
@@ -126,20 +148,21 @@ describe("runStepCapabilities", () => {
     const concurrentEngine = new WorkflowEngine({
       store: createStateStore({ storeDir: testStoreDir }),
     })
-    const state = engine.initProject("cap_concurrent")
+    const state = initNamedRequirement(engine, "cap_concurrent")
+    enterResearch(engine, state.requirementId)
     const originalSnapshot = JSON.stringify(state)
 
-    const capabilityRun = engine.runStepCapabilities(state.projectId, "10.6")
+    const capabilityRun = engine.runStepCapabilities(state.requirementId, "10.6")
     await started
-    const task = concurrentEngine.getTasks(state.projectId).find((candidate) => candidate.stageId === "10.1")
+    const task = concurrentEngine.getTasks(state.requirementId).find((candidate) => candidate.stageId === "10.1")
     if (!task) throw new Error("测试任务不存在")
-    concurrentEngine.completeTask(state.projectId, task.id)
+    concurrentEngine.completeTask(state.requirementId, task.id)
     resolveAI?.({ result: "不应覆盖并发状态" })
 
-    await expect(capabilityRun).rejects.toThrow("执行期间项目状态已变更")
+    await expect(capabilityRun).rejects.toThrow("执行期间需求状态已变更")
     // 调用方持有的原始 state 对象未被 capability 副作用污染
     expect(JSON.stringify(state)).toBe(originalSnapshot)
-    const latest = engine.getState(state.projectId)
+    const latest = engine.getState(state.requirementId)
     expect(latest.steps.find((candidate) => candidate.id === "10.1")?.status).toBe(TaskStatus.COMPLETED)
     expect(latest.artifacts.some((artifact) => artifact.content === "不应覆盖并发状态")).toBe(false)
   })
@@ -152,8 +175,9 @@ describe("runStepCapabilities 显式输入", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       aiClient: client,
     })
-    const state = engine.initProject("cap_input")
-    const after = await engine.runStepCapabilities(state.projectId, "10.6", "显式输入原文")
+    const state = initNamedRequirement(engine, "cap_input")
+    enterResearch(engine, state.requirementId)
+    const after = await engine.runStepCapabilities(state.requirementId, "10.6", "显式输入原文")
 
     expect(inputs).toEqual(["显式输入原文"])
     expect(after.artifacts.some((a) => a.content === "MOCK 显式输入")).toBe(true)
@@ -163,8 +187,9 @@ describe("runStepCapabilities 显式输入", () => {
     const { client, inputs } = fakeAIClient("MOCK 声明输入")
     const store = createStateStore({ storeDir: testStoreDir })
     const engine = new WorkflowEngine({ store, aiClient: client })
-    const state = engine.initProject("cap_declared_input")
-    store.update(state.projectId, (current) => {
+    const state = initNamedRequirement(engine, "cap_declared_input")
+    enterResearch(engine, state.requirementId)
+    store.update(state.requirementId, (current) => {
       const step = current.steps.find((candidate) => candidate.id === "10.6")
       if (!step || !step.capabilities?.[0] || step.capabilities[0].kind !== "ai") {
         throw new Error("测试 AI capability 不存在")
@@ -173,7 +198,7 @@ describe("runStepCapabilities 显式输入", () => {
       return current
     })
 
-    await engine.runStepCapabilities(state.projectId, "10.6")
+    await engine.runStepCapabilities(state.requirementId, "10.6")
 
     expect(inputs).toEqual(["workflow 声明输入"])
   })
@@ -182,8 +207,9 @@ describe("runStepCapabilities 显式输入", () => {
     const { client, inputs } = fakeAIClient("MOCK 覆盖输入")
     const store = createStateStore({ storeDir: testStoreDir })
     const engine = new WorkflowEngine({ store, aiClient: client })
-    const state = engine.initProject("cap_runtime_input")
-    store.update(state.projectId, (current) => {
+    const state = initNamedRequirement(engine, "cap_runtime_input")
+    enterResearch(engine, state.requirementId)
+    store.update(state.requirementId, (current) => {
       const step = current.steps.find((candidate) => candidate.id === "10.6")
       if (!step || !step.capabilities?.[0] || step.capabilities[0].kind !== "ai") {
         throw new Error("测试 AI capability 不存在")
@@ -192,7 +218,7 @@ describe("runStepCapabilities 显式输入", () => {
       return current
     })
 
-    await engine.runStepCapabilities(state.projectId, "10.6", "运行参数输入")
+    await engine.runStepCapabilities(state.requirementId, "10.6", "运行参数输入")
 
     expect(inputs).toEqual(["运行参数输入"])
   })
@@ -203,8 +229,9 @@ describe("runStepCapabilities 显式输入", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       aiClient: client,
     })
-    const state = engine.initProject("cap_fallback")
-    await engine.runStepCapabilities(state.projectId, "10.6")
+    const state = initNamedRequirement(engine, "cap_fallback")
+    enterResearch(engine, state.requirementId)
+    await engine.runStepCapabilities(state.requirementId, "10.6")
 
     expect(inputs).toEqual(["AI Meeting Minutes：AI generates meeting minutes from the recorded discussion"])
   })
@@ -215,28 +242,28 @@ describe("runStepCapabilities 显式输入", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       aiClient: client,
     })
-    const state = engine.initProject("cap_multi")
-    advanceToPhase(engine, state.projectId, Phase.DEPLOYMENT)
-    const before = engine.getState(state.projectId).heinrich.triggerCounts[Phase.DEPLOYMENT] ?? 0
+    const state = initNamedRequirement(engine, "cap_multi")
+    advanceToPhase(engine, state.requirementId, Phase.RELEASE)
+    const before = engine.getState(state.requirementId).heinrich.triggerCounts[Phase.RELEASE] ?? 0
 
-    const after = await engine.runStepCapabilities(state.projectId, "50.7", "EXPLICIT SQL")
+    const after = await engine.runStepCapabilities(state.requirementId, "50.7", "EXPLICIT SQL")
     const step = after.steps.find((s) => s.id === "50.7")!
 
     expect(inputs).toEqual(["EXPLICIT SQL"])
     expect(step.capabilityRuns).toHaveLength(2)
     expect(step.capabilityRuns?.[0]?.kind).toBe("ai")
     expect(step.capabilityRuns?.[1]?.kind).toBe("heinrich")
-    expect(after.heinrich.triggerCounts[Phase.DEPLOYMENT]).toBe(before + 1)
+    expect(after.heinrich.triggerCounts[Phase.RELEASE]).toBe(before + 1)
   })
 
   it("无 AI 能力的 Integration 步骤：显式输入被忽略，行为不变", async () => {
     const engine = new WorkflowEngine({
       store: createStateStore({ storeDir: testStoreDir }),
     })
-    const state = engine.initProject("cap_int")
-    advanceToPhase(engine, state.projectId, Phase.DEPLOYMENT)
+    const state = initNamedRequirement(engine, "cap_int")
+    advanceToPhase(engine, state.requirementId, Phase.RELEASE)
 
-    const after = await engine.runStepCapabilities(state.projectId, "50.2", "EXPLICIT")
+    const after = await engine.runStepCapabilities(state.requirementId, "50.2", "EXPLICIT")
     const step = after.steps.find((s) => s.id === "50.2")!
 
     expect(step.capabilityRuns).toHaveLength(2)
@@ -266,15 +293,15 @@ describe("Integration 能力透传输入", () => {
       store,
       integrations: { fakeService: makeRecordingService(received) },
     })
-    const state = engine.initProject("cap_int_input")
+    const state = initNamedRequirement(engine, "cap_int_input")
     const stepId = state.steps[0]!.id
-    store.update(state.projectId, (current) => {
+    store.update(state.requirementId, (current) => {
       const step = current.steps.find((item) => item.id === stepId)
       if (step) step.capabilities = [{ kind: "integration", service: "fakeService", op: "runOp" }]
       return current
     })
 
-    await engine.runStepCapabilities(state.projectId, stepId, "EXPLICIT INPUT")
+    await engine.runStepCapabilities(state.requirementId, stepId, "EXPLICIT INPUT")
 
     expect(received).toEqual([["EXPLICIT INPUT"]])
   })
@@ -286,15 +313,15 @@ describe("Integration 能力透传输入", () => {
       store,
       integrations: { fakeService: makeRecordingService(received) },
     })
-    const state = engine.initProject("cap_int_zeroarg")
+    const state = initNamedRequirement(engine, "cap_int_zeroarg")
     const stepId = state.steps[0]!.id
-    store.update(state.projectId, (current) => {
+    store.update(state.requirementId, (current) => {
       const step = current.steps.find((item) => item.id === stepId)
       if (step) step.capabilities = [{ kind: "integration", service: "fakeService", op: "runOp" }]
       return current
     })
 
-    await engine.runStepCapabilities(state.projectId, stepId)
+    await engine.runStepCapabilities(state.requirementId, stepId)
 
     expect(received).toEqual([[]])
   })
@@ -309,11 +336,11 @@ describe("Checklist 推荐落库", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       aiClient: client,
     })
-    const state = engine.initProject("cap_cl_valid")
-    advanceToPhase(engine, state.projectId, Phase.DEPLOYMENT)
+    const state = initNamedRequirement(engine, "cap_cl_valid")
+    advanceToPhase(engine, state.requirementId, Phase.RELEASE)
 
-    const after = await engine.runStepCapabilities(state.projectId, "50.3")
-    const cl = after.checklists[Phase.DEPLOYMENT]!
+    const after = await engine.runStepCapabilities(state.requirementId, "50.3")
+    const cl = after.checklists[Phase.RELEASE]!
 
     expect(cl.items).toHaveLength(2)
     expect(cl.items[0]?.category).toBe("性能")
@@ -328,13 +355,13 @@ describe("Checklist 推荐落库", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       aiClient: client,
     })
-    const state = engine.initProject("cap_cl_invalid")
-    advanceToPhase(engine, state.projectId, Phase.DEPLOYMENT)
+    const state = initNamedRequirement(engine, "cap_cl_invalid")
+    advanceToPhase(engine, state.requirementId, Phase.RELEASE)
 
-    const after = await engine.runStepCapabilities(state.projectId, "50.3")
+    const after = await engine.runStepCapabilities(state.requirementId, "50.3")
     const step = after.steps.find((s) => s.id === "50.3")!
 
-    expect(after.checklists[Phase.DEPLOYMENT]!.items).toHaveLength(0)
+    expect(after.checklists[Phase.RELEASE]!.items).toHaveLength(0)
     expect(step.capabilityRuns?.[0]?.kind).toBe("ai")
     expect(step.capabilityRuns?.[0]?.ok).toBe(true)
   })
@@ -360,15 +387,15 @@ describe("自定义能力", () => {
         kindHandlers: new Map(),
       },
     })
-    const state = engine.initProject("cap_custom")
+    const state = initNamedRequirement(engine, "cap_custom")
     const stepId = state.steps[0]!.id
-    store.update(state.projectId, (current) => {
+    store.update(state.requirementId, (current) => {
       const step = current.steps.find((item) => item.id === stepId)
       if (step) step.capabilities = [{ kind: "custom", name: "sample.ping" }]
       return current
     })
 
-    const after = await engine.runStepCapabilities(state.projectId, stepId)
+    const after = await engine.runStepCapabilities(state.requirementId, stepId)
     const step = after.steps.find((item) => item.id === stepId)!
     expect(step.capabilityRuns?.[0]).toMatchObject({ kind: "custom", ref: "sample.ping", ok: true, summary: "pong" })
   })
@@ -376,14 +403,14 @@ describe("自定义能力", () => {
   it("未注册的 custom 记为失败且不抛错", async () => {
     const store = createStateStore({ storeDir: testStoreDir })
     const engine = new WorkflowEngine({ store })
-    const state = engine.initProject("cap_custom_missing")
+    const state = initNamedRequirement(engine, "cap_custom_missing")
     const stepId = state.steps[0]!.id
-    store.update(state.projectId, (current) => {
+    store.update(state.requirementId, (current) => {
       const step = current.steps.find((item) => item.id === stepId)
       if (step) step.capabilities = [{ kind: "custom", name: "missing.op" }]
       return current
     })
-    const after = await engine.runStepCapabilities(state.projectId, stepId)
+    const after = await engine.runStepCapabilities(state.requirementId, stepId)
     expect(after.steps.find((item) => item.id === stepId)?.capabilityRuns?.[0]).toMatchObject({
       kind: "custom",
       ok: false,

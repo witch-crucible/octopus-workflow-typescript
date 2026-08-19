@@ -15,6 +15,18 @@ import type { AIClientConfig } from "@octopus/agent-layer/index.js"
 import { ConfigError } from "@octopus/core/errors.js"
 import type { PluginRef } from "@octopus/plugin/index.js"
 
+/** Teambition 集成配置 */
+export interface TeambitionConfig {
+  appId: string
+  appSecret: string
+  orgId: string
+  /** 写操作默认 operator（x-operator-id） */
+  operatorId?: string
+  gatewayBase?: string
+  refStrategy?: "prefix" | "shortid" | "tql"
+  timeoutMs?: number
+}
+
 /** 全局配置 */
 export interface OctopusConfig {
   /** 状态存储目录 */
@@ -32,6 +44,8 @@ export interface OctopusConfig {
   }
   /** 本机插件引用；与 workflow.yaml plugins 按顺序拼接 */
   plugins: PluginRef[]
+  /** Teambition 凭据；缺省时不装配客户端 */
+  teambition?: TeambitionConfig
 }
 
 /**
@@ -79,6 +93,17 @@ const configFileSchema = z.object({
     })
     .optional(),
   plugins: z.array(pluginRefSchema).optional(),
+  teambition: z
+    .object({
+      appId: z.string(),
+      appSecret: z.string(),
+      orgId: z.string(),
+      operatorId: z.string().optional(),
+      gatewayBase: z.string().optional(),
+      refStrategy: z.enum(["prefix", "shortid", "tql"]).optional(),
+      timeoutMs: z.number().optional(),
+    })
+    .optional(),
 })
 
 /** 默认配置 */
@@ -113,6 +138,24 @@ function loadFromEnv(): Partial<OctopusConfig> {
     if (process.env["OCTOPUS_AI_MODEL"]) config.ai.defaultModel = process.env["OCTOPUS_AI_MODEL"]
     if (process.env["OCTOPUS_AI_TIMEOUT"]) config.ai.defaultTimeout = Number(process.env["OCTOPUS_AI_TIMEOUT"])
     if (process.env["OCTOPUS_AI_CLAUDE_PATH"]) config.ai.claudePath = process.env["OCTOPUS_AI_CLAUDE_PATH"]
+  }
+
+  const tbAppId = process.env["OCTOPUS_TB_APP_ID"]
+  const tbAppSecret = process.env["OCTOPUS_TB_APP_SECRET"]
+  const tbOrgId = process.env["OCTOPUS_TB_ORG_ID"]
+  if (tbAppId || tbAppSecret || tbOrgId || process.env["OCTOPUS_TB_OPERATOR_ID"]) {
+    const teambition: TeambitionConfig = {
+      appId: tbAppId ?? "",
+      appSecret: tbAppSecret ?? "",
+      orgId: tbOrgId ?? "",
+    }
+    if (process.env["OCTOPUS_TB_OPERATOR_ID"]) teambition.operatorId = process.env["OCTOPUS_TB_OPERATOR_ID"]
+    if (process.env["OCTOPUS_TB_GATEWAY"]) teambition.gatewayBase = process.env["OCTOPUS_TB_GATEWAY"]
+    const refStrategy = process.env["OCTOPUS_TB_REF_STRATEGY"]
+    if (refStrategy === "prefix" || refStrategy === "shortid" || refStrategy === "tql") {
+      teambition.refStrategy = refStrategy
+    }
+    config.teambition = teambition
   }
 
   return config
@@ -164,6 +207,14 @@ function mergeConfigs(...configs: Partial<OctopusConfig>[]): OctopusConfig {
     }
     if (config.plugins) {
       result = { ...result, plugins: [...config.plugins] }
+    }
+    if (config.teambition) {
+      result = {
+        ...result,
+        teambition: result.teambition
+          ? { ...result.teambition, ...config.teambition }
+          : { ...config.teambition },
+      }
     }
   }
 

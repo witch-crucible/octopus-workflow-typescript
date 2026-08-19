@@ -3,18 +3,15 @@
  * CLI 入口 —— 使用 commander 实现子命令路由。
  *
  * 命令结构：
- *   octopus init <name>         — 创建项目
- *   octopus project list        — 列出项目
- *   octopus project delete <id> — 删除项目状态
- *   octopus status              — 项目状态
- *   octopus phase list          — 阶段列表
- *   octopus phase advance       — 前进阶段
- *   octopus phase rollback <p>  — 回退阶段
- *   octopus task list           — 任务列表
- *   octopus task complete <id>  — 完成任务
- *   octopus checklist show      — 清单展示
- *   octopus heinrich show       — 海因里希三角
- *   octopus ai ask <prompt>     — 询问 AI
+ *   octopus project create|list|update|delete|bind-tb|unbind-tb|tb-statuses
+ *   octopus requirement init|list|delete|bind-task|unbind-task|tb-status|tb-update
+ *   octopus init <name> --project <id>  — requirement init 别名
+ *   octopus status                      — 需求状态
+ *   octopus phase list|advance|rollback|show
+ *   octopus task list|complete|export|import
+ *   octopus checklist show              — 清单展示
+ *   octopus heinrich show               — 海因里希三角
+ *   octopus ai ask <prompt>             — 询问 AI
  */
 
 import { Command } from "commander"
@@ -22,6 +19,7 @@ import { loadConfig } from "@octopus/context/config.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
 import { buildInitCommand } from "./commands/init.js"
 import { buildProjectCommands } from "./commands/project.js"
+import { buildRequirementCommands } from "./commands/requirement.js"
 import { buildStatusCommand } from "./commands/status.js"
 import { buildPhaseCommands } from "./commands/phase.js"
 import { buildTaskCommands } from "./commands/task.js"
@@ -48,6 +46,7 @@ async function main(): Promise<void> {
   // 注册子命令
   buildInitCommand(program, engine)
   buildProjectCommands(program, engine)
+  buildRequirementCommands(program, engine)
   buildStatusCommand(program, engine)
   buildPhaseCommands(program, engine)
   buildTaskCommands(program, engine)

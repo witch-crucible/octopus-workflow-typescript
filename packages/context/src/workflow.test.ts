@@ -55,7 +55,7 @@ describe("项目工作流节点写入", () => {
     const projectRoot = createProjectRoot()
     const result = appendWorkflowNode(projectRoot, {
       key: "generate-report",
-      phase: Phase.REQUIREMENTS_ANALYSIS,
+      phase: Phase.INTENTION,
       name: "Generate Report",
       description: "Generate a one-off delivery report",
       responsibleRoles: [Role.AI],
@@ -156,7 +156,7 @@ describe("definitionFromBuiltInSpec 生成 generate-documentation", () => {
     const definition = definitionFromBuiltInSpec()
     const node = definition.nodes.find((candidate) => candidate.key === "generate-documentation")
     expect(node).toBeDefined()
-    expect(node?.phase).toBe(Phase.REQUIREMENTS_ANALYSIS)
+    expect(node?.phase).toBe(Phase.RESEARCH)
     expect(node?.responsibleRoles).toEqual([Role.AI])
     expect(node?.dependsOn).toEqual(["requirements-analysis-and-brd-design"])
     expect(definition.nodeIdMapping["generate-documentation"]).toBe("10.doc")

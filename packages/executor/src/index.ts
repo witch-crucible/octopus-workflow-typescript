@@ -11,7 +11,7 @@ import { createExecutionStore } from "@octopus/context/execution.js"
 
 export interface WorkerLaunchOptions {
   readonly storeDir: string
-  readonly projectId: string
+  readonly requirementId: string
   readonly run: NodeRun
 }
 
@@ -23,7 +23,7 @@ export function launchWorker(options: WorkerLaunchOptions): number {
   mkdirSync(dirname(options.run.stderrPath), { recursive: true })
   const stdout = openSync(options.run.stdoutPath, "a")
   const stderr = openSync(options.run.stderrPath, "a")
-  const child = spawn(process.execPath, [workerPath, "--store-dir", options.storeDir, "--project-id", options.projectId, "--run-id", options.run.id], {
+  const child = spawn(process.execPath, [workerPath, "--store-dir", options.storeDir, "--requirement-id", options.requirementId, "--run-id", options.run.id], {
     detached: true,
     stdio: ["ignore", stdout, stderr],
     env: { ...process.env, OCTOPUS_WORKER: "1" },

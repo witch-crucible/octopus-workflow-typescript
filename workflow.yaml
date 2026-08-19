@@ -52,7 +52,7 @@ nodeIdMapping:
   generate-documentation: 10.doc
 nodes:
   - key: requirements-analysis-and-brd-design
-    phase: RequirementsAnalysis
+    phase: Intention
     name: Requirements Analysis and BRD Design
     description: PM analyzes requirements and completes the BRD
     responsibleRoles:
@@ -61,7 +61,7 @@ nodes:
     actions:
       - type: manual
   - key: brd-walkthrough
-    phase: RequirementsAnalysis
+    phase: Intention
     name: BRD Walkthrough
     description: PM walks BA through the BRD
     responsibleRoles:
@@ -72,7 +72,7 @@ nodes:
     actions:
       - type: manual
   - key: requirements-research
-    phase: RequirementsAnalysis
+    phase: Research
     name: Requirements Research
     description: SA researches technical feasibility, delivery time, and cost
     responsibleRoles:
@@ -82,7 +82,7 @@ nodes:
     actions:
       - type: manual
   - key: prd-design-and-boundary-analysis
-    phase: RequirementsAnalysis
+    phase: Research
     name: PRD and Boundary Design
     description: BA designs the PRD and validates boundary cases
     responsibleRoles:
@@ -92,7 +92,7 @@ nodes:
     actions:
       - type: manual
   - key: prd-walkthrough
-    phase: RequirementsAnalysis
+    phase: Research
     name: PRD Walkthrough
     description: BA walks PM, DEV, and SA through the PRD
     responsibleRoles:
@@ -105,7 +105,7 @@ nodes:
     actions:
       - type: manual
   - key: ai-meeting-minutes
-    phase: RequirementsAnalysis
+    phase: Research
     name: AI Meeting Minutes
     description: AI generates meeting minutes from the recorded discussion
     responsibleRoles:
@@ -116,7 +116,7 @@ nodes:
       - type: ai
         assistant: MEETING_MINUTES
   - key: prd-review-and-feature-breakdown
-    phase: RequirementsAnalysis
+    phase: Research
     name: PRD Review and Feature Breakdown
     description: SA reviews the PRD and breaks it into feature units
     responsibleRoles:
@@ -126,7 +126,7 @@ nodes:
     actions:
       - type: manual
   - key: prd-effort-estimation
-    phase: RequirementsAnalysis
+    phase: Research
     name: PRD Effort Estimation
     description: SA estimates each feature unit at no more than two hours
     responsibleRoles:
@@ -136,7 +136,7 @@ nodes:
     actions:
       - type: manual
   - key: ai-requirements-analysis
-    phase: RequirementsAnalysis
+    phase: Research
     name: AI Requirements Analysis
     description: >-
       AI analyzes and decomposes requirements using project code, wiki pages,
@@ -150,7 +150,7 @@ nodes:
       - type: ai
         assistant: REQUIREMENTS_ANALYSIS
   - key: ai-effort-summary
-    phase: RequirementsAnalysis
+    phase: Research
     name: AI Effort Summary
     description: AI summarizes effort from the detailed Excel estimate
     responsibleRoles:
@@ -161,7 +161,7 @@ nodes:
       - type: ai
         assistant: EFFORT_ESTIMATION
   - key: effort-estimate-sync
-    phase: RequirementsAnalysis
+    phase: Research
     name: Effort Estimate Sync
     description: SA shares the effort estimate with PM and DEV
     responsibleRoles:
@@ -173,7 +173,7 @@ nodes:
     actions:
       - type: manual
   - key: developer-effort-confirmation
-    phase: RequirementsAnalysis
+    phase: Research
     name: Developer Effort Confirmation
     description: DEV confirms the effort estimate
     responsibleRoles:
@@ -291,7 +291,7 @@ nodes:
     actions:
       - type: manual
   - key: technical-design-consolidation
-    phase: Development
+    phase: Implementation
     name: Technical Design Consolidation
     description: DEV consolidates the technical design and verifies the estimate
     responsibleRoles:
@@ -300,7 +300,7 @@ nodes:
     actions:
       - type: manual
   - key: ai-setup-checklist-validation
-    phase: Development
+    phase: Implementation
     name: AI Setup Checklist Validation
     description: AI validates domain, Nginx, PHP, payment, and related setup
     responsibleRoles:
@@ -312,7 +312,7 @@ nodes:
       - type: ai
         assistant: SETUP_CHECKLIST_CHECK
   - key: technical-design-review-chain
-    phase: Development
+    phase: Implementation
     name: Technical Design Review Chain
     description: DEV, SA, BA, and PM review the technical design in sequence
     responsibleRoles:
@@ -325,7 +325,7 @@ nodes:
     actions:
       - type: manual
   - key: ai-technical-design-review
-    phase: Development
+    phase: Implementation
     name: AI Technical Design Review
     description: AI scores architecture quality and predicts security and performance risks
     responsibleRoles:
@@ -336,7 +336,7 @@ nodes:
       - type: ai
         assistant: TECH_DESIGN_REVIEW
   - key: test-case-design-and-review
-    phase: Development
+    phase: Implementation
     name: Test Case Design and Review
     description: QA writes test cases and organizes their review
     responsibleRoles:
@@ -349,7 +349,7 @@ nodes:
     actions:
       - type: manual
   - key: data-and-api-design
-    phase: Development
+    phase: Implementation
     name: Data and API Design
     description: DEV designs data structures, APIs, and user interfaces
     responsibleRoles:
@@ -360,7 +360,7 @@ nodes:
     actions:
       - type: manual
   - key: feature-development
-    phase: Development
+    phase: Implementation
     name: Feature Development
     description: DEV implements the feature and creates its main task branch
     responsibleRoles:
@@ -371,7 +371,7 @@ nodes:
       - type: heinrich
         delta: 1
   - key: checklist-update-and-integration
-    phase: Development
+    phase: Implementation
     name: Checklist Update and Integration
     description: DEV updates the checklist and completes integration testing
     responsibleRoles:
@@ -381,7 +381,7 @@ nodes:
     actions:
       - type: manual
   - key: environment-validation-and-documentation
-    phase: Development
+    phase: Implementation
     name: Environment Validation and AI Documentation
     description: >-
       SA confirms the environment and AI generates or extends the technical
@@ -401,7 +401,7 @@ nodes:
         outputFile: documentation.md
         ifExists: extend
   - key: self-test-and-code-quality
-    phase: Development
+    phase: Implementation
     name: Self-Test and Code Quality
     description: >-
       DEV completes self-testing, Sonar analysis, vulnerability scanning, and
@@ -417,7 +417,7 @@ nodes:
       - type: heinrich
         delta: 1
   - key: weekly-feature-demo
-    phase: Development
+    phase: Implementation
     name: Weekly Feature Demo
     description: SA runs the weekly feature demo and code quality review
     responsibleRoles:
@@ -449,7 +449,7 @@ nodes:
     actions:
       - type: manual
   - key: uat-and-user-acceptance
-    phase: Testing
+    phase: UAT
     name: UAT and User Acceptance
     description: QA prepares UAT cases and OP performs user acceptance testing
     responsibleRoles:
@@ -460,7 +460,7 @@ nodes:
     actions:
       - type: manual
   - key: release-plan-creation
-    phase: Testing
+    phase: UAT
     name: Release Plan Creation
     description: OP creates the release plan at least three days in advance
     responsibleRoles:
@@ -470,7 +470,7 @@ nodes:
     actions:
       - type: manual
   - key: environment-deployment
-    phase: Deployment
+    phase: Release
     name: Environment Deployment
     description: >-
       SA deploys the complete domain, CDN, WAF, SLB, ECS, and related
@@ -481,7 +481,7 @@ nodes:
     actions:
       - type: manual
   - key: branch-merge
-    phase: Deployment
+    phase: Release
     name: Branch Merge
     description: SA merges the release branches
     responsibleRoles:
@@ -496,7 +496,7 @@ nodes:
       - type: heinrich
         delta: 1
   - key: ai-checklist-recommendation
-    phase: Deployment
+    phase: Release
     name: AI Checklist Recommendation
     description: AI recommends checklist additions for review by SA, BA, DEV, PM, and QA
     responsibleRoles:
@@ -512,7 +512,7 @@ nodes:
       - type: ai
         assistant: CHECKLIST_RECOMMENDATION
   - key: sonar-and-code-review
-    phase: Deployment
+    phase: Release
     name: Sonar and Code Review
     description: SA runs Sonar and DEV performs code review
     responsibleRoles:
@@ -527,7 +527,7 @@ nodes:
       - type: heinrich
         delta: 1
   - key: ai-code-review
-    phase: Deployment
+    phase: Release
     name: AI Code Review
     description: >-
       AI generates UML sequence diagrams and control-flow graphs, then scores
@@ -540,7 +540,7 @@ nodes:
       - type: ai
         assistant: CODE_REVIEW
   - key: postman-and-test-script-generation
-    phase: Deployment
+    phase: Release
     name: Postman and Test Script Generation
     description: SA runs Postman and AI generates automated test scripts
     responsibleRoles:
@@ -557,7 +557,7 @@ nodes:
       - type: heinrich
         delta: 1
   - key: sql-execution-and-risk-check
-    phase: Deployment
+    phase: Release
     name: SQL Execution and Risk Check
     description: >-
       SA and DEV execute SQL while AI detects missing indexes, table locks, and
@@ -574,7 +574,7 @@ nodes:
       - type: heinrich
         delta: 1
   - key: magento-release-risk-assessment
-    phase: Deployment
+    phase: Release
     name: Magento Release Risk Assessment
     description: SA performs the release and AI assesses release risk in advance
     responsibleRoles:
@@ -586,7 +586,7 @@ nodes:
       - type: ai
         assistant: RELEASE_RISK_ASSESSMENT
   - key: regression-testing
-    phase: Deployment
+    phase: Release
     name: Regression Testing
     description: QA performs regression testing
     responsibleRoles:
@@ -596,7 +596,7 @@ nodes:
     actions:
       - type: manual
   - key: ab-validation-and-branch-merge
-    phase: Deployment
+    phase: Release
     name: AB Validation and Branch Merge
     description: >-
       PM validates the AB test and merges the production branch back into
@@ -632,7 +632,7 @@ nodes:
         service: monitoring
         operation: registerAlert
   - key: generate-documentation
-    phase: RequirementsAnalysis
+    phase: Research
     name: Generate Documentation
     description: Generate or extend complete technical documentation from the project source code
     responsibleRoles:

@@ -47,12 +47,14 @@ describe("DEFAULT_WORKFLOW_SPEC 内部一致性", () => {
 })
 
 describe("generate-documentation 步骤", () => {
-  it("10.doc 存在于 RequirementsAnalysis 阶段", () => {
+  it("10.doc 存在于 Research 阶段", () => {
     const step = findStepSpec("10.doc")
     expect(step).toBeDefined()
     expect(step?.name).toBe("Generate Documentation")
     expect(step?.responsibleRoles).toEqual([Role.AI])
     expect(step?.dependsOn).toEqual(["10.1"])
+    const research = DEFAULT_WORKFLOW_SPEC.phases.find((phase) => phase.phase === "Research")
+    expect(research?.steps.some((item) => item.id === "10.doc")).toBe(true)
   })
 
   it("10.doc 声明 DOCUMENT_SYNC 能力并输出 documentation.md", () => {

@@ -103,7 +103,7 @@ export type NodeRunStatus =
 /** 一次节点执行记录。 */
 export interface NodeRun {
   readonly id: string
-  readonly projectId: string
+  readonly requirementId: string
   readonly nodeId: string
   readonly status: NodeRunStatus
   readonly forced: boolean
@@ -120,7 +120,7 @@ export interface NodeRun {
 
 /** 工作流当前节点及监控摘要。 */
 export interface WorkflowExecutionSnapshot {
-  readonly projectId: string
+  readonly requirementId: string
   readonly currentNodeIds: readonly string[]
   readonly readyNodeIds: readonly string[]
   readonly waitingNodeIds: readonly string[]
@@ -132,7 +132,7 @@ export interface WorkflowExecutionSnapshot {
 /** 持久化的执行事件。 */
 export interface WorkflowEvent {
   readonly sequence: number
-  readonly projectId: string
+  readonly requirementId: string
   readonly runId?: string
   readonly nodeId?: string
   readonly type:

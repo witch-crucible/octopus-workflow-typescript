@@ -2,6 +2,7 @@
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647
 
@@ -10,10 +11,10 @@ export function buildMonitorCommands(program: Command, engine: WorkflowEngine): 
 
   monitor.command("status")
     .description("查看运行和集成健康度")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 输出")
-    .action((projectId: string | undefined, options: { json?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action((requirementId: string | undefined, options: { json?: boolean }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const data = {
         snapshot: engine.getExecutionSnapshot(pid),
@@ -32,9 +33,9 @@ export function buildMonitorCommands(program: Command, engine: WorkflowEngine): 
 
   monitor.command("check")
     .description("立即检查所有已注册集成")
-    .argument("[projectId]", "项目 ID")
-    .action(async (projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
+    .argument("[requirementId]", "需求 ID")
+    .action(async (requirementId?: string) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const health = await engine.checkIntegrationHealth()
       if (health.length === 0) console.log("ℹ️  当前没有注册集成")
@@ -43,10 +44,10 @@ export function buildMonitorCommands(program: Command, engine: WorkflowEngine): 
 
   monitor.command("watch")
     .description("持续查看节点事件")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--interval <ms>", "轮询间隔", "1000")
-    .action(async (projectId: string | undefined, options: { interval: string }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action(async (requirementId: string | undefined, options: { interval: string }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const interval = parseInterval(options.interval)
       let sequence = 0
@@ -61,15 +62,6 @@ export function buildMonitorCommands(program: Command, engine: WorkflowEngine): 
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine.listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    return null
-  }
-  return projects[0] ?? null
-}
 
 function parseInterval(value: string): number {
   const parsed = Number(value)

@@ -1,6 +1,20 @@
 # Octopus Workflow
 
+<p align="center">
+  <img src="docs/brand/mascot.jpg" alt="Octopus mascot" width="280" />
+</p>
+<p align="center">
+  <img src="docs/brand/lockup.jpg" alt="Octopus" width="560" />
+</p>
+
 Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，把研发过程建模为可版本化的 DAG，并持久化节点状态、运行记录和审计事件。
+
+领域分层：
+
+```text
+项目（Project）
+  └── 需求（Requirement）← 工作流实例 / phase / steps
+```
 
 ```text
 需求分析 → 设计 → 开发 → 测试 → 部署 → 维护
@@ -12,6 +26,7 @@ Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，�
 - 支持手动、命令、AI、外部集成和 Heinrich 标记五类动作。
 - 按依赖调度可运行节点，支持并行执行、手动暂停、取消和重试。
 - 内置 12 类 AI 辅助能力，通过 Claude CLI 执行。
+- 项目可绑定 Teambition 项目，需求可绑定任务卡片并读写状态。
 - 提供 CLI、本地 Web 界面和 macOS Electron 客户端。
 
 ## 快速开始
@@ -22,19 +37,24 @@ Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，�
 pnpm install --frozen-lockfile
 pnpm -r build
 
-node packages/cli/dist/index.js init "My Project" --root .
+node packages/cli/dist/index.js project create "Acme"
+node packages/cli/dist/index.js init "Feature X" --project <projectId> --root .
 node packages/cli/dist/index.js status
 node packages/cli/dist/index.js node list
 ```
 
-`init` 创建项目状态并初始化工作流目录；同一状态库可有多个项目。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令），多数命令在只有一个项目时可省略 `projectId`，可用 `octopus --help` 或 `octopus <command> --help` 查看完整参数。`octopus project list` / `octopus project delete <id> --yes` 用于列出和删除项目状态（不删源码目录）。
+先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）并初始化工作流目录。同一状态库可有多个项目，每个项目下可有多个需求。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
 
 ## 核心命令
 
 | 命令 | 用途 |
 | --- | --- |
-| `octopus status` | 查看项目与阶段摘要 |
-| `octopus project list` / `octopus project delete` | 列出或删除项目状态 |
+| `octopus project create/list/update/delete` | 管理项目容器 |
+| `octopus project bind-tb` / `tb-statuses` | 绑定 Teambition 项目、列出卡片状态 |
+| `octopus requirement init/list/delete` | 管理需求（工作流实例） |
+| `octopus requirement bind-task` / `tb-status` / `tb-update` | 绑定任务、拉取/更新 Teambition 状态 |
+| `octopus init` | `requirement init` 的别名（需 `--project`） |
+| `octopus status` | 查看需求与阶段摘要 |
 | `octopus phase/task/checklist/heinrich` | 管理阶段、任务、清单与风险记录 |
 | `octopus node create/list/show/run/complete` | 定义、查看和执行工作流节点 |
 | `octopus node cancel/retry/logs` | 管理节点运行及日志 |
@@ -45,12 +65,12 @@ node packages/cli/dist/index.js node list
 
 ## 工作流与数据
 
-- `packages/core/src/spec.ts`：内置六阶段工作流规格，也是缺少项目定义时的回退来源。
-- `workflow.yaml`：项目级、可版本化的 DAG 定义；初始化不会覆盖已有文件。
+- `packages/core/src/spec.ts`：内置工作流规格，也是缺少定义时的回退来源。
+- `workflow.yaml`：需求级、可版本化的 DAG 定义；初始化不会覆盖已有文件。
 - `workflow/nodes/<nodeKey>/`：节点独立工作目录；`workflow/shared/`：节点共享目录。
-- `.octo/state.sqlite`：CLI 和 Web 默认使用的项目状态、运行记录与事件数据库。
-- `.octo/config.json`：可选的本地配置。
-- `workflow.overlay.yaml`：可选的项目级节点叠加（增/禁/改），不必复制整份 DAG。
+- `.octo/state.sqlite`：项目、需求状态、运行记录与事件数据库（旧库会自动迁移为「项目 ⊃ 需求」）。
+- `.octo/config.json`：可选的本地配置（含 Teambition 凭据）。
+- `workflow.overlay.yaml`：可选的节点叠加（增/禁/改），不必复制整份 DAG。
 - 自定义节点 `key` 必须是英文 kebab-case，`name` / `description` 也必须使用英文；内部运行态 ID 由 `workflow.yaml` 的 `nodeIdMapping` 维护。
 
 ## 项目定制
@@ -81,6 +101,12 @@ add:
 
 可用环境变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`。
 
+Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
+
+- `OCTOPUS_TB_APP_ID` / `OCTOPUS_TB_APP_SECRET` / `OCTOPUS_TB_ORG_ID`
+- `OCTOPUS_TB_OPERATOR_ID`（更新任务状态时的默认操作人）
+- 可选：`OCTOPUS_TB_GATEWAY`、`OCTOPUS_TB_REF_STRATEGY`
+
 ## 图形界面
 
 启动本地 Web 界面：
@@ -89,7 +115,7 @@ add:
 pnpm web
 ```
 
-访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。
+访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心 → 项目（需求列表 / Teambition 项目绑定）→ 需求工作区（泳道图与任务绑定）。
 
 启动 macOS Electron 客户端：
 

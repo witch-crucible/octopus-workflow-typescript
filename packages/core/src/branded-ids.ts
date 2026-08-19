@@ -24,6 +24,7 @@ export type RiskEventId = BrandedId<"RiskEventId">
 // ── 遗留 ID 类型（被其他模块引用） ──────────────────────────
 
 export type ProjectId = BrandedId<"ProjectId">
+export type RequirementId = BrandedId<"RequirementId">
 export type ChecklistItemId = BrandedId<"ChecklistItemId">
 export type ObservationId = BrandedId<"ObservationId">
 export type AgentCallId = BrandedId<"AgentCallId">
@@ -70,6 +71,10 @@ export function RiskEventId(id: string): RiskEventId {
 
 export function ProjectId(id: string): ProjectId {
   return id as ProjectId
+}
+
+export function RequirementId(id: string): RequirementId {
+  return id as RequirementId
 }
 
 export function ChecklistItemId(id: string): ChecklistItemId {

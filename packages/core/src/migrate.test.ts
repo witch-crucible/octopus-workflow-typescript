@@ -12,13 +12,13 @@ function legacyState(): unknown {
     description: "",
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
-    currentPhase: Phase.REQUIREMENTS_ANALYSIS,
-    phaseStatus: { [Phase.REQUIREMENTS_ANALYSIS]: PhaseLock.ACTIVE },
+    currentPhase: Phase.INTENTION,
+    phaseStatus: { [Phase.INTENTION]: PhaseLock.ACTIVE },
     tasks: [
       {
         id: "task_1",
         stageId: "10.1",
-        phase: Phase.REQUIREMENTS_ANALYSIS,
+        phase: Phase.INTENTION,
         title: "需求分析",
         description: "d",
         responsibleRole: Role.PM,
@@ -31,7 +31,7 @@ function legacyState(): unknown {
     stages: {
       "10.1": {
         stageId: "10.1",
-        phase: Phase.REQUIREMENTS_ANALYSIS,
+        phase: Phase.INTENTION,
         status: StageStatus.PENDING,
         dependsOn: [],
         responsibleRole: Role.PM,
@@ -40,7 +40,7 @@ function legacyState(): unknown {
       },
       "10.2": {
         stageId: "10.2",
-        phase: Phase.REQUIREMENTS_ANALYSIS,
+        phase: Phase.INTENTION,
         status: StageStatus.PENDING,
         dependsOn: ["10.1"],
         responsibleRole: Role.BA,
@@ -79,10 +79,18 @@ describe("migrateWorkflowState", () => {
     expect(migrated["stages"]).toBeUndefined()
   })
 
-  it("已是 v2（含 steps）则原样返回", () => {
+  it("已是当前版本（含 steps）则保留 steps", () => {
     const v2 = { schemaVersion: CURRENT_SCHEMA_VERSION, steps: [] }
     const migrated = migrateWorkflowState(v2)
     expect(migrated.schemaVersion).toBe(CURRENT_SCHEMA_VERSION)
     expect(migrated.steps).toEqual([])
+  })
+
+  it("v4 旧项目字段下沉为需求，并接受所属 projectId", () => {
+    const migrated = migrateWorkflowState(legacyState(), { projectId: "proj_parent" as import("./branded-ids.js").ProjectId })
+    expect(migrated.requirementId).toBe("proj_legacy")
+    expect(migrated.requirementName).toBe("旧项目")
+    expect(migrated.projectId).toBe("proj_parent")
+    expect((migrated as unknown as Record<string, unknown>)["projectName"]).toBeUndefined()
   })
 })

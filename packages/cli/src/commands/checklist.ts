@@ -2,15 +2,16 @@
  * `octopus checklist` —— 清单管理命令。
  *
  * 子命令:
- *   show [phase] [projectId]     — 显示清单
- *   check <itemId> [projectId]   — 核验清单项
- *   uncheck <itemId> [projectId] — 取消核验
- *   add <cat> <desc> [projectId] — 添加清单项
- *   remove <itemId> [projectId]  — 删除清单项
+ *   show [phase] [requirementId]     — 显示清单
+ *   check <itemId> [requirementId]   — 核验清单项
+ *   uncheck <itemId> [requirementId] — 取消核验
+ *   add <cat> <desc> [requirementId] — 添加清单项
+ *   remove <itemId> [requirementId]  — 删除清单项
  */
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 import { Phase } from "@octopus/core/phase.js"
 import { Role } from "@octopus/core/role.js"
 import { ChecklistItemStatus } from "@octopus/core/checklist.js"
@@ -25,11 +26,11 @@ export function buildChecklistCommands(program: Command, engine: WorkflowEngine)
     .command("show")
     .description("显示清单")
     .argument("[phase]", "阶段名称（默认为当前阶段）")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((phaseName?: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((phaseName?: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.getState(pid)
@@ -82,12 +83,12 @@ export function buildChecklistCommands(program: Command, engine: WorkflowEngine)
     .command("check")
     .description("核验清单项")
     .argument("<itemId>", "清单项 ID")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--as-role <role>", "以指定角色执行")
     .option("--json", "以 JSON 格式输出")
-    .action((itemId: string, projectId?: string, options?: { asRole?: string; json?: boolean }) => {
+    .action((itemId: string, requirementId?: string, options?: { asRole?: string; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.getState(pid)
@@ -100,7 +101,7 @@ export function buildChecklistCommands(program: Command, engine: WorkflowEngine)
 
             if (options?.json) {
               console.log(JSON.stringify({
-                projectId: pid,
+                requirementId: pid,
                 itemId,
                 status: "VERIFIED",
               }, null, 2))
@@ -127,11 +128,11 @@ export function buildChecklistCommands(program: Command, engine: WorkflowEngine)
     .argument("<category>", "分类")
     .argument("<description>", "描述")
     .argument("[phase]", "阶段名称（默认为当前阶段）")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((category: string, description: string, phaseName?: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((category: string, description: string, phaseName?: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.getState(pid)
@@ -144,7 +145,7 @@ export function buildChecklistCommands(program: Command, engine: WorkflowEngine)
 
         if (options?.json) {
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             phase,
             itemId: item.id,
             category,
@@ -166,11 +167,11 @@ export function buildChecklistCommands(program: Command, engine: WorkflowEngine)
     .command("remove")
     .description("删除清单项")
     .argument("<itemId>", "清单项 ID")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((itemId: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((itemId: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.getState(pid)
@@ -181,7 +182,7 @@ export function buildChecklistCommands(program: Command, engine: WorkflowEngine)
 
             if (options?.json) {
               console.log(JSON.stringify({
-                projectId: pid,
+                requirementId: pid,
                 itemId,
                 removed: true,
               }, null, 2))
@@ -202,13 +203,3 @@ export function buildChecklistCommands(program: Command, engine: WorkflowEngine)
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine["store"].listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    process.exit(1)
-    return null
-  }
-  return projects[0] ?? null
-}

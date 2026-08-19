@@ -57,6 +57,72 @@ async function invoke(url: string, method: string, ...args: unknown[]): Promise<
   })
 }
 
+function extractBalancedBlock(source: string, openBrace: number): string {
+  if (source[openBrace] !== "{") throw new Error(`偏移 ${openBrace} 不是 '{'`)
+  let depth = 0
+  for (let index = openBrace; index < source.length; index++) {
+    const char = source[index]
+    if (char === "{") depth++
+    else if (char === "}") {
+      depth--
+      if (depth === 0) return source.slice(openBrace, index + 1)
+    }
+  }
+  throw new Error(`未能从偏移 ${openBrace} 截取成对花括号`)
+}
+
+function extractFunction(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`)
+  if (start < 0) throw new Error(`未找到函数 ${name}`)
+  // 跳过参数列表（可能含 options = {}），再取函数体，避免默认参数花括号截断。
+  let depth = 0
+  let bodyOpen = -1
+  for (let index = start + `function ${name}`.length; index < source.length; index++) {
+    const char = source[index]
+    if (char === "(") depth++
+    else if (char === ")") {
+      depth--
+      if (depth === 0) {
+        bodyOpen = source.indexOf("{", index + 1)
+        break
+      }
+    }
+  }
+  if (bodyOpen < 0) throw new Error(`未找到函数 ${name} 的函数体`)
+  return source.slice(start, bodyOpen) + extractBalancedBlock(source, bodyOpen)
+}
+
+function extractConstObject(source: string, name: string): string {
+  const start = source.indexOf(`const ${name} = {`)
+  if (start < 0) throw new Error(`未找到常量 ${name}`)
+  const openBrace = source.indexOf("{", start)
+  return source.slice(start, openBrace) + extractBalancedBlock(source, openBrace)
+}
+
+type HubCardBuild = {
+  readonly kind: "empty" | "nomatch" | "cards"
+  readonly filtered: Array<{ projectId: string; name: string }>
+  readonly html: string
+}
+
+function loadBuildHubCardsMarkup(source: string): (
+  items: unknown[],
+  options?: { filter?: string; lastCreatedId?: string },
+) => HubCardBuild {
+  const script = [
+    extractConstObject(source, "PHASE_LABELS"),
+    extractFunction(source, "phaseLabel"),
+    extractFunction(source, "escapeHtml"),
+    extractFunction(source, "formatUpdatedAt"),
+    extractFunction(source, "buildHubCardsMarkup"),
+    "buildHubCardsMarkup",
+  ].join("\n")
+  return runInNewContext(script, {}) as (
+    items: unknown[],
+    options?: { filter?: string; lastCreatedId?: string },
+  ) => HubCardBuild
+}
+
 async function rawInvoke(
   url: string,
   headers: Readonly<Record<string, string>>,
@@ -101,7 +167,7 @@ describe("Octopus Web", () => {
     }
   })
 
-  it("应提供真实项目状态并允许同一状态库创建多个项目", async () => {
+  it("应提供真实项目/需求状态并允许同一状态库创建多个项目", async () => {
     const root = mkdtempSync(join(tmpdir(), "octopus-web-"))
     temporaryDirectories.push(root)
     const server = await createOctopusWebServer({
@@ -114,48 +180,156 @@ describe("Octopus Web", () => {
 
     try {
       const page = await fetch(url)
-      expect(await page.text()).toContain("Octopus Workflow")
+      const html = await page.text()
+      expect(html).toContain("Octopus Workflow")
+      expect(html).toContain("rel=\"icon\"")
+      expect(html).toContain("href=\"app-icon.png\"")
+      expect(html).toContain("src=\"logo.png\"")
+      expect(html).toContain("src=\"mascot.jpg\"")
+      expect(html).toContain("class=\"hub-hero\"")
+      expect(html).toContain("一只章鱼，编排整条软件交付流水线")
+      expect(html).toContain("class=\"brand-name\"")
+      expect(html).not.toContain("🐙</div>")
+      expect(html).toContain("id=\"hubGanttHost\"")
+      expect(html).toContain("id=\"hubCards\"")
+      expect(html).toContain("id=\"projectView\"")
+      expect(html).toContain("id=\"requirementCards\"")
+      expect(html).toContain("id=\"requirementTbBar\"")
+      expect(html).toContain("class=\"hub-cards\"")
+      expect(html).toContain(".hub-card {")
+      expect(html).toContain("--el-border-radius-card")
+      expect(html).toContain("点击泳道图中的节点")
+      expect(html).toContain("id=\"toggleSidebar\"")
+      expect(html).toContain("id=\"toggleInspector\"")
+      expect(html).toContain("拖拽空白处平移")
+      expect(html).toContain("Ctrl/⌘ + 滚轮缩放")
+      expect(html).toContain(".node .name-en")
+      expect(html).not.toContain("id=\"workspaceTabs\"")
+      expect(html).not.toContain("id=\"ganttPane\"")
       expect(page.headers.get("content-security-policy")).toBe("frame-ancestors 'none'")
+
+      const ganttScript = await fetch(new URL("/gantt.js", url))
+      expect(ganttScript.headers.get("content-type")).toContain("javascript")
+      expect(await ganttScript.text()).toContain("function unmount(")
+
+      const appIcon = await fetch(new URL("/app-icon.png", url))
+      expect(appIcon.ok).toBe(true)
+      expect(appIcon.headers.get("content-type")).toContain("image/png")
+      expect(Buffer.byteLength(await appIcon.arrayBuffer())).toBeGreaterThan(1000)
+
+      const logo = await fetch(new URL("/logo.png", url))
+      expect(logo.ok).toBe(true)
+      expect(logo.headers.get("content-type")).toContain("image/png")
+      expect(Buffer.byteLength(await logo.arrayBuffer())).toBeGreaterThan(1000)
+
+      const mascot = await fetch(new URL("/mascot.jpg", url))
+      expect(mascot.ok).toBe(true)
+      expect(mascot.headers.get("content-type")).toContain("image/jpeg")
+      expect(Buffer.byteLength(await mascot.arrayBuffer())).toBeGreaterThan(1000)
+
+      const renderer = await (await fetch(new URL("/renderer.js", url))).text()
+      expect(renderer).toContain("buildHubCardsMarkup")
+      expect(renderer).toContain("buildRequirementCardsMarkup")
+      expect(renderer).toContain("toggleHubSchedule")
+      expect(renderer).toContain("toggleWorkspacePanel")
+      expect(renderer).toContain("setupGraphPan")
+      expect(renderer).toContain("setupGraphWheelZoom")
+      expect(renderer).toContain("jumpToNodeWorkspace")
+      expect(renderer).toContain("resolveNodeWorkspace")
+      expect(renderer).toContain("bindProjectTeambition")
+      expect(renderer).toContain("bindRequirementTask")
+      expect(renderer).toContain("goToRequirement")
+      expect(renderer).not.toContain("workspaceMode")
+
+      const browserApi = await (await fetch(new URL("/browser-api.js", url))).text()
+      expect(browserApi).toContain("resolveNodeWorkspace")
+      expect(browserApi).toContain("createProject")
+      expect(browserApi).toContain("initRequirement")
+      expect(browserApi).toContain("listRequirementSummaries")
       expect(page.headers.get("x-frame-options")).toBe("DENY")
       expect(await (await invoke(url, "canInit")).json()).toEqual({ result: true })
 
-      const initialized = await invoke(url, "init", "Web Test Project", undefined, join(root, "project"))
+      const createdProject = await invoke(url, "createProject", "Web Test Project", "desc")
+      expect(createdProject.status).toBe(200)
+      const createdProjectBody = await createdProject.json() as { result: { projectId: string; name: string } }
+      expect(createdProjectBody.result.name).toBe("Web Test Project")
+
+      const initialized = await invoke(
+        url,
+        "initRequirement",
+        createdProjectBody.result.projectId,
+        "Web Test Requirement",
+        undefined,
+        join(root, "project"),
+      )
       expect(initialized.status).toBe(200)
-      const initializedBody = await initialized.json() as { result: { projectId: string } }
+      const initializedBody = await initialized.json() as {
+        result: { projectId: string; requirementId: string; requirementName: string }
+      }
       expect(readFileSync(join(root, "project", "workflow.yaml"), "utf-8")).toContain("name:")
+      expect(initializedBody.result.requirementName).toBe("Web Test Requirement")
 
       expect(await (await invoke(url, "listProjects")).json()).toEqual({
-        result: [initializedBody.result.projectId],
+        result: [createdProjectBody.result.projectId],
       })
-      const state = await invoke(url, "state", initializedBody.result.projectId)
+      expect(await (await invoke(url, "listRequirements", createdProjectBody.result.projectId)).json()).toEqual({
+        result: [initializedBody.result.requirementId],
+      })
+      const state = await invoke(url, "getState", initializedBody.result.requirementId)
       expect(await state.json()).toMatchObject({
-        result: { projectName: "Web Test Project", projectRoot: join(root, "project") },
+        result: {
+          requirementName: "Web Test Requirement",
+          projectId: createdProjectBody.result.projectId,
+          projectRoot: join(root, "project"),
+        },
       })
 
-      const repeated = await invoke(url, "init", "Repeated Project", undefined, join(root, "project-two"))
+      const secondProject = await invoke(url, "createProject", "Repeated Project")
+      expect(secondProject.status).toBe(200)
+      const secondProjectBody = await secondProject.json() as { result: { projectId: string } }
+      const repeated = await invoke(
+        url,
+        "initRequirement",
+        secondProjectBody.result.projectId,
+        "Repeated Requirement",
+        undefined,
+        join(root, "project-two"),
+      )
       expect(repeated.status).toBe(200)
-      const repeatedBody = await repeated.json() as { result: { projectId: string } }
+      const repeatedBody = await repeated.json() as { result: { requirementId: string } }
 
       const summaries = await (await invoke(url, "listProjectSummaries")).json() as {
-        result: Array<{ projectId: string; projectName: string; completedTasks: number; totalTasks: number }>
+        result: Array<{ projectId: string; name: string; requirementCount: number }>
       }
       expect(summaries.result.map((item) => item.projectId)).toEqual(
-        expect.arrayContaining([initializedBody.result.projectId, repeatedBody.result.projectId]),
+        expect.arrayContaining([createdProjectBody.result.projectId, secondProjectBody.result.projectId]),
       )
-      expect(summaries.result[0]?.totalTasks).toBeGreaterThan(0)
+      expect(summaries.result.find((item) => item.projectId === createdProjectBody.result.projectId)?.requirementCount)
+        .toBe(1)
 
-      const renamed = await invoke(url, "updateProject", initializedBody.result.projectId, { name: "Renamed Web Project" })
+      const renamed = await invoke(url, "updateProjectMeta", createdProjectBody.result.projectId, {
+        name: "Renamed Web Project",
+      })
       expect(renamed.status).toBe(200)
       expect(await renamed.json()).toMatchObject({
-        result: { projectId: initializedBody.result.projectId, projectName: "Renamed Web Project" },
+        result: { projectId: createdProjectBody.result.projectId, name: "Renamed Web Project" },
       })
 
-      const stateBody = await (await invoke(url, "state", initializedBody.result.projectId)).json() as {
+      const stateBody = await (await invoke(url, "getState", initializedBody.result.requirementId)).json() as {
         result: { steps: Array<{ id: string }> }
       }
       const nodeId = stateBody.result.steps[0]?.id
       expect(nodeId).toBeTruthy()
-      const scheduled = await invoke(url, "updateNodeSchedule", initializedBody.result.projectId, nodeId, {
+      const workspace = await invoke(url, "resolveNodeWorkspace", initializedBody.result.requirementId, nodeId)
+      expect(workspace.status).toBe(200)
+      expect(await workspace.json()).toMatchObject({
+        result: {
+          nodeKey: expect.stringMatching(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+          path: expect.stringContaining(`${join(root, "project")}/workflow/nodes/`),
+          exists: true,
+        },
+      })
+      const scheduled = await invoke(url, "updateNodeSchedule", initializedBody.result.requirementId, nodeId, {
         plannedStart: "2026-04-01",
         plannedEnd: "2026-04-03",
       })
@@ -164,11 +338,15 @@ describe("Octopus Web", () => {
         result: { nodeId, plannedStart: "2026-04-01", plannedEnd: "2026-04-03" },
       })
 
-      const deleted = await invoke(url, "deleteProject", repeatedBody.result.projectId)
+      const deleted = await invoke(url, "deleteProject", secondProjectBody.result.projectId)
       expect(deleted.status).toBe(200)
       expect(await (await invoke(url, "listProjects")).json()).toEqual({
-        result: [initializedBody.result.projectId],
+        result: [createdProjectBody.result.projectId],
       })
+      expect(await (await invoke(url, "listRequirements")).json()).toEqual({
+        result: [initializedBody.result.requirementId],
+      })
+      expect(repeatedBody.result.requirementId).toBeTruthy()
     } finally {
       await server.close()
     }
@@ -195,7 +373,15 @@ describe("Octopus Web", () => {
     const restartedUrl = await restarted.listen()
     try {
       expect(await (await invoke(restartedUrl, "canInit")).json()).toEqual({ result: true })
-      expect((await invoke(restartedUrl, "init", "Restarted Project")).status).toBe(200)
+      const project = await invoke(restartedUrl, "createProject", "Restarted Project")
+      expect(project.status).toBe(200)
+      const projectBody = await project.json() as { result: { projectId: string } }
+      expect((await invoke(
+        restartedUrl,
+        "initRequirement",
+        projectBody.result.projectId,
+        "Restarted Requirement",
+      )).status).toBe(200)
     } finally {
       await restarted.close()
     }
@@ -263,6 +449,118 @@ describe("Octopus Web", () => {
     expect(await stopExistingOctopusWeb(host, octopusPort)).toBe(false)
   })
 
+  it("项目管理中心应按卡片渲染每个项目摘要", async () => {
+    const root = mkdtempSync(join(tmpdir(), "octopus-web-cards-"))
+    temporaryDirectories.push(root)
+    const server = await createOctopusWebServer({
+      port: 0,
+      storeDir: join(root, "store"),
+      projectRoot: join(root, "project"),
+      rendererDir: join(process.cwd(), "packages/desktop/src/renderer"),
+    })
+    const url = await server.listen()
+
+    try {
+      const first = await invoke(url, "createProject", "卡片项目甲", "甲描述")
+      expect(first.status).toBe(200)
+      const firstBody = await first.json() as { result: { projectId: string } }
+      const second = await invoke(url, "createProject", "卡片项目乙", "乙描述")
+      expect(second.status).toBe(200)
+      const secondBody = await second.json() as { result: { projectId: string } }
+
+      const summaries = await (await invoke(url, "listProjectSummaries")).json() as {
+        result: Array<{
+          projectId: string
+          name: string
+          description?: string
+          requirementCount: number
+          teambitionProjectId?: string
+          updatedAt?: string
+        }>
+      }
+      expect(summaries.result.length).toBeGreaterThanOrEqual(2)
+      const created = summaries.result.filter((item) => (
+        item.projectId === firstBody.result.projectId
+        || item.projectId === secondBody.result.projectId
+      ))
+      expect(created).toHaveLength(2)
+
+      const pageHtml = await (await fetch(url)).text()
+      expect(pageHtml).toContain("id=\"hubCards\"")
+      expect(pageHtml).toContain(".hub-card {")
+      expect(pageHtml).toMatch(/\.hub-card\s*\{[^}]*border:\s*1px solid/)
+      expect(pageHtml).toMatch(/\.hub-cards\s*\{[^}]*display:\s*grid/)
+
+      const rendererSource = await (await fetch(new URL("/renderer.js", url))).text()
+      expect(rendererSource).toContain("function buildHubCardsMarkup(")
+      const buildHubCardsMarkup = loadBuildHubCardsMarkup(rendererSource)
+
+      const empty = buildHubCardsMarkup([])
+      expect(empty).toMatchObject({ kind: "empty", html: "" })
+
+      const nomatch = buildHubCardsMarkup(created, { filter: "绝不可能匹配的筛选词-xyz" })
+      expect(nomatch.kind).toBe("nomatch")
+      expect(nomatch.html).toContain("empty-state")
+      expect(nomatch.html).not.toContain("hub-card")
+
+      const built = buildHubCardsMarkup(created)
+      expect(built.kind).toBe("cards")
+      const cardMatches = built.html.match(/<article class="hub-card/g) || []
+      expect(cardMatches).toHaveLength(created.length)
+      for (const item of created) {
+        expect(built.html).toContain(`data-project-id="${item.projectId}"`)
+        expect(built.html).toContain(item.name)
+        expect(built.html).toContain(item.projectId)
+      }
+      expect(built.html).toContain("需求")
+      expect(built.html).toContain("未绑定 Teambition")
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("路由应区分项目页与需求工作区，并兼容旧 project hash", () => {
+    const source = readFileSync(join(process.cwd(), "packages/desktop/src/renderer/renderer.js"), "utf-8")
+    const start = source.indexOf("function routeFromHash()")
+    expect(start).toBeGreaterThanOrEqual(0)
+    let depth = 0
+    let end = -1
+    for (let index = start; index < source.length; index++) {
+      const char = source[index]
+      if (char === "{") depth++
+      else if (char === "}") {
+        depth--
+        if (depth === 0) {
+          end = index + 1
+          break
+        }
+      }
+    }
+    expect(end).toBeGreaterThan(start)
+    const run = (hash: string) => runInNewContext(
+      `${source.slice(start, end)}; routeFromHash()`,
+      { location: { hash }, encodeURIComponent, decodeURIComponent },
+    ) as {
+      view: string
+      projectId?: string
+      requirementId?: string
+      redirectCandidate?: boolean
+    }
+    expect(run("#hub")).toEqual({ view: "hub" })
+    expect(run("#project/demo/gantt")).toEqual({
+      view: "legacyProject",
+      projectId: "demo",
+      redirectCandidate: true,
+    })
+    expect(run("#project/demo/graph")).toEqual({
+      view: "legacyProject",
+      projectId: "demo",
+      redirectCandidate: true,
+    })
+    expect(run("#project/demo")).toEqual({ view: "project", projectId: "demo" })
+    expect(run("#requirement/req_1")).toEqual({ view: "workspace", requirementId: "req_1" })
+  })
+
   it("浏览器 transport 遇到非法 JSON 时应拒绝而不是悬挂", async () => {
     const input = {
       type: "",
@@ -275,7 +573,7 @@ describe("Octopus Web", () => {
       },
     }
     const windowObject: {
-      octopus?: { importTasks(projectId: string): Promise<unknown> }
+      octopus?: { importTasks(requirementId: string): Promise<unknown> }
     } = {}
     runInNewContext(
       readFileSync(join(process.cwd(), "packages/desktop/src/renderer/browser-api.js"), "utf-8"),
@@ -290,6 +588,6 @@ describe("Octopus Web", () => {
     )
 
     expect(windowObject.octopus).toBeDefined()
-    await expect(windowObject.octopus?.importTasks("project-test")).rejects.toThrow()
+    await expect(windowObject.octopus?.importTasks("requirement-test")).rejects.toThrow()
   })
 })

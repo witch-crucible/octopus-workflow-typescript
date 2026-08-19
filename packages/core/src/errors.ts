@@ -125,7 +125,7 @@ export class WorkflowError extends OctopusError {
  * @example
  *   switch (phase) {
  *     case Phase.DESIGN: return "designing"
- *     case Phase.DEVELOPMENT: return "developing"
+ *     case Phase.IMPLEMENTATION: return "developing"
  *     // ...
  *     default: return assertNever(phase)
  *   }

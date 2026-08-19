@@ -2,11 +2,12 @@
  * `octopus step` —— 步骤能力（capability）调度命令。
  *
  * 子命令:
- *   run <stageId> [projectId]  — 分发该步骤声明的 AI / 集成 / Heinrich 能力
+ *   run <stageId> [requirementId]  — 分发该步骤声明的 AI / 集成 / Heinrich 能力
  */
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 
 export function buildStepCommands(program: Command, engine: WorkflowEngine): void {
   const stepCmd = program
@@ -17,11 +18,11 @@ export function buildStepCommands(program: Command, engine: WorkflowEngine): voi
     .command("run")
     .description("分发步骤声明的 capabilities（AI / 集成 / Heinrich）")
     .argument("<stageId>", "步骤 ID（如 10.6）")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action(async (stageId: string, projectId?: string, options?: { json?: boolean }) => {
+    .action(async (stageId: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = await engine.runStepCapabilities(pid, stageId)
@@ -29,7 +30,7 @@ export function buildStepCommands(program: Command, engine: WorkflowEngine): voi
         const runs = step?.capabilityRuns ?? []
 
         if (options?.json) {
-          console.log(JSON.stringify({ projectId: pid, stageId, runs }, null, 2))
+          console.log(JSON.stringify({ requirementId: pid, stageId, runs }, null, 2))
           return
         }
 
@@ -51,13 +52,3 @@ export function buildStepCommands(program: Command, engine: WorkflowEngine): voi
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine["store"].listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    process.exit(1)
-    return null
-  }
-  return projects[0] ?? null
-}

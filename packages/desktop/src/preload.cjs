@@ -3,24 +3,52 @@ const { contextBridge, ipcRenderer } = require("electron")
 
 contextBridge.exposeInMainWorld("octopus", {
   canInit: () => ipcRenderer.invoke("octopus:canInit"),
+
+  // Project
   listProjects: () => ipcRenderer.invoke("octopus:listProjects"),
   listProjectSummaries: () => ipcRenderer.invoke("octopus:listProjectSummaries"),
-  init: (name, description, projectRoot) => ipcRenderer.invoke("octopus:init", name, description, projectRoot),
-  updateProject: (projectId, patch) => ipcRenderer.invoke("octopus:updateProject", projectId, patch),
-  updateNodeSchedule: (projectId, nodeId, schedule) => ipcRenderer.invoke("octopus:updateNodeSchedule", projectId, nodeId, schedule),
+  createProject: (name, description) => ipcRenderer.invoke("octopus:createProject", name, description),
+  getProject: (projectId) => ipcRenderer.invoke("octopus:getProject", projectId),
+  updateProjectMeta: (projectId, patch) => ipcRenderer.invoke("octopus:updateProjectMeta", projectId, patch),
   deleteProject: (projectId) => ipcRenderer.invoke("octopus:deleteProject", projectId),
-  status: (projectId) => ipcRenderer.invoke("octopus:status", projectId),
-  snapshot: (projectId) => ipcRenderer.invoke("octopus:snapshot", projectId),
-  state: (projectId) => ipcRenderer.invoke("octopus:state", projectId),
-  runNode: (projectId, nodeId, force) => ipcRenderer.invoke("octopus:runNode", projectId, nodeId, force),
-  runWorkflow: (projectId, force, maxParallel) => ipcRenderer.invoke("octopus:runWorkflow", projectId, force, maxParallel),
-  completeNode: (projectId, nodeId, force) => ipcRenderer.invoke("octopus:completeNode", projectId, nodeId, force),
-  cancelRun: (projectId, runId) => ipcRenderer.invoke("octopus:cancelRun", projectId, runId),
-  retryRun: (projectId, runId, force) => ipcRenderer.invoke("octopus:retryRun", projectId, runId, force),
-  runs: (projectId, nodeId) => ipcRenderer.invoke("octopus:runs", projectId, nodeId),
-  events: (projectId, sequence) => ipcRenderer.invoke("octopus:events", projectId, sequence),
+  bindProjectTeambition: (projectId, opts) => ipcRenderer.invoke("octopus:bindProjectTeambition", projectId, opts),
+  unbindProjectTeambition: (projectId) => ipcRenderer.invoke("octopus:unbindProjectTeambition", projectId),
+  listTeambitionCardStatuses: (projectId) => ipcRenderer.invoke("octopus:listTeambitionCardStatuses", projectId),
+
+  // Requirement
+  listRequirements: (projectId) => ipcRenderer.invoke("octopus:listRequirements", projectId),
+  listRequirementSummaries: (projectId) => ipcRenderer.invoke("octopus:listRequirementSummaries", projectId),
+  initRequirement: (projectId, name, description, projectRoot) =>
+    ipcRenderer.invoke("octopus:initRequirement", projectId, name, description, projectRoot),
+  updateRequirement: (requirementId, patch) => ipcRenderer.invoke("octopus:updateRequirement", requirementId, patch),
+  deleteRequirement: (requirementId) => ipcRenderer.invoke("octopus:deleteRequirement", requirementId),
+  getRequirementStatus: (requirementId) => ipcRenderer.invoke("octopus:getRequirementStatus", requirementId),
+  getState: (requirementId) => ipcRenderer.invoke("octopus:getState", requirementId),
+  getExecutionSnapshot: (requirementId) => ipcRenderer.invoke("octopus:getExecutionSnapshot", requirementId),
+  updateNodeSchedule: (requirementId, nodeId, schedule) =>
+    ipcRenderer.invoke("octopus:updateNodeSchedule", requirementId, nodeId, schedule),
+  runNode: (requirementId, nodeId, force) => ipcRenderer.invoke("octopus:runNode", requirementId, nodeId, force),
+  runWorkflow: (requirementId, force, maxParallel) =>
+    ipcRenderer.invoke("octopus:runWorkflow", requirementId, force, maxParallel),
+  completeNode: (requirementId, nodeId, force) =>
+    ipcRenderer.invoke("octopus:completeNode", requirementId, nodeId, force),
+  cancelRun: (requirementId, runId) => ipcRenderer.invoke("octopus:cancelRun", requirementId, runId),
+  retryRun: (requirementId, runId, force) => ipcRenderer.invoke("octopus:retryRun", requirementId, runId, force),
+  runs: (requirementId, nodeId) => ipcRenderer.invoke("octopus:runs", requirementId, nodeId),
+  events: (requirementId, sequence) => ipcRenderer.invoke("octopus:events", requirementId, sequence),
+  bindRequirementTask: (requirementId, opts) =>
+    ipcRenderer.invoke("octopus:bindRequirementTask", requirementId, opts),
+  unbindRequirementTask: (requirementId) => ipcRenderer.invoke("octopus:unbindRequirementTask", requirementId),
+  getRequirementTeambitionStatus: (requirementId) =>
+    ipcRenderer.invoke("octopus:getRequirementTeambitionStatus", requirementId),
+  updateRequirementTeambitionStatus: (requirementId, statusId, operatorId) =>
+    ipcRenderer.invoke("octopus:updateRequirementTeambitionStatus", requirementId, statusId, operatorId),
+
   health: () => ipcRenderer.invoke("octopus:health"),
-  openNodeDirectory: (projectId, nodeId) => ipcRenderer.invoke("octopus:openNodeDirectory", projectId, nodeId),
-  exportTasks: (projectId) => ipcRenderer.invoke("octopus:exportTasks", projectId),
-  importTasks: (projectId) => ipcRenderer.invoke("octopus:importTasks", projectId),
+  resolveNodeWorkspace: (requirementId, nodeId) =>
+    ipcRenderer.invoke("octopus:resolveNodeWorkspace", requirementId, nodeId),
+  openNodeDirectory: (requirementId, nodeId) =>
+    ipcRenderer.invoke("octopus:openNodeDirectory", requirementId, nodeId),
+  exportTasks: (requirementId) => ipcRenderer.invoke("octopus:exportTasks", requirementId),
+  importTasks: (requirementId) => ipcRenderer.invoke("octopus:importTasks", requirementId),
 })

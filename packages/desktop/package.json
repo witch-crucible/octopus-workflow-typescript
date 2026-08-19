@@ -26,6 +26,7 @@
   "build": {
     "appId": "com.octopus.workflow",
     "productName": "Octopus Workflow",
+    "icon": "build/icon.png",
     "directories": {
       "output": "release"
     },
@@ -35,7 +36,8 @@
     ],
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png"
     }
   }
 }

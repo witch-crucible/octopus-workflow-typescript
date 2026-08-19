@@ -3,13 +3,14 @@
  *
  * 子命令:
  *   list                         — 列出所有阶段状态
- *   advance [projectId]          — 前进到下一阶段
- *   rollback <phase> [projectId] — 回退到指定阶段
- *   show <phase> [projectId]     — 显示阶段详情
+ *   advance [requirementId]          — 前进到下一阶段
+ *   rollback <phase> [requirementId] — 回退到指定阶段
+ *   show <phase> [requirementId]     — 显示阶段详情
  */
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 import { Phase, PHASE_ORDER, PhaseLock } from "@octopus/core/phase.js"
 
 export function buildPhaseCommands(program: Command, engine: WorkflowEngine): void {
@@ -21,17 +22,19 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
   phaseCmd
     .command("list")
     .description("列出所有阶段状态")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId?: string, options?: { json?: boolean }) => {
+    .action((requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.getState(pid)
         if (options?.json) {
           console.log(JSON.stringify({
             projectId: state.projectId,
+            requirementId: state.requirementId,
+            requirementName: state.requirementName,
             currentPhase: state.currentPhase,
             phases: PHASE_ORDER.map((phase) => ({
               phase,
@@ -60,12 +63,12 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
   phaseCmd
     .command("advance")
     .description("前进到下一阶段")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--skip-ai-gates", "跳过 AI 门控检查")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId?: string, options?: { skipAiGates?: boolean; json?: boolean }) => {
+    .action((requirementId?: string, options?: { skipAiGates?: boolean; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.advancePhase(pid, options?.skipAiGates)
@@ -73,6 +76,8 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
         if (options?.json) {
           console.log(JSON.stringify({
             projectId: state.projectId,
+            requirementId: state.requirementId,
+            requirementName: state.requirementName,
             currentPhase: state.currentPhase,
             taskCount: state.steps.filter((t) => t.phase === state.currentPhase).length,
           }, null, 2))
@@ -92,11 +97,11 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .command("rollback")
     .description("回退到指定阶段")
     .argument("<phase>", "目标阶段名称")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((targetPhase: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((targetPhase: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const phase = Object.values(Phase).find((p) => p.toLowerCase() === targetPhase.toLowerCase())
@@ -112,6 +117,8 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
         if (options?.json) {
           console.log(JSON.stringify({
             projectId: state.projectId,
+            requirementId: state.requirementId,
+            requirementName: state.requirementName,
             currentPhase: state.currentPhase,
           }, null, 2))
           return
@@ -129,11 +136,11 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .command("show")
     .description("显示阶段详情")
     .argument("<phase>", "阶段名称")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((phaseName: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((phaseName: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const phase = Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase())
@@ -181,25 +188,18 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine["store"].listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    process.exit(1)
-    return null
-  }
-  return projects[0] ?? null
-}
 
 function PhaseLabel(phase: Phase): string {
   const labels: Record<Phase, string> = {
-    [Phase.REQUIREMENTS_ANALYSIS]: "需求分析",
+    [Phase.INTENTION]: "意向",
+    [Phase.RESEARCH]: "调研",
     [Phase.DESIGN]: "设计",
-    [Phase.DEVELOPMENT]: "开发",
+    [Phase.IMPLEMENTATION]: "实现",
     [Phase.TESTING]: "测试",
-    [Phase.DEPLOYMENT]: "部署",
+    [Phase.UAT]: "UAT",
+    [Phase.RELEASE]: "发布",
     [Phase.MAINTENANCE]: "维护",
+    [Phase.COMPLETED]: "完结",
   }
   return labels[phase] ?? phase
 }

@@ -12,7 +12,7 @@ window.OctopusGantt = (() => {
 
   const STATUS_BAR = {
     PENDING: "#c0c4cc",
-    IN_PROGRESS: "#409eff",
+    IN_PROGRESS: "#6d28d9",
     COMPLETED: "#67c23a",
     BLOCKED: "#f56c6c",
     SKIPPED: "#909399",
@@ -36,7 +36,19 @@ window.OctopusGantt = (() => {
 
   const els = {}
 
+  function unmount() {
+    dragging = null
+    lastModel = null
+    cachedInput = null
+    syncingScroll = false
+    if (root) root.innerHTML = ""
+    root = undefined
+    callbacks = {}
+    for (const key of Object.keys(els)) delete els[key]
+  }
+
   function mount(el, opts = {}) {
+    if (root) unmount()
     root = el
     callbacks = opts
     root.innerHTML = `
@@ -779,7 +791,7 @@ window.OctopusGantt = (() => {
   }
 
   function barColor(row) {
-    if (row.ready && row.status === "PENDING") return "#409eff"
+    if (row.ready && row.status === "PENDING") return "#6d28d9"
     return STATUS_BAR[row.status] || "#909399"
   }
 
@@ -863,6 +875,7 @@ window.OctopusGantt = (() => {
 
   return {
     mount,
+    unmount,
     render,
     isDragging,
     getUiState,

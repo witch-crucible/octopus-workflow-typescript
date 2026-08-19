@@ -6,18 +6,19 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Octopus Workflow · 项目管理中心</title>
+    <link rel="icon" href="app-icon.png" type="image/png" />
     <style>
       /* Element Plus–inspired tokens（黑白主题） */
       :root,
       [data-theme="light"] {
         color-scheme: light;
-        --el-color-primary: #409eff;
-        --el-color-primary-light-3: #79bbff;
-        --el-color-primary-light-5: #a0cfff;
-        --el-color-primary-light-7: #c6e2ff;
-        --el-color-primary-light-8: #d9ecff;
-        --el-color-primary-light-9: #ecf5ff;
-        --el-color-primary-dark-2: #337ecc;
+        --el-color-primary: #6d28d9;
+        --el-color-primary-light-3: #8b5cf6;
+        --el-color-primary-light-5: #a78bfa;
+        --el-color-primary-light-7: #c4b5fd;
+        --el-color-primary-light-8: #ddd6fe;
+        --el-color-primary-light-9: #f5f3ff;
+        --el-color-primary-dark-2: #5b21b6;
         --el-color-success: #67c23a;
         --el-color-success-light-9: #f0f9eb;
         --el-color-warning: #e6a23c;
@@ -26,8 +27,8 @@
         --el-color-danger-light-9: #fef0f0;
         --el-color-info: #909399;
         --el-color-info-light-9: #f4f4f5;
-        --el-color-purple: #9b59b6;
-        --el-color-purple-light-9: #f5eef8;
+        --el-color-purple: #7c3aed;
+        --el-color-purple-light-9: #f5f3ff;
 
         --el-bg-color: #ffffff;
         --el-bg-color-page: #f2f3f5;
@@ -83,7 +84,7 @@
         --shadow-sm: var(--el-box-shadow-lighter);
         --radius: var(--el-border-radius-card);
         --radius-sm: var(--el-border-radius-base);
-        --header-h: 56px;
+        --header-h: 68px;
         --font: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
         --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
@@ -91,26 +92,26 @@
         --graph-surface-inner: #fafbfc;
         --lane-a: #fafbfc;
         --lane-b: #f5f7fa;
-        --lane-current: #ecf5ff;
+        --lane-current: #f5f3ff;
         --header-fill: #f5f7fa;
-        --header-current: #d9ecff;
+        --header-current: #ddd6fe;
         --node-fill: #ffffff;
         --node-stroke: #dcdfe6;
         --node-id: #909399;
         --node-meta: #606266;
         --edge: #c0c4cc;
-        --current-glow: rgba(64, 158, 255, 0.45);
+        --current-glow: rgba(109, 40, 217, 0.45);
       }
 
       [data-theme="dark"] {
         color-scheme: dark;
-        --el-color-primary: #409eff;
-        --el-color-primary-light-3: #3375b9;
-        --el-color-primary-light-5: #2a598a;
-        --el-color-primary-light-7: #213d5b;
-        --el-color-primary-light-8: #1d3043;
-        --el-color-primary-light-9: #18222c;
-        --el-color-primary-dark-2: #66b1ff;
+        --el-color-primary: #a78bfa;
+        --el-color-primary-light-3: #8b5cf6;
+        --el-color-primary-light-5: #6d28d9;
+        --el-color-primary-light-7: #4c1d95;
+        --el-color-primary-light-8: #3b0764;
+        --el-color-primary-light-9: #2e1065;
+        --el-color-primary-dark-2: #c4b5fd;
         --el-color-success: #67c23a;
         --el-color-success-light-9: #1c2518;
         --el-color-warning: #e6a23c;
@@ -119,8 +120,8 @@
         --el-color-danger-light-9: #2b1d1d;
         --el-color-info: #909399;
         --el-color-info-light-9: #202121;
-        --el-color-purple: #b37feb;
-        --el-color-purple-light-9: #241b2e;
+        --el-color-purple: #c4b5fd;
+        --el-color-purple-light-9: #2e1065;
 
         --el-bg-color: #141414;
         --el-bg-color-page: #0a0a0a;
@@ -149,15 +150,15 @@
         --graph-surface-inner: #141414;
         --lane-a: rgba(255, 255, 255, 0.02);
         --lane-b: rgba(255, 255, 255, 0.04);
-        --lane-current: rgba(64, 158, 255, 0.12);
+        --lane-current: rgba(167, 139, 250, 0.16);
         --header-fill: #1d1e1f;
-        --header-current: #1d3043;
+        --header-current: #2e1065;
         --node-fill: #262727;
         --node-stroke: #4c4d4f;
         --node-id: #a3a6ad;
         --node-meta: #cfd3dc;
         --edge: #606266;
-        --current-glow: rgba(64, 158, 255, 0.55);
+        --current-glow: rgba(167, 139, 250, 0.55);
       }
 
       * { box-sizing: border-box; }
@@ -179,12 +180,22 @@
         justify-content: space-between;
         gap: 16px;
         padding: 0 20px;
-        border-bottom: 1px solid var(--el-border-color-light);
-        background: var(--el-bg-color);
+        border-bottom: 1px solid var(--el-color-primary-light-7);
+        background:
+          radial-gradient(circle at 18px 50%, color-mix(in srgb, var(--el-color-primary) 22%, transparent) 0 3px, transparent 4px),
+          radial-gradient(circle at 34px 50%, color-mix(in srgb, var(--el-color-primary) 16%, transparent) 0 2px, transparent 3px),
+          linear-gradient(180deg, var(--el-color-primary-light-9) 0%, var(--el-bg-color) 72%);
         position: sticky;
         top: 0;
         z-index: 20;
         box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+      }
+      [data-theme="dark"] header {
+        border-bottom-color: var(--el-color-primary-light-7);
+        background:
+          radial-gradient(circle at 18px 50%, color-mix(in srgb, var(--el-color-primary) 35%, transparent) 0 3px, transparent 4px),
+          radial-gradient(circle at 34px 50%, color-mix(in srgb, var(--el-color-primary) 22%, transparent) 0 2px, transparent 3px),
+          linear-gradient(180deg, var(--el-color-primary-light-8) 0%, var(--el-bg-color) 78%);
       }
 
       header .brand {
@@ -195,29 +206,34 @@
       }
 
       .logo-mark {
-        width: 36px;
-        height: 36px;
-        border-radius: var(--el-border-radius-base);
-        display: grid;
-        place-items: center;
-        font-size: 18px;
-        background: var(--el-color-primary-light-9);
-        border: 1px solid var(--el-color-primary-light-7);
-        color: var(--el-color-primary);
+        width: 56px;
+        height: 56px;
+        border-radius: 12px;
+        overflow: hidden;
+        background: #f5f3ff;
         flex-shrink: 0;
+      }
+      .logo-mark img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
       }
 
       .brand-copy { min-width: 0; }
       header h1 {
         margin: 0;
-        font-size: 16px;
-        font-weight: 600;
+        font-size: 18px;
+        font-weight: 700;
         letter-spacing: 0;
         display: flex;
         align-items: center;
         gap: 8px;
         flex-wrap: wrap;
         color: var(--el-text-color-primary);
+      }
+      header h1 .brand-name {
+        color: var(--el-color-primary);
       }
       header .subtitle {
         color: var(--el-text-color-secondary);
@@ -321,12 +337,68 @@
         border-right: 0;
         border-left: 1px solid var(--el-border-color-lighter);
       }
+      #workspaceView.sidebar-collapsed {
+        grid-template-columns: 0 minmax(0, 1fr) minmax(300px, 340px);
+      }
+      #workspaceView.inspector-collapsed {
+        grid-template-columns: minmax(250px, 280px) minmax(0, 1fr) 0;
+      }
+      #workspaceView.sidebar-collapsed.inspector-collapsed {
+        grid-template-columns: 0 minmax(0, 1fr) 0;
+      }
+      #workspaceView.sidebar-collapsed .sidebar,
+      #workspaceView.inspector-collapsed .inspector {
+        overflow: hidden;
+        padding: 0;
+        border: 0;
+        opacity: 0;
+        pointer-events: none;
+      }
       .content {
         display: flex;
         flex-direction: column;
         min-width: 0;
         overflow: hidden;
         background: var(--el-bg-color-page);
+        position: relative;
+      }
+      .panel-rail {
+        position: absolute;
+        top: 50%;
+        z-index: 6;
+        transform: translateY(-50%);
+        width: 20px;
+        height: 56px;
+        min-width: 20px;
+        padding: 0;
+        border-radius: 0;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1;
+        box-shadow: var(--el-box-shadow-lighter);
+        background: var(--el-bg-color);
+        color: var(--el-text-color-regular);
+        border: 1px solid var(--el-border-color);
+      }
+      .panel-rail:hover {
+        background: var(--el-color-primary-light-9);
+        border-color: var(--el-color-primary-light-5);
+        color: var(--el-color-primary);
+      }
+      .panel-rail.left {
+        left: 0;
+        border-left: 0;
+        border-radius: 0 8px 8px 0;
+      }
+      .panel-rail.right {
+        right: 0;
+        border-right: 0;
+        border-radius: 8px 0 0 8px;
+      }
+      .panel-rail[aria-pressed="true"] {
+        background: var(--el-color-primary-light-9);
+        border-color: var(--el-color-primary-light-5);
+        color: var(--el-color-primary);
       }
       .content:fullscreen,
       .content:-webkit-full-screen,
@@ -354,7 +426,8 @@
       }
       body.graph-expanded .sidebar,
       body.graph-expanded .inspector,
-      body.graph-expanded #hubView {
+      body.graph-expanded #hubView,
+      body.graph-expanded #projectView {
         visibility: hidden;
       }
 
@@ -707,6 +780,15 @@
         padding: 12px 16px 16px;
         background: var(--el-bg-color-page);
         position: relative;
+        cursor: grab;
+        overscroll-behavior: contain;
+      }
+      .graph-wrap.is-panning {
+        cursor: grabbing;
+        user-select: none;
+      }
+      .graph-wrap.is-panning * {
+        cursor: grabbing !important;
       }
       .graph-scaler {
         transform-origin: 0 0;
@@ -769,8 +851,9 @@
       }
       .node text { pointer-events: none; fill: var(--el-text-color-primary); }
       .node .id { fill: var(--node-id); font-size: 11px; }
-      .node .name-zh { fill: var(--el-text-color-primary); font-size: 14px; font-weight: 600; }
-      .node .meta { fill: var(--node-meta); font-size: 12px; }
+      .node .name-zh { fill: var(--el-text-color-primary); font-size: 13px; font-weight: 600; }
+      .node .name-en { fill: var(--node-meta); font-size: 10.5px; }
+      .node .meta { fill: var(--node-meta); font-size: 11.5px; }
       .node .role-bar { opacity: 0.95; }
 
       .node.ready .card {
@@ -900,17 +983,49 @@
         color: var(--el-text-color-regular);
       }
       .detail .title {
-        margin: 0 0 6px;
+        margin: 0 0 2px;
         font-size: 16px;
         font-weight: 600;
         line-height: 1.35;
         color: var(--el-text-color-primary);
       }
+      .detail .title-en {
+        margin: 0 0 8px;
+        color: var(--el-text-color-secondary);
+        font-size: 12px;
+        font-family: var(--mono);
+        line-height: 1.4;
+        word-break: break-word;
+      }
       .detail .desc {
-        margin: 0 0 10px;
+        margin: 0 0 6px;
         color: var(--el-text-color-secondary);
         font-size: 13px;
         line-height: 1.55;
+      }
+      .detail .desc-en {
+        margin: 0 0 10px;
+        color: var(--el-text-color-placeholder);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .detail .path-row {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-start;
+      }
+      .detail .path-value {
+        display: block;
+        padding: 6px 8px;
+        border-radius: 6px;
+        background: var(--el-fill-color-light);
+        border: 1px solid var(--el-border-color-lighter);
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.45;
+        word-break: break-all;
+        color: var(--el-text-color-regular);
       }
       .pill-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
       .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
@@ -923,6 +1038,9 @@
         color: var(--el-text-color-secondary);
         font-size: 13px;
         line-height: 1.65;
+      }
+      #hubEmpty.empty-state {
+        padding: 20px 16px;
       }
 
       .inspector-title {
@@ -979,8 +1097,60 @@
 
       /* —— Project hub —— */
       #hubView {
+        position: relative;
         min-height: calc(100vh - var(--header-h));
         padding: 24px 28px 48px;
+        overflow: hidden;
+      }
+      #hubView::before {
+        content: "";
+        position: absolute;
+        right: -24px;
+        bottom: -36px;
+        width: 280px;
+        height: 280px;
+        background: url("logo.png") center / contain no-repeat;
+        opacity: 0.1;
+        pointer-events: none;
+      }
+      [data-theme="dark"] #hubView::before { opacity: 0.12; }
+      .hub-hero {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-bottom: 20px;
+        padding: 16px 18px;
+        border: 1px solid var(--el-color-primary-light-7);
+        border-radius: var(--el-border-radius-card);
+        background:
+          linear-gradient(120deg, var(--el-color-primary-light-9) 0%, var(--el-bg-color) 58%);
+      }
+      .hub-hero img {
+        width: 108px;
+        height: 108px;
+        object-fit: contain;
+        flex-shrink: 0;
+      }
+      .hub-hero-kicker {
+        margin: 0 0 4px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--el-color-primary);
+      }
+      .hub-hero-title {
+        margin: 0 0 8px;
+        font-size: 20px;
+        font-weight: 700;
+        line-height: 1.35;
+        color: var(--el-text-color-primary);
+      }
+      .hub-hero-flow {
+        margin: 0;
+        font-size: 13px;
+        color: var(--el-text-color-regular);
+        font-family: var(--mono);
       }
       .hub-layout {
         max-width: 1180px;
@@ -989,6 +1159,10 @@
         grid-template-columns: minmax(0, 1fr) 320px;
         gap: 24px;
         align-items: start;
+        transition: max-width 0.16s ease;
+      }
+      .hub-layout.is-scheduling {
+        max-width: min(100%, 1440px);
       }
       .hub-toolbar {
         display: flex;
@@ -1017,8 +1191,8 @@
         flex-direction: column;
         gap: 10px;
         padding: 16px;
-        border: 1px solid var(--el-border-color-lighter);
-        border-radius: var(--el-border-radius-base);
+        border: 1px solid var(--el-border-color);
+        border-radius: var(--el-border-radius-card);
         background: var(--el-bg-color);
         box-shadow: var(--el-box-shadow-lighter);
       }
@@ -1026,6 +1200,26 @@
         border-color: var(--el-color-primary);
         box-shadow: 0 0 0 3px var(--el-color-primary-light-8);
       }
+      .hub-card.is-expanded {
+        grid-column: 1 / -1;
+      }
+      .hub-card [data-schedule][aria-expanded="true"] {
+        color: var(--el-color-primary);
+        border-color: var(--el-color-primary-light-5);
+        background: var(--el-color-primary-light-9);
+      }
+      #hubGanttPark { display: none; }
+      .hub-gantt-host {
+        height: 420px;
+        min-height: 320px;
+        display: flex;
+        flex-direction: column;
+        margin: 4px -16px -16px;
+        border-top: 1px solid var(--el-border-color-lighter);
+        background: var(--el-bg-color-page);
+        overflow: hidden;
+      }
+      .hub-gantt-host[hidden] { display: none !important; }
       .hub-card .name {
         font-size: 15px;
         font-weight: 600;
@@ -1044,6 +1238,52 @@
       .hub-card .meta { font-family: var(--mono); word-break: break-all; }
       .hub-card-edit { display: flex; flex-direction: column; gap: 8px; }
       .hub-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .tb-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 8px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: color-mix(in srgb, var(--el-color-primary) 12%, transparent);
+        color: var(--el-color-primary);
+        border: 1px solid color-mix(in srgb, var(--el-color-primary) 28%, transparent);
+      }
+      .tb-badge.unbound {
+        background: color-mix(in srgb, var(--el-text-color-secondary) 12%, transparent);
+        color: var(--el-text-color-secondary);
+        border-color: var(--el-border-color);
+      }
+      #projectView {
+        position: relative;
+        min-height: calc(100vh - var(--header-h));
+        padding: 24px 28px 48px;
+        overflow: auto;
+      }
+      .project-tb-panel .field { margin-bottom: 10px; }
+      .project-tb-panel .tb-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .tb-status-list {
+        margin-top: 10px;
+        max-height: 220px;
+        overflow: auto;
+        font-size: 13px;
+        font-family: var(--mono);
+      }
+      .tb-status-list div { padding: 4px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+      .tb-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin: 0 0 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--el-border-color);
+        border-radius: var(--el-border-radius-base);
+        background: var(--el-bg-color);
+      }
+      .tb-bar input, .tb-bar select { max-width: 220px; }
+      .tb-bar .tb-label { font-size: 13px; color: var(--el-text-color-secondary); }
       .sidebar-hub {
         width: 100%;
         margin-bottom: 14px;
@@ -1052,6 +1292,15 @@
       /* —— Responsive —— */
       @media (max-width: 1180px) {
         main { grid-template-columns: 230px minmax(0, 1fr) 280px; }
+        #workspaceView.sidebar-collapsed {
+          grid-template-columns: 0 minmax(0, 1fr) 280px;
+        }
+        #workspaceView.inspector-collapsed {
+          grid-template-columns: 230px minmax(0, 1fr) 0;
+        }
+        #workspaceView.sidebar-collapsed.inspector-collapsed {
+          grid-template-columns: 0 minmax(0, 1fr) 0;
+        }
         .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
 
@@ -1067,6 +1316,15 @@
           height: auto;
           min-height: calc(100vh - var(--header-h));
         }
+        #workspaceView.sidebar-collapsed,
+        #workspaceView.inspector-collapsed,
+        #workspaceView.sidebar-collapsed.inspector-collapsed {
+          grid-template-columns: 1fr;
+        }
+        #workspaceView.sidebar-collapsed .sidebar,
+        #workspaceView.inspector-collapsed .inspector {
+          display: none;
+        }
         .sidebar, .inspector {
           border-right: 0;
           border-left: 0;
@@ -1081,11 +1339,16 @@
           overflow: hidden;
         }
         .inspector { order: 3; border-bottom: 0; }
+        .panel-rail { top: 72px; transform: none; height: 40px; }
         .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         #projectLabel { max-width: 100%; }
         .hub-layout { grid-template-columns: 1fr; }
         .hub-create { order: -1; }
         #hubView { padding: 16px 14px 32px; }
+        .hub-hero { align-items: flex-start; }
+        .hub-hero img { width: 84px; height: 84px; }
+        .hub-hero-title { font-size: 17px; }
+        .hub-gantt-host { height: 360px; }
         .graph-wrap {
           flex: none !important;
           height: 420px !important;
@@ -1444,14 +1707,15 @@
   <body>
     <header>
       <div class="brand">
-        <div class="logo-mark" aria-hidden="true">🐙</div>
+        <div class="logo-mark" aria-hidden="true"><img src="logo.png" alt="" width="56" height="56" /></div>
         <div class="brand-copy">
-          <h1>Octopus Workflow <span id="viewPulse" class="pulse">项目管理</span></h1>
+          <h1><span class="brand-name">Octopus</span> Workflow <span id="viewPulse" class="pulse">项目管理</span></h1>
           <div class="subtitle" id="viewSubtitle">统一管理状态库中的项目</div>
         </div>
       </div>
       <div class="header-meta">
         <button id="backToHub" class="secondary" type="button" hidden>全部项目</button>
+        <button id="backToProject" class="secondary" type="button" hidden>返回项目</button>
         <span id="projectLabel" class="muted">项目管理中心</span>
         <span id="workflowStatus" class="badge">暂无项目</span>
         <button id="themeToggle" class="icon-btn secondary" type="button" title="切换黑白主题" aria-label="切换黑白主题" aria-pressed="false">☾</button>
@@ -1460,18 +1724,26 @@
     <section id="hubView">
       <div class="hub-layout">
         <div class="hub-main">
+          <div class="hub-hero">
+            <img src="mascot.jpg" alt="" width="108" height="108" />
+            <div>
+              <p class="hub-hero-kicker">OCTOPUS WORKFLOW</p>
+              <p class="hub-hero-title">一只章鱼，编排整条软件交付流水线</p>
+              <p class="hub-hero-flow">项目 → 需求 → 设计 → 开发 → 测试 → 部署</p>
+            </div>
+          </div>
           <div class="hub-toolbar">
-            <h2>项目</h2>
+            <h2>项目管理中心</h2>
             <input id="hubFilter" type="search" placeholder="按名称或 ID 筛选" />
           </div>
           <div id="hubEmpty" class="empty-state">
-            还没有项目。在右侧填写名称即可创建；已有 <code>workflow.yaml</code> 的目录不会被覆盖。
+            还没有项目。在右侧填写名称即可创建项目；进入项目后再创建需求并可选绑定 Teambition。
           </div>
           <div id="hubCards" class="hub-cards"></div>
         </div>
         <aside id="initPanel" class="panel-card hub-create">
           <h3>创建项目</h3>
-          <p class="help">写入状态库并在源码根目录生成 <code>workflow.yaml</code>（已有文件不会覆盖）。同一状态库可管理多个项目；删除只清状态，不删源码目录。</p>
+          <p class="help">创建项目容器（可含多个需求）。删除项目会清掉其下需求状态，不删源码目录。</p>
           <div class="field">
             <label for="name">项目名称</label>
             <input id="name" placeholder="例如：商城改版" />
@@ -1480,19 +1752,70 @@
             <label for="desc">项目描述（可选）</label>
             <input id="desc" placeholder="简要说明项目目标" />
           </div>
-          <div class="field">
-            <label for="root">源码根目录（可选）</label>
-            <input id="root" placeholder="默认使用当前仓库根目录" />
-          </div>
           <button id="create" class="primary-wide">创建项目</button>
         </aside>
       </div>
     </section>
+    <section id="projectView" hidden>
+      <div class="hub-layout">
+        <div class="hub-main">
+          <div class="hub-toolbar">
+            <h2 id="projectPageTitle">项目需求</h2>
+            <input id="projectFilter" type="search" placeholder="按需求名称或 ID 筛选" />
+          </div>
+          <div id="projectEmpty" class="empty-state">
+            该项目还没有需求。在右侧创建需求；可绑定 Teambition 项目后同步卡片状态。
+          </div>
+          <div id="requirementCards" class="hub-cards"></div>
+          <div id="hubGanttPark">
+            <div id="hubGanttHost" class="hub-gantt-host" hidden></div>
+          </div>
+        </div>
+        <aside class="panel-card hub-create">
+          <h3>创建需求</h3>
+          <p class="help">在源码根目录生成 <code>workflow.yaml</code>（已有文件不会覆盖），并写入该需求的工作流状态。</p>
+          <div class="field">
+            <label for="reqName">需求名称</label>
+            <input id="reqName" placeholder="例如：支付页改版" />
+          </div>
+          <div class="field">
+            <label for="reqDesc">需求描述（可选）</label>
+            <input id="reqDesc" placeholder="简要说明需求目标" />
+          </div>
+          <div class="field">
+            <label for="reqRoot">源码根目录（可选）</label>
+            <input id="reqRoot" placeholder="默认使用当前仓库根目录" />
+          </div>
+          <button id="createRequirement" class="primary-wide">创建需求</button>
+          <hr style="margin: 18px 0; border: none; border-top: 1px solid var(--el-border-color);" />
+          <div class="project-tb-panel">
+            <h3>绑定 Teambition 项目</h3>
+            <p class="help">填写 Teambition 项目 ID，或用任务编号前缀解析。未配置凭据时会显示可读错误。</p>
+            <div class="field">
+              <label for="tbProjectId">Teambition 项目 ID</label>
+              <input id="tbProjectId" placeholder="可选" />
+            </div>
+            <div class="field">
+              <label for="tbPrefix">前缀（prefix）</label>
+              <input id="tbPrefix" placeholder="例如：ACME" />
+            </div>
+            <div class="tb-actions">
+              <button id="bindTbProject" type="button">绑定</button>
+              <button id="unbindTbProject" class="secondary" type="button">解绑</button>
+              <button id="loadTbStatuses" class="secondary" type="button">查看卡片状态</button>
+            </div>
+            <div id="tbBindInfo" class="muted" style="margin-top:8px"></div>
+            <div id="tbStatusList" class="tb-status-list" hidden></div>
+          </div>
+        </aside>
+      </div>
+    </section>
     <main id="workspaceView" hidden>
-      <aside class="sidebar">
+      <aside id="workspaceSidebar" class="sidebar">
+        <button id="sidebarToProject" class="secondary sidebar-hub" type="button">返回项目</button>
         <button id="sidebarToHub" class="secondary sidebar-hub" type="button">全部项目</button>
         <div class="section-title">
-          <h3>项目列表</h3>
+          <h3>需求列表</h3>
         </div>
         <div id="projects" class="muted">加载中…</div>
         <div class="section-title">
@@ -1500,23 +1823,37 @@
         </div>
         <div class="help">
           <ol class="guide-list">
-            <li>返回中心可创建、编辑或删除项目</li>
-            <li>打开项目默认进入甘特图，可用「流程图 / 甘特图」切换</li>
-            <li>流程图：上方角色、左侧阶段</li>
-            <li>甘特图：左侧表格、右侧时间条，可排期</li>
-            <li>右上角切换黑 / 白主题</li>
+            <li>项目管理中心可创建 / 编辑 / 删除项目</li>
+            <li>项目页管理需求，并可绑定 Teambition 项目</li>
+            <li>需求工作区查看角色泳道图；顶栏可绑定任务与改状态</li>
+            <li>拖拽空白处平移；Ctrl/⌘+滚轮缩放；两侧按钮收起 / 展开侧栏</li>
+            <li>节点详情可打开 / 复制脚本目录；Ctrl/⌘+单击节点亦可跳转</li>
+            <li>项目页需求卡片可展开甘特图排期</li>
           </ol>
         </div>
       </aside>
       <section class="content" id="graphFullscreenRoot">
+        <button id="toggleSidebar" class="secondary panel-rail left" type="button" title="收起左侧需求栏" aria-pressed="false" aria-controls="workspaceSidebar">‹</button>
+        <button id="toggleInspector" class="secondary panel-rail right" type="button" title="收起右侧详情栏" aria-pressed="false" aria-controls="workspaceInspector">›</button>
+        <div id="requirementTbBar" class="tb-bar">
+          <span class="tb-label" id="requirementTbLabel">Teambition 任务未绑定</span>
+          <input id="tbTaskRef" placeholder="任务编号或 ID" />
+          <button id="bindTbTask" type="button">绑定任务</button>
+          <button id="unbindTbTask" class="secondary" type="button">解绑</button>
+          <button id="refreshTbStatus" class="secondary" type="button">刷新状态</button>
+          <select id="tbStatusSelect" aria-label="Teambition 状态">
+            <option value="">选择状态…</option>
+          </select>
+          <button id="updateTbStatus" class="secondary" type="button">改状态</button>
+        </div>
         <div class="toolbar">
           <button id="runWorkflow" title="并行启动所有依赖已满足的节点">▶ 运行可运行节点</button>
           <button id="health" class="secondary" title="检查外部集成健康状态">健康检查</button>
           <button id="exportTasks" class="secondary" title="导出任务进度 JSON">导出任务</button>
           <button id="importTasks" class="secondary" title="从 JSON 合并导入任务进度">导入任务</button>
-          <button id="refresh" class="secondary" title="立即刷新项目状态">刷新</button>
-          <button id="fullscreenGraph" class="secondary graph-mode-only" title="全屏查看流程图" aria-pressed="false">⛶ 全屏</button>
-          <div class="zoom-controls graph-mode-only" title="放大流程图，减轻文字模糊">
+          <button id="refresh" class="secondary" title="立即刷新需求状态">刷新</button>
+          <button id="fullscreenGraph" class="secondary" title="全屏查看泳道图" aria-pressed="false">⛶ 全屏</button>
+          <div class="zoom-controls" title="缩放泳道图（也可用 Ctrl/⌘ + 滚轮）">
             <button id="zoomOut" class="secondary" aria-label="缩小">−</button>
             <span id="zoomLabel" class="zoom-label">140%</span>
             <button id="zoomIn" class="secondary" aria-label="放大">+</button>
@@ -1524,13 +1861,9 @@
           </div>
           <span id="lastUpdate" class="muted"></span>
         </div>
-        <div class="workspace-tabs" id="workspaceTabs" role="tablist" aria-label="工作台视图">
-          <button type="button" role="tab" data-mode="graph" aria-selected="false">流程图</button>
-          <button type="button" role="tab" data-mode="gantt" aria-selected="true" class="active">甘特图</button>
-        </div>
-        <p class="hint" id="flowHint">上方为角色（人），左侧为阶段；当前阶段行与当前节点会高亮显示。</p>
+        <p class="hint" id="flowHint">上方为角色（人），左侧为阶段；当前阶段行与当前节点会高亮显示。拖拽空白处可平移；Ctrl/⌘ + 滚轮缩放。</p>
         <div class="summary" id="summary"></div>
-        <div id="graphPane" class="graph-mode-only">
+        <div id="graphPane">
           <div class="legend" id="legend" aria-label="图例">
             <span class="legend-item"><span class="dot current"></span>当前节点</span>
             <span class="legend-item"><span class="dot ready"></span>可运行</span>
@@ -1542,20 +1875,19 @@
             <span class="legend-split" aria-hidden="true"></span>
             <span id="roleLegend" class="legend-item muted">角色泳道见左侧色条</span>
           </div>
-          <div class="graph-wrap" id="graphWrap">
+          <div class="graph-wrap" id="graphWrap" title="拖拽空白处平移；Ctrl/⌘ + 滚轮缩放">
             <div id="graphScaler" class="graph-scaler">
               <svg id="graph" role="img" aria-label="工作流角色泳道图"></svg>
             </div>
           </div>
         </div>
-        <div id="ganttPane" class="gantt-mode-only" hidden></div>
       </section>
-      <aside class="inspector">
+      <aside id="workspaceInspector" class="inspector">
         <div class="inspector-title">
           <h2>节点详情</h2>
         </div>
         <div id="empty" class="empty-state">
-          点击流程图中的节点，可查看中文说明、负责角色、依赖关系，并执行运行 / 手动完成等操作。
+          点击泳道图中的节点，可查看中英文说明、负责角色、依赖关系，打开脚本目录，并执行运行 / 手动完成等操作。
         </div>
         <div id="details"></div>
       </aside>

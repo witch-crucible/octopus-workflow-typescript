@@ -31,38 +31,59 @@ if (!window.octopus) {
 
   window.octopus = {
     canInit: () => invoke("canInit"),
+
     listProjects: () => invoke("listProjects"),
     listProjectSummaries: () => invoke("listProjectSummaries"),
-    init: (name, description, projectRoot) => invoke("init", name, description, projectRoot),
-    updateProject: (projectId, patch) => invoke("updateProject", projectId, patch),
-    updateNodeSchedule: (projectId, nodeId, schedule) => invoke("updateNodeSchedule", projectId, nodeId, schedule),
+    createProject: (name, description) => invoke("createProject", name, description),
+    getProject: (projectId) => invoke("getProject", projectId),
+    updateProjectMeta: (projectId, patch) => invoke("updateProjectMeta", projectId, patch),
     deleteProject: (projectId) => invoke("deleteProject", projectId),
-    status: (projectId) => invoke("status", projectId),
-    snapshot: (projectId) => invoke("snapshot", projectId),
-    state: (projectId) => invoke("state", projectId),
-    runNode: (projectId, nodeId, force) => invoke("runNode", projectId, nodeId, force),
-    runWorkflow: (projectId, force, maxParallel) => invoke("runWorkflow", projectId, force, maxParallel),
-    completeNode: (projectId, nodeId, force) => invoke("completeNode", projectId, nodeId, force),
-    cancelRun: (projectId, runId) => invoke("cancelRun", projectId, runId),
-    retryRun: (projectId, runId, force) => invoke("retryRun", projectId, runId, force),
-    runs: (projectId, nodeId) => invoke("runs", projectId, nodeId),
-    events: (projectId, sequence) => invoke("events", projectId, sequence),
+    bindProjectTeambition: (projectId, opts) => invoke("bindProjectTeambition", projectId, opts),
+    unbindProjectTeambition: (projectId) => invoke("unbindProjectTeambition", projectId),
+    listTeambitionCardStatuses: (projectId) => invoke("listTeambitionCardStatuses", projectId),
+
+    listRequirements: (projectId) => invoke("listRequirements", projectId),
+    listRequirementSummaries: (projectId) => invoke("listRequirementSummaries", projectId),
+    initRequirement: (projectId, name, description, projectRoot) =>
+      invoke("initRequirement", projectId, name, description, projectRoot),
+    updateRequirement: (requirementId, patch) => invoke("updateRequirement", requirementId, patch),
+    deleteRequirement: (requirementId) => invoke("deleteRequirement", requirementId),
+    getRequirementStatus: (requirementId) => invoke("getRequirementStatus", requirementId),
+    getState: (requirementId) => invoke("getState", requirementId),
+    getExecutionSnapshot: (requirementId) => invoke("getExecutionSnapshot", requirementId),
+    updateNodeSchedule: (requirementId, nodeId, schedule) =>
+      invoke("updateNodeSchedule", requirementId, nodeId, schedule),
+    runNode: (requirementId, nodeId, force) => invoke("runNode", requirementId, nodeId, force),
+    runWorkflow: (requirementId, force, maxParallel) =>
+      invoke("runWorkflow", requirementId, force, maxParallel),
+    completeNode: (requirementId, nodeId, force) => invoke("completeNode", requirementId, nodeId, force),
+    cancelRun: (requirementId, runId) => invoke("cancelRun", requirementId, runId),
+    retryRun: (requirementId, runId, force) => invoke("retryRun", requirementId, runId, force),
+    runs: (requirementId, nodeId) => invoke("runs", requirementId, nodeId),
+    events: (requirementId, sequence) => invoke("events", requirementId, sequence),
+    bindRequirementTask: (requirementId, opts) => invoke("bindRequirementTask", requirementId, opts),
+    unbindRequirementTask: (requirementId) => invoke("unbindRequirementTask", requirementId),
+    getRequirementTeambitionStatus: (requirementId) => invoke("getRequirementTeambitionStatus", requirementId),
+    updateRequirementTeambitionStatus: (requirementId, statusId, operatorId) =>
+      invoke("updateRequirementTeambitionStatus", requirementId, statusId, operatorId),
+
     health: () => invoke("health"),
-    exportTasks: async (projectId) => {
-      const result = await invoke("exportTasks", projectId)
+    resolveNodeWorkspace: (requirementId, nodeId) => invoke("resolveNodeWorkspace", requirementId, nodeId),
+    exportTasks: async (requirementId) => {
+      const result = await invoke("exportTasks", requirementId)
       const blob = new Blob([`${JSON.stringify(result.document, null, 2)}\n`], { type: "application/json" })
       const link = document.createElement("a")
       link.href = URL.createObjectURL(blob)
-      link.download = `${projectId}-tasks.json`
+      link.download = `${requirementId}-tasks.json`
       link.click()
       URL.revokeObjectURL(link.href)
       return { canceled: false, taskCount: result.taskCount }
     },
-    importTasks: async (projectId) => {
+    importTasks: async (requirementId) => {
       const document = await chooseJsonFile()
       if (!document) return { canceled: true }
-      if (!window.confirm(`将所选任务进度合并到项目 ${projectId}？`)) return { canceled: true }
-      return { canceled: false, ...await invoke("importTasks", projectId, document) }
+      if (!window.confirm(`将所选任务进度合并到需求 ${requirementId}？`)) return { canceled: true }
+      return { canceled: false, ...await invoke("importTasks", requirementId, document) }
     },
   }
   window.octopusRuntime = "web"

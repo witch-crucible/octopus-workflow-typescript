@@ -76,14 +76,23 @@ const hei = (delta = 1): CapabilityRef => ({ kind: "heinrich", delta })
 export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
   phases: [
     {
-      phase: Phase.REQUIREMENTS_ANALYSIS,
-      label: "需求分析",
-      phaseId: PhaseId("req"),
+      phase: Phase.INTENTION,
+      label: "意向",
+      phaseId: PhaseId("intent"),
       entryCriteria: ["项目已创建"],
-      exitCriteria: ["PRD 已完成", "估时已完成", "DEV 二次确认工时"],
+      exitCriteria: ["BRD 初稿完成", "BRD 已宣讲"],
       steps: [
         { id: "10.1", name: "Requirements Analysis and BRD Design", description: "PM analyzes requirements and completes the BRD", responsibleRoles: [Role.PM], dependsOn: [] },
         { id: "10.2", name: "BRD Walkthrough", description: "PM walks BA through the BRD", responsibleRoles: [Role.PM, Role.BA], dependsOn: ["10.1"] },
+      ],
+    },
+    {
+      phase: Phase.RESEARCH,
+      label: "调研",
+      phaseId: PhaseId("research"),
+      entryCriteria: ["意向阶段已完成", "BRD 已宣讲"],
+      exitCriteria: ["PRD 已完成", "估时已完成", "DEV 二次确认工时"],
+      steps: [
         { id: "10.3", name: "Requirements Research", description: "SA researches technical feasibility, delivery time, and cost", responsibleRoles: [Role.SA], dependsOn: ["10.2"] },
         { id: "10.4", name: "PRD and Boundary Design", description: "BA designs the PRD and validates boundary cases", responsibleRoles: [Role.BA], dependsOn: ["10.3"] },
         { id: "10.5", name: "PRD Walkthrough", description: "BA walks PM, DEV, and SA through the PRD", responsibleRoles: [Role.BA, Role.PM, Role.DEV, Role.SA], dependsOn: ["10.4"] },
@@ -104,8 +113,8 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
       phase: Phase.DESIGN,
       label: "设计",
       phaseId: PhaseId("design"),
-      entryCriteria: ["需求分析阶段已完成", "PRD 已定稿"],
-      exitCriteria: ["技术方案已审核", "测试用例已评审"],
+      entryCriteria: ["调研阶段已完成", "PRD 已定稿"],
+      exitCriteria: ["技术方案已编写", "任务已拆分"],
       steps: [
         { id: "20.1", name: "Requirements Scheduling", description: "PM schedules the approved requirements", responsibleRoles: [Role.PM], dependsOn: [] },
         { id: "20.2", name: "Kickoff Review", description: "The team reviews requirements with a recording and AI summary", responsibleRoles: [Role.PM, Role.BA, Role.SA, Role.DEV, Role.QA], dependsOn: ["20.1"] },
@@ -119,9 +128,9 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
       ],
     },
     {
-      phase: Phase.DEVELOPMENT,
-      label: "开发",
-      phaseId: PhaseId("dev"),
+      phase: Phase.IMPLEMENTATION,
+      label: "实现",
+      phaseId: PhaseId("impl"),
       entryCriteria: ["设计阶段已完成", "技术方案已审核通过"],
       exitCriteria: ["功能开发完成", "自测完成", "Code Review 通过"],
       steps: [
@@ -153,21 +162,30 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
       phase: Phase.TESTING,
       label: "测试",
       phaseId: PhaseId("test"),
-      entryCriteria: ["开发阶段已完成", "冒烟演示已完成"],
-      exitCriteria: ["UAT 已通过", "性能测试已完成", "发布计划已创建"],
+      entryCriteria: ["实现阶段已完成", "冒烟演示已完成"],
+      exitCriteria: ["功能与性能测试已完成"],
       steps: [
         { id: "40.1", name: "Smoke Demo Validation", description: "DEV validates the smoke demo with QA", responsibleRoles: [Role.DEV, Role.QA], dependsOn: [], capabilities: [hei(1)] },
         { id: "40.2", name: "Functional and Performance Testing", description: "QA performs functional and performance testing", responsibleRoles: [Role.QA], dependsOn: ["40.1"] },
+      ],
+    },
+    {
+      phase: Phase.UAT,
+      label: "UAT",
+      phaseId: PhaseId("uat"),
+      entryCriteria: ["测试阶段已完成"],
+      exitCriteria: ["UAT 已通过", "发布计划已创建"],
+      steps: [
         { id: "40.3", name: "UAT and User Acceptance", description: "QA prepares UAT cases and OP performs user acceptance testing", responsibleRoles: [Role.QA, Role.OP], dependsOn: ["40.2"] },
         { id: "40.4", name: "Release Plan Creation", description: "OP creates the release plan at least three days in advance", responsibleRoles: [Role.OP], dependsOn: ["40.3"] },
       ],
     },
     {
-      phase: Phase.DEPLOYMENT,
-      label: "部署",
-      phaseId: PhaseId("deploy"),
-      entryCriteria: ["测试阶段已完成", "发布计划已创建"],
-      exitCriteria: ["部署已完成", "回归测试通过", "Prod 分支已合并回 Dev"],
+      phase: Phase.RELEASE,
+      label: "发布",
+      phaseId: PhaseId("release"),
+      entryCriteria: ["UAT 阶段已完成", "发布计划已创建"],
+      exitCriteria: ["发布已完成", "回归测试通过", "Prod 分支已合并回 Dev"],
       steps: [
         { id: "50.1", name: "Environment Deployment", description: "SA deploys the complete domain, CDN, WAF, SLB, ECS, and related environment configuration", responsibleRoles: [Role.SA], dependsOn: [] },
         { id: "50.2", name: "Branch Merge", description: "SA merges the release branches", responsibleRoles: [Role.SA, Role.DEV], dependsOn: ["50.1"], capabilities: [svc("git", "mergeBranches"), hei(1)] },
@@ -185,12 +203,20 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
       phase: Phase.MAINTENANCE,
       label: "维护",
       phaseId: PhaseId("maint"),
-      entryCriteria: ["部署阶段已完成"],
+      entryCriteria: ["发布阶段已完成"],
       exitCriteria: ["监控完成"],
       steps: [
         { id: "60.1", name: "AI Technical Debt Quantification", description: "AI scores code complexity, duplication, and dependency age to prioritize technical debt", responsibleRoles: [Role.AI], dependsOn: [], capabilities: [ai(AIAssistantType.TECH_DEBT_QUANTIFICATION)] },
         { id: "60.2", name: "Service Monitoring", description: "DEV monitors the service across daily, weekly, and yearly windows", responsibleRoles: [Role.DEV], dependsOn: ["60.1"], capabilities: [svc("monitoring", "registerAlert")] },
       ],
+    },
+    {
+      phase: Phase.COMPLETED,
+      label: "完结",
+      phaseId: PhaseId("done"),
+      entryCriteria: ["维护阶段已完成"],
+      exitCriteria: ["项目已完结"],
+      steps: [],
     },
   ],
 }

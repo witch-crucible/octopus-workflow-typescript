@@ -9,14 +9,17 @@
 import { Role } from "./role.js"
 import { PhaseId } from "./branded-ids.js"
 
-/** 阶段枚举 —— 对应完整 SDLC 流程 */
+/** 阶段枚举 —— 对应项目生命周期 */
 export const Phase = {
-  REQUIREMENTS_ANALYSIS: "RequirementsAnalysis",
+  INTENTION: "Intention",
+  RESEARCH: "Research",
   DESIGN: "Design",
-  DEVELOPMENT: "Development",
+  IMPLEMENTATION: "Implementation",
   TESTING: "Testing",
-  DEPLOYMENT: "Deployment",
+  UAT: "UAT",
+  RELEASE: "Release",
   MAINTENANCE: "Maintenance",
+  COMPLETED: "Completed",
 } as const
 
 export type Phase = (typeof Phase)[keyof typeof Phase]
@@ -35,22 +38,28 @@ export type PhaseLock = (typeof PhaseLock)[keyof typeof PhaseLock]
 
 /** 所有阶段的有序列表 */
 export const PHASE_ORDER: readonly Phase[] = [
-  Phase.REQUIREMENTS_ANALYSIS,
+  Phase.INTENTION,
+  Phase.RESEARCH,
   Phase.DESIGN,
-  Phase.DEVELOPMENT,
+  Phase.IMPLEMENTATION,
   Phase.TESTING,
-  Phase.DEPLOYMENT,
+  Phase.UAT,
+  Phase.RELEASE,
   Phase.MAINTENANCE,
+  Phase.COMPLETED,
 ]
 
 /** 阶段显示名称映射 */
 export const PHASE_LABELS: Record<Phase, string> = {
-  [Phase.REQUIREMENTS_ANALYSIS]: "需求分析",
+  [Phase.INTENTION]: "意向",
+  [Phase.RESEARCH]: "调研",
   [Phase.DESIGN]: "设计",
-  [Phase.DEVELOPMENT]: "开发",
+  [Phase.IMPLEMENTATION]: "实现",
   [Phase.TESTING]: "测试",
-  [Phase.DEPLOYMENT]: "部署",
+  [Phase.UAT]: "UAT",
+  [Phase.RELEASE]: "发布",
   [Phase.MAINTENANCE]: "维护",
+  [Phase.COMPLETED]: "完结",
 }
 
 /** 阶段步骤定义（声明式步骤的基础形状；`StepSpec` 在其上扩展 capabilities） */

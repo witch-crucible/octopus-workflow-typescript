@@ -2,16 +2,17 @@
  * `octopus task` —— 任务管理命令。
  *
  * 子命令:
- *   list [phase] [projectId]       — 列出任务
- *   complete <taskId> [projectId]  — 完成任务
- *   export [projectId]             — 导出任务 JSON 文件
- *   import <file> [projectId]      — 合并导入任务 JSON 文件
+ *   list [phase] [requirementId]       — 列出任务
+ *   complete <taskId> [requirementId]  — 完成任务
+ *   export [requirementId]             — 导出任务 JSON 文件
+ *   import <file> [requirementId]      — 合并导入任务 JSON 文件
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 import { Phase } from "@octopus/core/phase.js"
 import { Role } from "@octopus/core/role.js"
 import { TaskStatus } from "@octopus/core/task.js"
@@ -26,12 +27,12 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
     .command("list")
     .description("列出任务（可按阶段过滤）")
     .argument("[phase]", "阶段名称（可选）")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--all", "列出所有阶段的任务")
     .option("--json", "以 JSON 格式输出")
-    .action((phaseName?: string, projectId?: string, options?: { all?: boolean; json?: boolean }) => {
+    .action((phaseName?: string, requirementId?: string, options?: { all?: boolean; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.getState(pid)
@@ -58,6 +59,8 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
         if (options?.json) {
           console.log(JSON.stringify({
             projectId: state.projectId,
+            requirementId: state.requirementId,
+            requirementName: state.requirementName,
             currentPhase: state.currentPhase,
             tasks: tasks.map((t) => ({
               id: t.id,
@@ -103,12 +106,12 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
     .command("complete")
     .description("完成任务")
     .argument("<taskId>", "任务 ID")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--as-role <role>", "以指定角色执行")
     .option("--json", "以 JSON 格式输出")
-    .action((taskId: string, projectId?: string, options?: { asRole?: string; json?: boolean }) => {
+    .action((taskId: string, requirementId?: string, options?: { asRole?: string; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const role = options?.asRole ? (Object.values(Role).find((r) => r.toLowerCase() === options.asRole!.toLowerCase()) as Role | undefined) : undefined
@@ -118,6 +121,7 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
         if (options?.json) {
           console.log(JSON.stringify({
             projectId: state.projectId,
+            requirementId: state.requirementId,
             taskId,
             title: task?.title,
             status: task?.status,
@@ -140,11 +144,11 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
     .description("设置任务状态")
     .argument("<taskId>", "任务 ID")
     .argument("<status>", "新状态 (PENDING|IN_PROGRESS|COMPLETED|BLOCKED|SKIPPED)")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((taskId: string, status: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((taskId: string, status: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const taskStatus = Object.values(TaskStatus).find((s) => s === status)
@@ -160,6 +164,7 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
         if (options?.json) {
           console.log(JSON.stringify({
             projectId: state.projectId,
+            requirementId: state.requirementId,
             taskId,
             status: task?.status,
           }, null, 2))
@@ -176,14 +181,14 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
   // ── task export ──
   taskCmd
     .command("export")
-    .description("将项目任务导出为版本化 JSON 文件")
-    .argument("[projectId]", "项目 ID")
+    .description("将需求任务导出为版本化 JSON 文件")
+    .argument("[requirementId]", "需求 ID")
     .requiredOption("-o, --output <file>", "导出文件路径")
     .option("--force", "覆盖已存在的文件")
     .option("--json", "以 JSON 格式输出结果")
-    .action((projectId: string | undefined, options: { output: string; force?: boolean; json?: boolean }) => {
+    .action((requirementId: string | undefined, options: { output: string; force?: boolean; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const outputPath = resolve(options.output)
@@ -199,7 +204,8 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
 
         if (options.json) {
           console.log(JSON.stringify({
-            projectId: document.sourceProject.projectId,
+            requirementId: document.sourceRequirement.requirementId,
+            projectId: document.sourceRequirement.projectId,
             outputPath,
             taskCount: document.tasks.length,
           }, null, 2))
@@ -218,11 +224,11 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
     .command("import")
     .description("从版本化 JSON 文件合并任务进度")
     .argument("<file>", "导入文件路径")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出结果")
-    .action((file: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((file: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const inputPath = resolve(file)
@@ -242,13 +248,3 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine["store"].listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    process.exit(1)
-    return null
-  }
-  return projects[0] ?? null
-}

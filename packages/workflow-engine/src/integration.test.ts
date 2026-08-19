@@ -1,11 +1,14 @@
 /**
  * WorkflowEngine 集成测试 —— 覆盖常见 happy path。
  *
- * 注意：这些测试会实际读写 `.octo_engine_test/` 目录。
+ * 每个用例使用独立临时状态目录。
  */
 
-import { describe, it, expect, afterAll } from "vitest"
-import { Phase, PhaseLock } from "@octopus/core/phase.js"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { Phase } from "@octopus/core/phase.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { Role } from "@octopus/core/role.js"
 import { ArtifactType } from "@octopus/core/artifact.js"
@@ -13,133 +16,158 @@ import { HeinrichLevel } from "@octopus/core/risk.js"
 import { createStateStore } from "@octopus/context/index.js"
 import { WorkflowEngine } from "./index.js"
 
-const TEST_STORE_DIR = ".octo_engine_test"
+let testStoreDir: string
+
+beforeEach(() => {
+  testStoreDir = mkdtempSync(join(tmpdir(), "octopus-engine-int-"))
+})
+
+afterEach(() => {
+  rmSync(testStoreDir, { recursive: true, force: true })
+})
 
 function createEngine(): WorkflowEngine {
   return new WorkflowEngine({
-    store: createStateStore({ storeDir: TEST_STORE_DIR }),
+    store: createStateStore({ storeDir: testStoreDir }),
   })
 }
 
-function completeAllPhaseTasks(engine: WorkflowEngine, projectId: string, phase: Phase): void {
-  const tasks = engine.getTasks(projectId, { phase })
+function completeAllPhaseTasks(engine: WorkflowEngine, requirementId: string, phase: Phase): void {
+  const tasks = engine.getTasks(requirementId, { phase })
   for (const task of tasks) {
     if (task.status !== TaskStatus.COMPLETED) {
-      engine.completeTask(projectId, task.id)
+      engine.completeTask(requirementId, task.id)
     }
   }
 }
 
+
+function initNamedRequirement(
+  engine: WorkflowEngine,
+  name: string,
+  description?: string,
+  projectRoot?: string,
+) {
+  const project = engine.createProject(name, description)
+  return engine.initRequirement(project.projectId, name, description, projectRoot)
+}
+
 describe("WorkflowEngine 集成测试", () => {
-  afterAll(() => {
-    // 不清理目录，便于调试；如需清理可手动删除 `.octo_engine_test/`
-  })
-
-  it("完整推进到 DEPLOYMENT 阶段", () => {
+  it("完整推进到 RELEASE 阶段", () => {
     const engine = createEngine()
-    const state = engine.initProject("集成测试项目")
-    expect(state.currentPhase).toBe(Phase.REQUIREMENTS_ANALYSIS)
+    const state = initNamedRequirement(engine, "集成测试项目")
+    expect(state.currentPhase).toBe(Phase.INTENTION)
 
-    // REQUIREMENTS → DESIGN
-    completeAllPhaseTasks(engine, state.projectId, Phase.REQUIREMENTS_ANALYSIS)
-    const design = engine.advancePhase(state.projectId)
+    // INTENTION → RESEARCH
+    completeAllPhaseTasks(engine, state.requirementId, Phase.INTENTION)
+    const research = engine.advancePhase(state.requirementId)
+    expect(research.currentPhase).toBe(Phase.RESEARCH)
+
+    // RESEARCH → DESIGN
+    completeAllPhaseTasks(engine, research.requirementId, Phase.RESEARCH)
+    const design = engine.advancePhase(research.requirementId)
     expect(design.currentPhase).toBe(Phase.DESIGN)
 
-    // DESIGN → DEVELOPMENT
-    completeAllPhaseTasks(engine, design.projectId, Phase.DESIGN)
-    const dev = engine.advancePhase(design.projectId)
-    expect(dev.currentPhase).toBe(Phase.DEVELOPMENT)
+    // DESIGN → IMPLEMENTATION
+    completeAllPhaseTasks(engine, design.requirementId, Phase.DESIGN)
+    const impl = engine.advancePhase(design.requirementId)
+    expect(impl.currentPhase).toBe(Phase.IMPLEMENTATION)
 
-    // DEVELOPMENT → TESTING
-    completeAllPhaseTasks(engine, dev.projectId, Phase.DEVELOPMENT)
-    const testing = engine.advancePhase(dev.projectId)
+    // IMPLEMENTATION → TESTING
+    completeAllPhaseTasks(engine, impl.requirementId, Phase.IMPLEMENTATION)
+    const testing = engine.advancePhase(impl.requirementId)
     expect(testing.currentPhase).toBe(Phase.TESTING)
 
-    // TESTING → DEPLOYMENT
-    completeAllPhaseTasks(engine, testing.projectId, Phase.TESTING)
-    const deployment = engine.advancePhase(testing.projectId)
-    expect(deployment.currentPhase).toBe(Phase.DEPLOYMENT)
+    // TESTING → UAT
+    completeAllPhaseTasks(engine, testing.requirementId, Phase.TESTING)
+    const uat = engine.advancePhase(testing.requirementId)
+    expect(uat.currentPhase).toBe(Phase.UAT)
+
+    // UAT → RELEASE
+    completeAllPhaseTasks(engine, uat.requirementId, Phase.UAT)
+    const release = engine.advancePhase(uat.requirementId)
+    expect(release.currentPhase).toBe(Phase.RELEASE)
   })
 
   it("阶段回退并重新前进", () => {
     const engine = createEngine()
-    const state = engine.initProject("回退测试")
-    completeAllPhaseTasks(engine, state.projectId, Phase.REQUIREMENTS_ANALYSIS)
-    const design = engine.advancePhase(state.projectId)
+    const state = initNamedRequirement(engine, "回退测试")
+    completeAllPhaseTasks(engine, state.requirementId, Phase.INTENTION)
+    const research = engine.advancePhase(state.requirementId)
 
-    const rolled = engine.rollbackTo(design.projectId, Phase.REQUIREMENTS_ANALYSIS)
-    expect(rolled.currentPhase).toBe(Phase.REQUIREMENTS_ANALYSIS)
+    const rolled = engine.rollbackTo(research.requirementId, Phase.INTENTION)
+    expect(rolled.currentPhase).toBe(Phase.INTENTION)
 
     // 重新前进
-    completeAllPhaseTasks(engine, rolled.projectId, Phase.REQUIREMENTS_ANALYSIS)
-    const next = engine.advancePhase(rolled.projectId)
-    expect(next.currentPhase).toBe(Phase.DESIGN)
+    completeAllPhaseTasks(engine, rolled.requirementId, Phase.INTENTION)
+    const next = engine.advancePhase(rolled.requirementId)
+    expect(next.currentPhase).toBe(Phase.RESEARCH)
   })
 
   it("状态摘要统计正确", () => {
     const engine = createEngine()
-    const state = engine.initProject("摘要测试")
-    const status = engine.getProjectStatus(state.projectId)
+    const state = initNamedRequirement(engine, "摘要测试")
+    const status = engine.getRequirementStatus(state.requirementId)
 
-    expect(status.projectName).toBe("摘要测试")
-    expect(status.currentPhase).toBe(Phase.REQUIREMENTS_ANALYSIS)
+    expect(status.requirementName).toBe("摘要测试")
+    expect(status.currentPhase).toBe(Phase.INTENTION)
     expect(status.totalTasks).toBeGreaterThan(0)
     expect(status.completedTasks).toBe(0)
   })
 
   it("清单添加、核验、删除闭环", () => {
     const engine = createEngine()
-    const state = engine.initProject("清单测试")
+    const state = initNamedRequirement(engine, "清单测试")
 
     const added = engine.addChecklistItem(
-      state.projectId,
-      Phase.REQUIREMENTS_ANALYSIS,
+      state.requirementId,
+      Phase.INTENTION,
       "文档",
       "PRD 已评审",
     )
-    const item = added.checklists[Phase.REQUIREMENTS_ANALYSIS]!.items.at(-1)!
+    const item = added.checklists[Phase.INTENTION]!.items.at(-1)!
     expect(item.status).toBe("PENDING")
 
-    const verified = engine.verifyChecklistItem(state.projectId, Phase.REQUIREMENTS_ANALYSIS, item.id, Role.PM)
-    const found = verified.checklists[Phase.REQUIREMENTS_ANALYSIS]!.items.find((i) => i.id === item.id)!
+    const verified = engine.verifyChecklistItem(state.requirementId, Phase.INTENTION, item.id, Role.PM)
+    const found = verified.checklists[Phase.INTENTION]!.items.find((i) => i.id === item.id)!
     expect(found.status).toBe("VERIFIED")
     expect(found.verifiedBy).toBe(Role.PM)
 
-    const removed = engine.removeChecklistItem(state.projectId, Phase.REQUIREMENTS_ANALYSIS, item.id)
-    expect(removed.checklists[Phase.REQUIREMENTS_ANALYSIS]!.items.find((i) => i.id === item.id)).toBeUndefined()
+    const removed = engine.removeChecklistItem(state.requirementId, Phase.INTENTION, item.id)
+    expect(removed.checklists[Phase.INTENTION]!.items.find((i) => i.id === item.id)).toBeUndefined()
   })
 
   it("制品创建与查询", () => {
     const engine = createEngine()
-    const state = engine.initProject("制品测试")
-    const created = engine.createArtifact(state.projectId, {
+    const state = initNamedRequirement(engine, "制品测试")
+    engine.createArtifact(state.requirementId, {
       type: ArtifactType.PRD,
       title: "产品需求文档",
       description: "v1",
-      phase: Phase.REQUIREMENTS_ANALYSIS,
+      phase: Phase.INTENTION,
       createdBy: Role.PM,
       content: "# PRD",
     })
 
-    const artifacts = engine.getArtifacts(state.projectId, Phase.REQUIREMENTS_ANALYSIS, "PRD")
+    const artifacts = engine.getArtifacts(state.requirementId, Phase.INTENTION, "PRD")
     expect(artifacts.length).toBeGreaterThanOrEqual(1)
     expect(artifacts[0]!.title).toBe("产品需求文档")
   })
 
   it("海因里希三角数据评估", () => {
     const engine = createEngine()
-    const state = engine.initProject("heinrich 测试")
+    const state = initNamedRequirement(engine, "heinrich 测试")
 
-    engine.logObservation(state.projectId, Phase.REQUIREMENTS_ANALYSIS, HeinrichLevel.MAJOR, "崩溃")
-    engine.logObservation(state.projectId, Phase.REQUIREMENTS_ANALYSIS, HeinrichLevel.MINOR, "警告")
-    engine.logObservation(state.projectId, Phase.REQUIREMENTS_ANALYSIS, HeinrichLevel.TRIVIAL, "建议")
+    engine.logObservation(state.requirementId, Phase.INTENTION, HeinrichLevel.MAJOR, "崩溃")
+    engine.logObservation(state.requirementId, Phase.INTENTION, HeinrichLevel.MINOR, "警告")
+    engine.logObservation(state.requirementId, Phase.INTENTION, HeinrichLevel.TRIVIAL, "建议")
 
-    const record = engine.getHeinrichRecord(state.projectId)
+    const record = engine.getHeinrichRecord(state.requirementId)
     expect(record.majorDefects).toBe(1)
     expect(record.minorDefects).toBe(1)
     expect(record.trivialDefects).toBe(1)
 
-    const assessment = engine.assessQuality(state.projectId)
+    const assessment = engine.assessQuality(state.requirementId)
     expect(assessment.verdict).toBe("UNDER_REPORTING")
   })
 })

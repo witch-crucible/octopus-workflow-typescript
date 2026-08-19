@@ -2,6 +2,7 @@
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 import { syncWorkflowWorkspace } from "@octopus/context/workflow.js"
 
 export function buildWorkflowCommands(program: Command, engine: WorkflowEngine): void {
@@ -9,9 +10,9 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
 
   workflow.command("validate")
     .description("校验 workflow.yaml")
-    .argument("[projectId]", "项目 ID")
-    .action((projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
+    .argument("[requirementId]", "需求 ID")
+    .action((requirementId?: string) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const definition = engine.getWorkflowDefinition(pid)
       console.log(`✅ 工作流有效: ${definition.name} (${definition.nodes.length} 个节点)`)
@@ -19,9 +20,9 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
 
   workflow.command("sync")
     .description("同步公共目录和节点目录")
-    .argument("[projectId]", "项目 ID")
-    .action((projectId?: string) => {
-      const pid = resolveProjectId(engine, projectId)
+    .argument("[requirementId]", "需求 ID")
+    .action((requirementId?: string) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const state = engine.getState(pid)
       const root = state.projectRoot ?? process.cwd()
@@ -32,13 +33,13 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
 
   workflow.command("run")
     .description("自动并行运行所有 READY 节点")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--max-parallel <count>", "最大并发数", "4")
     .option("--force", "忽略未完成依赖")
     .option("--json", "以 JSON 输出")
-    .action(async (projectId: string | undefined, options: { maxParallel: string; force?: boolean; json?: boolean }) => {
+    .action(async (requirementId: string | undefined, options: { maxParallel: string; force?: boolean; json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
         const maxParallel = parsePositiveInteger(options.maxParallel, "--max-parallel")
         const snapshot = await engine.runWorkflow(pid, options.force === undefined
@@ -54,10 +55,10 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
 
   workflow.command("status")
     .description("查看工作流调度状态")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 输出")
-    .action((projectId: string | undefined, options: { json?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action((requirementId: string | undefined, options: { json?: boolean }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
       const snapshot = engine.getExecutionSnapshot(pid)
       if (options.json) console.log(JSON.stringify(snapshot, null, 2))
@@ -71,15 +72,6 @@ export function buildWorkflowCommands(program: Command, engine: WorkflowEngine):
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine.listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    return null
-  }
-  return projects[0] ?? null
-}
 
 function parsePositiveInteger(value: string, option: string): number {
   const parsed = Number(value)

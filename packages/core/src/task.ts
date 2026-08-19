@@ -4,7 +4,7 @@
  * 每个任务对应一个阶段步骤（Stage）的实际执行实例。
  */
 
-import type { TaskId, ArtifactId, ProjectId } from "./branded-ids.js"
+import type { TaskId, ArtifactId, ProjectId, RequirementId } from "./branded-ids.js"
 import { Role } from "./role.js"
 import { Phase } from "./phase.js"
 
@@ -129,9 +129,10 @@ export interface TaskExportDocument {
   format: "octopus.tasks"
   version: 1
   exportedAt: string
-  sourceProject: {
+  sourceRequirement: {
     projectId: ProjectId
-    projectName: string
+    requirementId: RequirementId
+    requirementName: string
   }
   tasks: TaskExportEntry[]
 }
@@ -139,6 +140,7 @@ export interface TaskExportDocument {
 /** 合并导入结果 */
 export interface TaskImportResult {
   projectId: ProjectId
+  requirementId: RequirementId
   matched: number
   updated: number
   unchanged: number

@@ -21,8 +21,8 @@ describe("CHECKLIST_ITEM_STATUS_LABELS", () => {
 
 describe("createEmptyChecklist", () => {
   it("创建指定阶段的空清单", () => {
-    const checklist = createEmptyChecklist(Phase.DEVELOPMENT)
-    expect(checklist.phase).toBe(Phase.DEVELOPMENT)
+    const checklist = createEmptyChecklist(Phase.IMPLEMENTATION)
+    expect(checklist.phase).toBe(Phase.IMPLEMENTATION)
     expect(checklist.items).toEqual([])
   })
 })

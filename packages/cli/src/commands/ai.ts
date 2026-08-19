@@ -2,15 +2,16 @@
  * `octopus ai` —— AI 助手命令。
  *
  * 子命令:
- *   ask <prompt> [projectId]       — 询问 AI
- *   review [projectId]             — AI Code Review
- *   estimate [projectId]           — AI 估时
- *   check-sql <sql> [projectId]    — AI SQL 检测
- *   debt [projectId]               — AI 技术债务量化
+ *   ask <prompt> [requirementId]       — 询问 AI
+ *   review [requirementId]             — AI Code Review
+ *   estimate [requirementId]           — AI 估时
+ *   check-sql <sql> [requirementId]    — AI SQL 检测
+ *   debt [requirementId]               — AI 技术债务量化
  */
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 import type { AIClient } from "@octopus/agent-layer/index.js"
 import type { StateStore } from "@octopus/context/index.js"
 
@@ -53,15 +54,15 @@ export function buildAiCommands(
   aiCmd
     .command("review")
     .description("AI Code Review")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action(async (projectId?: string, options?: { json?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action(async (requirementId?: string, options?: { json?: boolean }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
 
       if (options?.json) {
         console.log(JSON.stringify({
-          projectId: pid,
+          requirementId: pid,
           result: "此功能需要读取 git diff 并调用 claude CLI。确保 claude CLI 已安装并登录。",
         }, null, 2))
         return
@@ -76,25 +77,25 @@ export function buildAiCommands(
   aiCmd
     .command("estimate")
     .description("AI 估时")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action(async (projectId?: string, options?: { json?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action(async (requirementId?: string, options?: { json?: boolean }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) {
-        console.log("⚠️  未指定项目 ID。")
+        console.log("⚠️  未指定需求 ID。")
         return
       }
 
       if (options?.json) {
         console.log(JSON.stringify({
-          projectId: pid,
+          requirementId: pid,
           result: "此功能需要 PRD 内容作为输入并调用 claude CLI。",
         }, null, 2))
         return
       }
 
       console.log("🤖 AI 估时分析中...")
-      console.log(`   项目: ${pid}`)
+      console.log(`   需求: ${pid}`)
       console.log("   此功能需要 PRD 内容作为输入并调用 claude CLI。")
     })
 
@@ -122,15 +123,15 @@ export function buildAiCommands(
   aiCmd
     .command("debt")
     .description("AI 技术债务量化")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action(async (projectId?: string, options?: { json?: boolean }) => {
-      const pid = resolveProjectId(engine, projectId)
+    .action(async (requirementId?: string, options?: { json?: boolean }) => {
+      const pid = resolveRequirementId(engine, requirementId)
       if (!pid) return
 
       if (options?.json) {
         console.log(JSON.stringify({
-          projectId: pid,
+          requirementId: pid,
           result: "此功能需要分析代码指标并调用 claude CLI。",
         }, null, 2))
         return
@@ -141,12 +142,3 @@ export function buildAiCommands(
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine["store"].listProjects()
-  if (projects.length === 0) {
-    console.log("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    return null
-  }
-  return projects[0] ?? null
-}

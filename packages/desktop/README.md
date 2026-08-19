@@ -25,7 +25,7 @@ Electron 无法启动或只需要本地浏览器展示时，在仓库根目录�
 pnpm web
 ```
 
-然后访问 `http://127.0.0.1:4173`。默认进入项目管理中心，可创建、打开、编辑和删除多个项目。打开项目后可在工作台切换**流程图**与 Teambition 风格**甘特图**（左侧树表 + 右侧时间条，支持日/周/月、只读、拖拽排期）。服务只监听 `127.0.0.1`，默认读取仓库根目录的 `.octo/state.sqlite`；使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改状态目录。页面复用 Electron renderer，但通过同源 HTTP API 访问真实工作流引擎。删除项目只清状态库记录，不会删除 `workflow.yaml`。
+然后访问 `http://127.0.0.1:4173`。默认进入项目管理中心，可创建、打开、编辑、删除项目，或在卡片上点「排期」展开该项目的节点甘特图（左侧树表 + 右侧时间条，支持日/周/月、只读、拖拽排期）。打开项目后进入角色泳道图（上方角色、左侧阶段）。服务只监听 `127.0.0.1`，默认读取仓库根目录的 `.octo/state.sqlite`；使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改状态目录。页面复用 Electron renderer，但通过同源 HTTP API 访问真实工作流引擎。删除项目只清状态库记录，不会删除 `workflow.yaml`。
 
 ## 打包为 macOS 应用
 
@@ -40,12 +40,12 @@ pnpm --filter @octopus/desktop dist:mac   # 输出 .dmg 到 packages/desktop/rel
 
 - `src/main.ts` — 主进程：初始化引擎、注册 IPC、创建窗口。
 - `src/preload.cjs` — contextBridge 暴露 `window.octopus`。
-- `src/renderer/` — 界面（原生 HTML/JS，无构建步骤）。
+- `src/renderer/` — 界面（原生 HTML/JS，无构建步骤）；`app-icon.png` 为窗口 / favicon / 打包图标。
 
 ## 当前已接能力
 
-- 项目管理中心：列出 / 创建 / 打开 / 改名 / 删除项目
-- 工作台双视图：角色泳道流程图 + Teambition 风格甘特图（节点计划起止可拖拽保存）
+- 项目管理中心：列出 / 创建 / 打开 / 改名 / 删除项目；卡片可展开节点甘特图排期
+- 工作台：角色泳道图（节点依赖与执行状态；拖拽平移、Ctrl/⌘+滚轮缩放，卡片中英双语，详情可跳转脚本目录；可收起左右侧栏）
 - 查看项目状态：阶段进度、任务/清单统计、海因里希三角（`status`）
 - 通过系统文件对话框导出版本化任务 JSON（`exportTasks`）
 - 确认后按 `stageId` 合并导入任务进度（`importTasks`）

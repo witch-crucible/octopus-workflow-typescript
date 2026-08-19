@@ -1,7 +1,7 @@
 /**
  * 执行记录与监控事件存储。
  *
- * 运行记录独立于项目聚合状态，worker 可以只更新自己的行，避免并行任务
+ * 运行记录独立于需求聚合状态，worker 可以只更新自己的行，避免并行任务
  * 通过整个 WorkflowState 的读写互相覆盖。
  */
 
@@ -9,10 +9,11 @@ import Database from "better-sqlite3"
 import { existsSync, mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 import type { IntegrationHealth, NodeRun, NodeRunStatus, WorkflowEvent } from "@octopus/core/execution.js"
+import { ensureStoreSchema } from "./schema.js"
 
 export interface CreateRunInput {
   readonly id?: string
-  projectId: string
+  requirementId: string
   nodeId: string
   forced: boolean
   stdoutPath: string
@@ -22,11 +23,11 @@ export interface CreateRunInput {
 export interface ExecutionStore {
   createRun(input: CreateRunInput): NodeRun
   getRun(runId: string): NodeRun | undefined
-  listRuns(projectId: string, nodeId?: string): NodeRun[]
+  listRuns(requirementId: string, nodeId?: string): NodeRun[]
   updateRun(runId: string, patch: Partial<NodeRun>): NodeRun
   transitionRun(runId: string, from: readonly NodeRunStatus[], patch: Partial<NodeRun>): NodeRun | undefined
   appendEvent(event: Omit<WorkflowEvent, "sequence">): WorkflowEvent
-  eventsAfter(projectId: string, sequence: number): WorkflowEvent[]
+  eventsAfter(requirementId: string, sequence: number): WorkflowEvent[]
   saveIntegrationHealth(health: IntegrationHealth): void
   listIntegrationHealth(): IntegrationHealth[]
   purge(before: string): number
@@ -34,7 +35,7 @@ export interface ExecutionStore {
 
 interface RunRow {
   id: string
-  project_id: string
+  requirement_id: string
   node_id: string
   status: NodeRunStatus
   forced: number
@@ -51,7 +52,7 @@ interface RunRow {
 
 interface EventRow {
   sequence: number
-  project_id: string
+  requirement_id: string
   run_id: string | null
   node_id: string | null
   type: WorkflowEvent["type"]
@@ -77,46 +78,7 @@ class SqliteExecutionStore implements ExecutionStore {
   private withDatabase<T>(callback: (db: Database.Database) => T): T {
     const db = new Database(this.databasePath)
     try {
-      db.pragma("journal_mode = WAL")
-      db.pragma("busy_timeout = 5000")
-      // 外键级联依赖 REFERENCES projects 约束，需在每个连接上开启。
-      db.pragma("foreign_keys = ON")
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS workflow_runs (
-          id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-          node_id TEXT NOT NULL,
-          status TEXT NOT NULL,
-          forced INTEGER NOT NULL,
-          pid INTEGER,
-          current_action INTEGER,
-          started_at TEXT,
-          finished_at TEXT,
-          heartbeat_at TEXT,
-          exit_code INTEGER,
-          error TEXT,
-          stdout_path TEXT NOT NULL,
-          stderr_path TEXT NOT NULL
-        ) STRICT;
-        CREATE INDEX IF NOT EXISTS workflow_runs_project_idx ON workflow_runs(project_id, node_id, started_at);
-        CREATE TABLE IF NOT EXISTS workflow_events (
-          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-          project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-          run_id TEXT,
-          node_id TEXT,
-          type TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        ) STRICT;
-        CREATE INDEX IF NOT EXISTS workflow_events_project_idx ON workflow_events(project_id, sequence);
-        CREATE TABLE IF NOT EXISTS integration_health (
-          service TEXT PRIMARY KEY,
-          healthy INTEGER NOT NULL,
-          latency_ms INTEGER NOT NULL,
-          message TEXT NOT NULL,
-          checked_at TEXT NOT NULL
-        ) STRICT;
-      `)
+      ensureStoreSchema(db)
       return callback(db)
     } finally {
       db.close()
@@ -128,13 +90,13 @@ class SqliteExecutionStore implements ExecutionStore {
     const id = input.id ?? `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     this.withDatabase((db) => {
       db.prepare(
-        `INSERT INTO workflow_runs(id, project_id, node_id, status, forced, stdout_path, stderr_path)
+        `INSERT INTO workflow_runs(id, requirement_id, node_id, status, forced, stdout_path, stderr_path)
          VALUES (?, ?, ?, 'QUEUED', ?, ?, ?)`,
-      ).run(id, input.projectId, input.nodeId, input.forced ? 1 : 0, input.stdoutPath, input.stderrPath)
+      ).run(id, input.requirementId, input.nodeId, input.forced ? 1 : 0, input.stdoutPath, input.stderrPath)
     })
     return {
       id,
-      projectId: input.projectId,
+      requirementId: input.requirementId,
       nodeId: input.nodeId,
       status: "QUEUED",
       forced: input.forced,
@@ -151,11 +113,11 @@ class SqliteExecutionStore implements ExecutionStore {
     })
   }
 
-  listRuns(projectId: string, nodeId?: string): NodeRun[] {
+  listRuns(requirementId: string, nodeId?: string): NodeRun[] {
     return this.withDatabase((db) => {
       const rows = (nodeId
-        ? db.prepare("SELECT * FROM workflow_runs WHERE project_id = ? AND node_id = ? ORDER BY rowid DESC").all(projectId, nodeId)
-        : db.prepare("SELECT * FROM workflow_runs WHERE project_id = ? ORDER BY rowid DESC").all(projectId)) as RunRow[]
+        ? db.prepare("SELECT * FROM workflow_runs WHERE requirement_id = ? AND node_id = ? ORDER BY rowid DESC").all(requirementId, nodeId)
+        : db.prepare("SELECT * FROM workflow_runs WHERE requirement_id = ? ORDER BY rowid DESC").all(requirementId)) as RunRow[]
       return rows.map(toRun)
     })
   }
@@ -194,10 +156,10 @@ class SqliteExecutionStore implements ExecutionStore {
   appendEvent(event: Omit<WorkflowEvent, "sequence">): WorkflowEvent {
     return this.withDatabase((db) => {
       const result = db.prepare(
-        `INSERT INTO workflow_events(project_id, run_id, node_id, type, payload_json, created_at)
+        `INSERT INTO workflow_events(requirement_id, run_id, node_id, type, payload_json, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       ).run(
-        event.projectId,
+        event.requirementId,
         event.runId ?? null,
         event.nodeId ?? null,
         event.type,
@@ -208,14 +170,14 @@ class SqliteExecutionStore implements ExecutionStore {
     })
   }
 
-  eventsAfter(projectId: string, sequence: number): WorkflowEvent[] {
+  eventsAfter(requirementId: string, sequence: number): WorkflowEvent[] {
     return this.withDatabase((db) => {
       const rows = db.prepare(
-        "SELECT * FROM workflow_events WHERE project_id = ? AND sequence > ? ORDER BY sequence ASC",
-      ).all(projectId, sequence) as EventRow[]
+        "SELECT * FROM workflow_events WHERE requirement_id = ? AND sequence > ? ORDER BY sequence ASC",
+      ).all(requirementId, sequence) as EventRow[]
       return rows.map((row) => ({
         sequence: row.sequence,
-        projectId: row.project_id,
+        requirementId: row.requirement_id,
         ...(row.run_id !== null ? { runId: row.run_id } : {}),
         ...(row.node_id !== null ? { nodeId: row.node_id } : {}),
         type: row.type,
@@ -294,7 +256,7 @@ function runPatch(runId: string, patch: Partial<NodeRun>): {
 function toRun(row: RunRow): NodeRun {
   return {
     id: row.id,
-    projectId: row.project_id,
+    requirementId: row.requirement_id,
     nodeId: row.node_id,
     status: row.status,
     forced: row.forced === 1,

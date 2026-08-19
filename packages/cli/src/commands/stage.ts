@@ -2,13 +2,14 @@
  * `octopus stage` —— 阶段步骤管理命令。
  *
  * 子命令:
- *   list [phase] [projectId]        — 列出阶段步骤
- *   status <stageId> [projectId]    — 查看步骤状态
- *   update <stageId> <status> [projectId] — 更新步骤状态
+ *   list [phase] [requirementId]        — 列出阶段步骤
+ *   status <stageId> [requirementId]    — 查看步骤状态
+ *   update <stageId> <status> [requirementId] — 更新步骤状态
  */
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { resolveRequirementId } from "../resolve-requirement.js"
 import { Phase } from "@octopus/core/phase.js"
 import { StageStatus, STAGE_STATUS_LABELS } from "@octopus/core/task.js"
 
@@ -22,11 +23,11 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
     .command("list")
     .description("列出阶段步骤")
     .argument("[phase]", "阶段名称（默认当前阶段）")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((phaseName?: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((phaseName?: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const state = engine.getState(pid)
@@ -38,7 +39,7 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
 
         if (options?.json) {
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             phase,
             stages: stages.map((s) => ({
               stageId: s.stageId,
@@ -68,11 +69,11 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
     .command("status")
     .description("查看步骤状态")
     .argument("<stageId>", "步骤 ID")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((stageId: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((stageId: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const stage = engine.getStageInfo(pid, stageId)
@@ -85,7 +86,7 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
 
         if (options?.json) {
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             stageId: stage.stageId,
             phase: stage.phase,
             status: stage.status,
@@ -117,11 +118,11 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
     .description("更新步骤状态")
     .argument("<stageId>", "步骤 ID")
     .argument("<status>", "新状态 (PENDING|IN_PROGRESS|COMPLETED|BLOCKED|SKIPPED)")
-    .argument("[projectId]", "项目 ID")
+    .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((stageId: string, status: string, projectId?: string, options?: { json?: boolean }) => {
+    .action((stageId: string, status: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveProjectId(engine, projectId)
+        const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const normalized = Object.values(StageStatus).find((s) => s.toLowerCase() === status.toLowerCase())
@@ -136,7 +137,7 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
         if (options?.json) {
           const stage = engine.getStageInfo(pid, stageId)
           console.log(JSON.stringify({
-            projectId: pid,
+            requirementId: pid,
             stageId,
             status: stage?.status,
             updatedAt: stage?.updatedAt,
@@ -152,13 +153,3 @@ export function buildStageCommands(program: Command, engine: WorkflowEngine): vo
     })
 }
 
-function resolveProjectId(engine: WorkflowEngine, projectId?: string): string | null {
-  if (projectId) return projectId
-  const projects = engine["store"].listProjects()
-  if (projects.length === 0) {
-    console.error("⚠️  没有找到项目。使用 `octopus init <name>` 创建新项目。")
-    process.exit(1)
-    return null
-  }
-  return projects[0] ?? null
-}

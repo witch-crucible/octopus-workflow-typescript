@@ -19,22 +19,33 @@ afterEach(() => {
 })
 
 /** 完成某阶段全部任务 */
-function completeAllPhaseTasks(engine: WorkflowEngine, projectId: string, phase: Phase): void {
-  for (const task of engine.getTasks(projectId, { phase })) {
+function completeAllPhaseTasks(engine: WorkflowEngine, requirementId: string, phase: Phase): void {
+  for (const task of engine.getTasks(requirementId, { phase })) {
     if (task.status !== TaskStatus.COMPLETED) {
-      engine.completeTask(projectId, task.id)
+      engine.completeTask(requirementId, task.id)
     }
   }
+}
+
+
+function initNamedRequirement(
+  engine: WorkflowEngine,
+  name: string,
+  description?: string,
+  projectRoot?: string,
+) {
+  const project = engine.createProject(name, description)
+  return engine.initRequirement(project.projectId, name, description, projectRoot)
 }
 
 describe("NodeExecutionService", () => {
   it("取消运行后同步把 IN_PROGRESS 节点标记为 BLOCKED", () => {
     const store = createStateStore({ storeDir: testStoreDir })
     const engine = new WorkflowEngine({ store })
-    const state = engine.initProject("cancel_consistency")
+    const state = initNamedRequirement(engine, "cancel_consistency")
     const step = state.steps.find((candidate) => candidate.id === "10.1")
     if (!step) throw new Error("测试节点不存在")
-    store.update(state.projectId, (current) => {
+    store.update(state.requirementId, (current) => {
       const target = current.steps.find((candidate) => candidate.id === step.id)
       if (target) target.status = TaskStatus.IN_PROGRESS
       return current
@@ -48,7 +59,7 @@ describe("NodeExecutionService", () => {
     }).executions
     const run: NodeRun = {
       id: "run_cancel_test",
-      projectId: state.projectId,
+      requirementId: state.requirementId,
       nodeId: step.id,
       status: "RUNNING",
       forced: false,
@@ -60,8 +71,8 @@ describe("NodeExecutionService", () => {
     executions.transitionRun = (_runId, _from, patch) => ({ ...run, ...patch })
     executions.appendEvent = () => ({})
 
-    expect(engine.execution.cancelRun(state.projectId, run.id).status).toBe("CANCELED")
-    expect(engine.getState(state.projectId).steps.find((candidate) => candidate.id === step.id)).toMatchObject({
+    expect(engine.execution.cancelRun(state.requirementId, run.id).status).toBe("CANCELED")
+    expect(engine.getState(state.requirementId).steps.find((candidate) => candidate.id === step.id)).toMatchObject({
       status: TaskStatus.BLOCKED,
       notes: "运行已取消",
     })
@@ -69,18 +80,18 @@ describe("NodeExecutionService", () => {
 
   it("拒绝超过 Node 定时器上限的轮询间隔", async () => {
     const engine = new WorkflowEngine({ store: createStateStore({ storeDir: testStoreDir }) })
-    const state = engine.initProject("timer_limit")
+    const state = initNamedRequirement(engine, "timer_limit")
 
-    await expect(engine.runWorkflow(state.projectId, { pollIntervalMs: 2_147_483_648 })).rejects.toThrow(
+    await expect(engine.runWorkflow(state.requirementId, { pollIntervalMs: 2_147_483_648 })).rejects.toThrow(
       "pollIntervalMs 必须是 100 至 2147483647ms 的整数",
     )
   })
 
   it("没有活动运行时向调用方报告确定性启动错误", async () => {
     const engine = new WorkflowEngine({ store: createStateStore({ storeDir: testStoreDir }) })
-    const state = engine.initProject("launch_failure")
+    const state = initNamedRequirement(engine, "launch_failure")
     vi.spyOn(engine.execution, "getSnapshot").mockReturnValue({
-      projectId: state.projectId,
+      requirementId: state.requirementId,
       currentNodeIds: ["10.1"],
       readyNodeIds: ["10.1"],
       waitingNodeIds: [],
@@ -92,7 +103,7 @@ describe("NodeExecutionService", () => {
       throw new Error("worker 启动失败")
     })
 
-    await expect(engine.runWorkflow(state.projectId)).rejects.toThrow("worker 启动失败")
+    await expect(engine.runWorkflow(state.requirementId)).rejects.toThrow("worker 启动失败")
     expect(launch).toHaveBeenCalledTimes(1)
   })
 })
@@ -102,20 +113,20 @@ describe("WorkflowEngine 事务化更新", () => {
     const store = createStateStore({ storeDir: testStoreDir })
     const saveSpy = vi.spyOn(store, "save")
     const engine = new WorkflowEngine({ store })
-    const state = engine.initProject("concurrent_tasks")
+    const state = initNamedRequirement(engine, "concurrent_tasks")
     saveSpy.mockClear()
-    const pending = engine.getTasks(state.projectId).filter((t) => t.status === TaskStatus.PENDING)
+    const pending = engine.getTasks(state.requirementId).filter((t) => t.status === TaskStatus.PENDING)
     const first = pending[0]!
     const second = pending[1]!
     const concurrentEngine = new WorkflowEngine({ store })
 
     await Promise.all([
-      Promise.resolve().then(() => engine.completeTask(state.projectId, first.id)),
-      Promise.resolve().then(() => concurrentEngine.completeTask(state.projectId, second.id)),
+      Promise.resolve().then(() => engine.completeTask(state.requirementId, first.id)),
+      Promise.resolve().then(() => concurrentEngine.completeTask(state.requirementId, second.id)),
     ])
 
     expect(saveSpy).not.toHaveBeenCalled()
-    const after = engine.getTasks(state.projectId)
+    const after = engine.getTasks(state.requirementId)
     expect(after.find((t) => t.id === first.id)?.status).toBe(TaskStatus.COMPLETED)
     expect(after.find((t) => t.id === second.id)?.status).toBe(TaskStatus.COMPLETED)
   })
@@ -127,19 +138,19 @@ describe("Heinrich 审计步骤自动完成", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       heinrichThreshold: 1,
     })
-    const state = engine.initProject("heinrich_audit_auto")
-    completeAllPhaseTasks(engine, state.projectId, Phase.REQUIREMENTS_ANALYSIS)
+    const state = initNamedRequirement(engine, "heinrich_audit_auto")
+    completeAllPhaseTasks(engine, state.requirementId, Phase.INTENTION)
     // 阶段前进会给下一阶段计数 +1，达到阈值 1 时创建审计步骤
-    const design = engine.advancePhase(state.projectId)
-    expect(design.currentPhase).toBe(Phase.DESIGN)
-    const auditId = `heinrich.audit.${Phase.DESIGN}`
-    const auditStep = engine.getState(state.projectId).steps.find((s) => s.id === auditId)
+    const research = engine.advancePhase(state.requirementId)
+    expect(research.currentPhase).toBe(Phase.RESEARCH)
+    const auditId = `heinrich.audit.${Phase.RESEARCH}`
+    const auditStep = engine.getState(state.requirementId).steps.find((s) => s.id === auditId)
     expect(auditStep).toBeDefined()
     expect(auditStep?.status).toBe(TaskStatus.PENDING)
 
-    engine.assessQuality(state.projectId)
+    engine.assessQuality(state.requirementId)
 
-    const completed = engine.getState(state.projectId).steps.find((s) => s.id === auditId)
+    const completed = engine.getState(state.requirementId).steps.find((s) => s.id === auditId)
     expect(completed?.status).toBe(TaskStatus.COMPLETED)
     expect(completed?.completedAt).toBeTruthy()
   })
@@ -149,23 +160,23 @@ describe("Heinrich 审计步骤自动完成", () => {
       store: createStateStore({ storeDir: testStoreDir }),
       heinrichThreshold: 100,
     })
-    const state = engine.initProject("heinrich_audit_none")
-    const assessment = engine.assessQuality(state.projectId)
+    const state = initNamedRequirement(engine, "heinrich_audit_none")
+    const assessment = engine.assessQuality(state.requirementId)
     expect(assessment.verdict).toBe("INSUFFICIENT_DATA")
-    const auditStep = engine.getState(state.projectId).steps.find((s) => s.id === `heinrich.audit.${state.currentPhase}`)
+    const auditStep = engine.getState(state.requirementId).steps.find((s) => s.id === `heinrich.audit.${state.currentPhase}`)
     expect(auditStep).toBeUndefined()
   })
 })
 
 describe("recoverStaleRuns", () => {
   function executionsOf(engine: WorkflowEngine): {
-    createRun(input: { id: string; projectId: string; nodeId: string; forced: boolean; stdoutPath: string; stderrPath: string }): NodeRun
+    createRun(input: { id: string; requirementId: string; nodeId: string; forced: boolean; stdoutPath: string; stderrPath: string }): NodeRun
     updateRun(runId: string, patch: Partial<NodeRun>): NodeRun
     appendEvent(event: unknown): unknown
   } {
     return (engine.execution as unknown as {
       executions: {
-        createRun(input: { id: string; projectId: string; nodeId: string; forced: boolean; stdoutPath: string; stderrPath: string }): NodeRun
+        createRun(input: { id: string; requirementId: string; nodeId: string; forced: boolean; stdoutPath: string; stderrPath: string }): NodeRun
         updateRun(runId: string, patch: Partial<NodeRun>): NodeRun
         appendEvent(event: unknown): unknown
       }
@@ -175,13 +186,13 @@ describe("recoverStaleRuns", () => {
   it("心跳超时的 RUNNING 运行被中断，节点置 BLOCKED 并写入 RUN_FAILED 事件", () => {
     const store = createStateStore({ storeDir: testStoreDir })
     const engine = new WorkflowEngine({ store })
-    const state = engine.initProject("stale_runs")
+    const state = initNamedRequirement(engine, "stale_runs")
     const step = state.steps.find((candidate) => candidate.id === "10.1")
     if (!step) throw new Error("测试节点不存在")
     const executions = executionsOf(engine)
     const staleRun = executions.createRun({
       id: "run_stale_1",
-      projectId: state.projectId,
+      requirementId: state.requirementId,
       nodeId: step.id,
       forced: false,
       stdoutPath: "stale.out",
@@ -189,21 +200,21 @@ describe("recoverStaleRuns", () => {
     })
     const oldHeartbeat = new Date(Date.now() - 60 * 60 * 1000).toISOString()
     executions.updateRun(staleRun.id, { status: "RUNNING", heartbeatAt: oldHeartbeat })
-    store.update(state.projectId, (current) => {
+    store.update(state.requirementId, (current) => {
       const target = current.steps.find((candidate) => candidate.id === step.id)
       if (target) target.status = TaskStatus.IN_PROGRESS
       return current
     })
 
-    const recovered = engine.recoverStaleRuns(state.projectId)
+    const recovered = engine.recoverStaleRuns(state.requirementId)
 
     expect(recovered).toBe(1)
-    expect(engine.execution.listRuns(state.projectId).find((run) => run.id === staleRun.id)?.status).toBe("INTERRUPTED")
-    expect(engine.getState(state.projectId).steps.find((candidate) => candidate.id === step.id)).toMatchObject({
+    expect(engine.execution.listRuns(state.requirementId).find((run) => run.id === staleRun.id)?.status).toBe("INTERRUPTED")
+    expect(engine.getState(state.requirementId).steps.find((candidate) => candidate.id === step.id)).toMatchObject({
       status: TaskStatus.BLOCKED,
       notes: "运行超过心跳超时未上报，判定为僵死",
     })
-    const failedEvents = engine.execution.eventsAfter(state.projectId).filter((event) => event.type === "RUN_FAILED")
+    const failedEvents = engine.execution.eventsAfter(state.requirementId).filter((event) => event.type === "RUN_FAILED")
     expect(failedEvents).toHaveLength(1)
     expect(failedEvents[0]?.payload).toMatchObject({ status: "INTERRUPTED" })
   })
@@ -211,13 +222,13 @@ describe("recoverStaleRuns", () => {
   it("心跳新鲜的 RUNNING 运行不会被误杀", () => {
     const store = createStateStore({ storeDir: testStoreDir })
     const engine = new WorkflowEngine({ store })
-    const state = engine.initProject("fresh_runs")
+    const state = initNamedRequirement(engine, "fresh_runs")
     const step = state.steps.find((candidate) => candidate.id === "10.1")
     if (!step) throw new Error("测试节点不存在")
     const executions = executionsOf(engine)
     const freshRun = executions.createRun({
       id: "run_fresh_1",
-      projectId: state.projectId,
+      requirementId: state.requirementId,
       nodeId: step.id,
       forced: false,
       stdoutPath: "fresh.out",
@@ -225,9 +236,9 @@ describe("recoverStaleRuns", () => {
     })
     executions.updateRun(freshRun.id, { status: "RUNNING", heartbeatAt: new Date().toISOString() })
 
-    const recovered = engine.recoverStaleRuns(state.projectId, 30_000)
+    const recovered = engine.recoverStaleRuns(state.requirementId, 30_000)
 
     expect(recovered).toBe(0)
-    expect(engine.execution.listRuns(state.projectId).find((run) => run.id === freshRun.id)?.status).toBe("RUNNING")
+    expect(engine.execution.listRuns(state.requirementId).find((run) => run.id === freshRun.id)?.status).toBe("RUNNING")
   })
 })

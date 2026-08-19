@@ -47,34 +47,34 @@ afterEach(() => {
 
 describe("parseArgs", () => {
   it("支持 --key value 与 --key=value 混用", () => {
-    const args = parseArgs(["--store-dir", "/tmp/store", "--project-id=proj_x", "--run-id", "run_y"])
+    const args = parseArgs(["--store-dir", "/tmp/store", "--requirement-id=proj_x", "--run-id", "run_y"])
 
-    expect(args).toEqual({ storeDir: "/tmp/store", projectId: "proj_x", runId: "run_y" })
+    expect(args).toEqual({ storeDir: "/tmp/store", requirementId: "proj_x", runId: "run_y" })
   })
 
   it("支持引号包裹的带空格值", () => {
     const args = parseArgs([
       "--store-dir",
       '"/tmp/my store"',
-      "--project-id",
+      "--requirement-id",
       "'proj x'",
       "--run-id",
       "run_y",
     ])
 
     expect(args.storeDir).toBe("/tmp/my store")
-    expect(args.projectId).toBe("proj x")
+    expect(args.requirementId).toBe("proj x")
     expect(args.runId).toBe("run_y")
   })
 
   it("支持 --flag 布尔参数且不吞并后续位置", () => {
-    const args = parseArgs(["--store-dir", "/tmp/store", "--verbose", "--project-id", "proj_x", "--run-id", "run_y"])
+    const args = parseArgs(["--store-dir", "/tmp/store", "--verbose", "--requirement-id", "proj_x", "--run-id", "run_y"])
 
-    expect(args).toEqual({ storeDir: "/tmp/store", projectId: "proj_x", runId: "run_y" })
+    expect(args).toEqual({ storeDir: "/tmp/store", requirementId: "proj_x", runId: "run_y" })
   })
 
   it("缺失必需参数时抛出清晰错误", () => {
-    expect(() => parseArgs(["--store-dir", "/tmp/store", "--run-id", "run_y"])).toThrow("--project-id")
+    expect(() => parseArgs(["--store-dir", "/tmp/store", "--run-id", "run_y"])).toThrow("--requirement-id")
     expect(() => parseArgs(["--run-id", "run_y"])).toThrow("--store-dir")
     expect(() => parseArgs([])).toThrow("--store-dir")
   })
@@ -84,19 +84,20 @@ describe("heinrich action 阶段归属", () => {
   it("触发计数与观测使用 step.phase 而非 state.currentPhase", async () => {
     const storeDir = createTemporaryDirectory()
     const stateStore = createStateStore({ storeDir })
-    const projectId = stateStore.createProject("测试项目", "", "/tmp").projectId
+    const project = stateStore.createProject("测试项目")
+    const requirementId = stateStore.createRequirement(project.projectId, "测试需求", "", "/tmp").requirementId
     const step = createTestStep(Phase.TESTING)
-    stateStore.update(projectId, (current) => {
+    stateStore.update(requirementId, (current) => {
       current.steps.push(step)
-      current.currentPhase = Phase.REQUIREMENTS_ANALYSIS
+      current.currentPhase = Phase.INTENTION
       return current
     })
 
     const context: ActionContext = {
-      args: { storeDir, projectId, runId: "run_test" },
+      args: { storeDir, requirementId, runId: "run_test" },
       nodePath: "/tmp",
       stateStore,
-      stateProjectId: projectId,
+      stateRequirementId: requirementId,
       config: DEFAULT_CONFIG,
       projectRoot: "/tmp",
       fallbackAIInput: "fallback",
@@ -111,9 +112,9 @@ describe("heinrich action 阶段归属", () => {
     const result = await executeAction({ type: "heinrich", delta: 3, level: HeinrichLevel.MINOR }, context)
 
     expect(result).toEqual({})
-    const state = stateStore.load(projectId)
+    const state = stateStore.load(requirementId)
     expect(state.heinrich.triggerCounts[Phase.TESTING]).toBe(3)
-    expect(state.heinrich.triggerCounts[Phase.REQUIREMENTS_ANALYSIS]).toBe(0)
+    expect(state.heinrich.triggerCounts[Phase.INTENTION]).toBe(0)
     expect(state.heinrich.observations).toHaveLength(1)
     expect(state.heinrich.observations[0]?.phase).toBe(Phase.TESTING)
     expect(state.heinrich.observations[0]?.level).toBe(HeinrichLevel.MINOR)
@@ -125,24 +126,25 @@ describe("markInterruptedRun", () => {
     const storeDir = createTemporaryDirectory()
     const executionStore = createExecutionStore(storeDir)
     const stateStore = createStateStore({ storeDir })
-    const projectId = stateStore.createProject("测试项目", "", "/tmp").projectId
+    const project = stateStore.createProject("测试项目")
+    const requirementId = stateStore.createRequirement(project.projectId, "测试需求", "", "/tmp").requirementId
     const run = executionStore.createRun({
       id: "run_interrupt",
-      projectId,
+      requirementId,
       nodeId: "step_test",
       forced: false,
       stdoutPath: join(storeDir, "stdout.log"),
       stderrPath: join(storeDir, "stderr.log"),
     })
     executionStore.transitionRun(run.id, ["QUEUED"], { status: "RUNNING" })
-    stateStore.update(projectId, (current) => {
+    stateStore.update(requirementId, (current) => {
       current.steps.push(createTestStep())
       return current
     })
 
     const originalExitCode = process.exitCode
     try {
-      markInterruptedRun(executionStore, stateStore, { storeDir, projectId, runId: run.id }, "step_test")
+      markInterruptedRun(executionStore, stateStore, { storeDir, requirementId, runId: run.id }, "step_test")
     } finally {
       process.exitCode = originalExitCode
     }
@@ -150,10 +152,10 @@ describe("markInterruptedRun", () => {
     const interrupted = executionStore.getRun(run.id)
     expect(interrupted?.status).toBe("INTERRUPTED")
     expect(interrupted?.error).toBe("运行被外部信号中断")
-    expect(stateStore.load(projectId).steps.find((candidate) => candidate.id === "step_test")?.status).toBe(
+    expect(stateStore.load(requirementId).steps.find((candidate) => candidate.id === "step_test")?.status).toBe(
       TaskStatus.BLOCKED,
     )
-    const events = executionStore.eventsAfter(projectId, 0)
+    const events = executionStore.eventsAfter(requirementId, 0)
     expect(events.some((event) => event.type === "RUN_FAILED" && event.payload["status"] === "INTERRUPTED")).toBe(true)
   })
 
@@ -161,10 +163,11 @@ describe("markInterruptedRun", () => {
     const storeDir = createTemporaryDirectory()
     const executionStore = createExecutionStore(storeDir)
     const stateStore = createStateStore({ storeDir })
-    const projectId = stateStore.createProject("测试项目", "", "/tmp").projectId
+    const project = stateStore.createProject("测试项目")
+    const requirementId = stateStore.createRequirement(project.projectId, "测试需求", "", "/tmp").requirementId
     const run = executionStore.createRun({
       id: "run_canceled",
-      projectId,
+      requirementId,
       nodeId: "step_test",
       forced: false,
       stdoutPath: join(storeDir, "stdout.log"),
@@ -172,7 +175,7 @@ describe("markInterruptedRun", () => {
     })
     executionStore.transitionRun(run.id, ["QUEUED"], { status: "CANCELED", error: "运行已取消" })
 
-    markInterruptedRun(executionStore, stateStore, { storeDir, projectId, runId: run.id }, "step_test")
+    markInterruptedRun(executionStore, stateStore, { storeDir, requirementId, runId: run.id }, "step_test")
 
     const canceled = executionStore.getRun(run.id)
     expect(canceled?.status).toBe("CANCELED")

@@ -12,12 +12,14 @@ const temporaryDirectories: string[] = []
 function createRun() {
   const storeDir = mkdtempSync(join(tmpdir(), "octopus-execution-"))
   temporaryDirectories.push(storeDir)
-  // workflow_runs 的 project_id 外键引用 projects，需先建 project。
-  const projectId = createStateStore({ storeDir }).createProject("测试项目").projectId
+  // workflow_runs 的 requirement_id 外键引用 requirements，需先建项目与需求。
+  const stateStore = createStateStore({ storeDir })
+  const project = stateStore.createProject("测试项目")
+  const requirementId = stateStore.createRequirement(project.projectId, "测试需求").requirementId
   const store = createExecutionStore(storeDir)
   const run = store.createRun({
     id: "run_test",
-    projectId,
+    requirementId,
     nodeId: "node_test",
     forced: false,
     stdoutPath: join(storeDir, "stdout.log"),
@@ -105,13 +107,13 @@ describe("ExecutionStore.updateRun", () => {
 
     const updated = store.updateRun(run.id, {
       id: "other_run",
-      projectId: "other_project",
+      requirementId: "other_requirement",
       nodeId: "other_node",
     })
 
     expect(updated).toMatchObject({
       id: run.id,
-      projectId: run.projectId,
+      requirementId: run.requirementId,
       nodeId: run.nodeId,
     })
     expect(store.getRun("other_run")).toBeUndefined()

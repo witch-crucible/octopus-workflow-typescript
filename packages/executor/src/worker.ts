@@ -24,7 +24,7 @@ import { prepareAIOutput, writeAIOutput } from "./ai-output.js"
 
 export interface WorkerArgs {
   storeDir: string
-  projectId: string
+  requirementId: string
   runId: string
 }
 
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   const stateStore = createStateStore({ storeDir: args.storeDir })
   const run = executionStore.getRun(args.runId)
   if (!run) throw new Error(`运行不存在: ${args.runId}`)
-  const state = stateStore.load(args.projectId)
+  const state = stateStore.load(args.requirementId)
   const step = state.steps.find((candidate) => candidate.id === run.nodeId)
   if (!step) throw new Error(`节点不存在: ${run.nodeId}`)
 
@@ -88,7 +88,7 @@ async function main(): Promise<void> {
         args,
         nodePath,
         stateStore,
-        stateProjectId: args.projectId,
+        stateRequirementId: args.requirementId,
         config,
         projectRoot,
         fallbackAIInput: `${step.name}：${step.description}`,
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
     })
     if (!succeeded) return
     try {
-      stateStore.update(args.projectId, (current) => {
+      stateStore.update(args.requirementId, (current) => {
         const target = current.steps.find((candidate) => candidate.id === run.nodeId)
         if (target) {
           target.status = TaskStatus.COMPLETED
@@ -141,7 +141,7 @@ async function main(): Promise<void> {
       error: failure.message,
     })
     if (!failed) return
-    stateStore.update(args.projectId, (current) => {
+    stateStore.update(args.requirementId, (current) => {
       const target = current.steps.find((candidate) => candidate.id === run.nodeId)
       if (target) {
         // 任务状态模型只有 BLOCKED 作为失败落点：CANCELED/FAILED/TIMED_OUT/INTERRUPTED 统一归入。
@@ -162,7 +162,7 @@ export interface ActionContext {
   args: WorkerArgs
   nodePath: string
   stateStore: ReturnType<typeof createStateStore>
-  stateProjectId: string
+  stateRequirementId: string
   config: ReturnType<typeof loadConfig>
   projectRoot: string
   fallbackAIInput: string
@@ -197,7 +197,7 @@ export async function executeAction(
   }
   if (action.type === "heinrich") {
     const phase = context.step.phase
-    context.stateStore.update(context.stateProjectId, (state) => {
+    context.stateStore.update(context.stateRequirementId, (state) => {
       state.heinrich.triggerCounts[phase] = (state.heinrich.triggerCounts[phase] ?? 0) + action.delta
       state.heinrich.observations.push({
         id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
@@ -227,7 +227,7 @@ export async function executeAction(
   if (action.type === "custom") {
     const handler = context.pluginHost.customHandlers.get(action.name)
     if (!handler) throw new WorkerFailure("FAILED", `未注册自定义能力: ${action.name}`)
-    const state = context.stateStore.load(context.stateProjectId)
+    const state = context.stateStore.load(context.stateRequirementId)
     const step = state.steps.find((candidate) => candidate.id === context.step.id) ?? context.step
     const result = await handler(
       action.input === undefined
@@ -301,7 +301,7 @@ function appendEvent(
   payload: Record<string, unknown>,
 ): void {
   store.appendEvent({
-    projectId: args.projectId,
+    requirementId: args.requirementId,
     runId: args.runId,
     type,
     payload,
@@ -332,12 +332,12 @@ export function parseArgs(argv: string[]): WorkerArgs {
     }
   }
   const storeDir = values.get("--store-dir")
-  const projectId = values.get("--project-id")
+  const requirementId = values.get("--requirement-id")
   const runId = values.get("--run-id")
   if (!storeDir) throw new Error("worker 缺少必需参数 --store-dir")
-  if (!projectId) throw new Error("worker 缺少必需参数 --project-id")
+  if (!requirementId) throw new Error("worker 缺少必需参数 --requirement-id")
   if (!runId) throw new Error("worker 缺少必需参数 --run-id")
-  return { storeDir, projectId, runId }
+  return { storeDir, requirementId, runId }
 }
 
 function unquote(value: string): string {
@@ -369,7 +369,7 @@ export function markInterruptedRun(
     error: "运行被外部信号中断",
   })
   if (!interrupted) return
-  stateStore.update(args.projectId, (current) => {
+  stateStore.update(args.requirementId, (current) => {
     const target = current.steps.find((candidate) => candidate.id === nodeId)
     if (target) {
       target.status = TaskStatus.BLOCKED
