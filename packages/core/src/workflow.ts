@@ -16,9 +16,10 @@ import type { HeinrichRecord, HeinrichObservation, HeinrichLevel } from "./risk.
 import { createEmptyHeinrichRecord } from "./risk.js"
 import type { Artifact, ArtifactType } from "./artifact.js"
 import { Role } from "./role.js"
+import type { MilestoneSummary, RequirementMilestone } from "./milestone.js"
 
-/** 当前状态结构版本（v5 = 项目 ⊃ 需求 + Teambition 绑定） */
-export const CURRENT_SCHEMA_VERSION = 5
+/** 当前状态结构版本（v8 = 需求负责人 owner） */
+export const CURRENT_SCHEMA_VERSION = 8
 
 /** 需求级 Teambition 任务绑定 */
 export interface RequirementTeambitionBinding {
@@ -64,6 +65,14 @@ export interface WorkflowState {
   metadata: Record<string, string>
   /** Teambition 任务绑定 */
   teambition?: RequirementTeambitionBinding
+  /** 需求级计划开始日期（YYYY-MM-DD） */
+  plannedStart?: string
+  /** 需求级计划结束日期（YYYY-MM-DD） */
+  plannedEnd?: string
+  /** 需求负责人 */
+  owner?: string
+  /** 需求级单日里程碑 */
+  milestones?: RequirementMilestone[]
   /** AI 门控开关 */
   aiGatingEnabled: boolean
   /** AI 门控审计记录 */
@@ -117,6 +126,12 @@ export interface RequirementSummary {
   updatedAt: string
   teambitionTaskId?: string
   teambitionStatusName?: string
+  plannedStart?: string
+  plannedEnd?: string
+  /** 需求负责人 */
+  owner?: string
+  milestoneCount?: number
+  nextMilestone?: MilestoneSummary
 }
 
 // ── 派生视图 ──
@@ -188,6 +203,7 @@ export function createEmptyState(
     heinrich: createEmptyHeinrichRecord(),
     artifacts: [],
     metadata: {},
+    milestones: [],
     aiGatingEnabled: false,
     aiGateResults: [],
   }
@@ -366,6 +382,7 @@ function remapHeinrichPhases<T extends { triggerCounts?: Partial<Record<string, 
  * v2+ 保留 steps 并补齐版本号；v1（tasks[]+stages{}）按 stageId 归并为 steps[]。
  * v4 将旧六段 Phase 映射为九段生命周期。
  * v5 将旧「项目」字段下沉为「需求」，并要求所属 projectId。
+ * v7 补齐 milestones[]。
  */
 export function migrateWorkflowState(raw: unknown, options?: { projectId?: ProjectId }): WorkflowState {
   const state = raw as WorkflowState & {
@@ -464,6 +481,7 @@ export function migrateWorkflowState(raw: unknown, options?: { projectId?: Proje
     heinrich,
     aiGateResults,
     ...(state.teambition !== undefined ? { teambition: state.teambition } : {}),
+    milestones: Array.isArray(state.milestones) ? state.milestones : [],
   }
   delete (migrated as { tasks?: unknown }).tasks
   delete (migrated as { stages?: unknown }).stages

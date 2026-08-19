@@ -60,6 +60,9 @@ nodes:
     dependsOn: []
     actions:
       - type: manual
+        instructions: >-
+          Configure project BRD sources and prompts (octopus brd config / Web settings),
+          then run octopus brd generate or octopus brd check. Confirm brd.md before completing this node.
   - key: brd-walkthrough
     phase: Intention
     name: BRD Walkthrough

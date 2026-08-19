@@ -47,10 +47,10 @@ export interface AgentCallRecord {
   error?: string
 }
 
-/** AI 助手标识。内置 12 类见 `AIAssistantType`；插件可注册额外字符串 id。 */
+/** AI 助手标识。内置类型见 `AIAssistantType`；插件可注册额外字符串 id。 */
 export type AssistantId = string
 
-/** AI 辅助功能类型枚举 —— 映射 PlantUML 中的 AI 介入点 */
+/** AI 辅助功能类型枚举 —— 映射 PlantUML 中的 AI 介入点，并含 BRD 生成/检查 */
 export enum AIAssistantType {
   /** 会议纪要 */
   MEETING_MINUTES = "MEETING_MINUTES",
@@ -76,6 +76,10 @@ export enum AIAssistantType {
   SETUP_CHECKLIST_CHECK = "SETUP_CHECKLIST_CHECK",
   /** Checklist 增量推荐 */
   CHECKLIST_RECOMMENDATION = "CHECKLIST_RECOMMENDATION",
+  /** BRD 生成 */
+  BRD_GENERATE = "BRD_GENERATE",
+  /** BRD 完善性检查 */
+  BRD_CHECK = "BRD_CHECK",
 }
 
 /** AI 辅助功能标签映射 */
@@ -92,6 +96,8 @@ export const AI_ASSISTANT_LABELS: Record<AIAssistantType, string> = {
   [AIAssistantType.TECH_DEBT_QUANTIFICATION]: "技术债务量化",
   [AIAssistantType.SETUP_CHECKLIST_CHECK]: "Setup Checklist 校验",
   [AIAssistantType.CHECKLIST_RECOMMENDATION]: "Checklist 增量推荐",
+  [AIAssistantType.BRD_GENERATE]: "BRD 生成",
+  [AIAssistantType.BRD_CHECK]: "BRD 检查",
 }
 
 /** AI 门控事件类型 */

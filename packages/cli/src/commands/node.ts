@@ -255,6 +255,27 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
       }
     })
 
+  node.command("assign")
+    .description("设置或清除节点负责人")
+    .argument("<nodeId>", "节点 ID（内部 id，如 node show 输出）")
+    .argument("[name]", "负责人姓名；不传则清除")
+    .requiredOption("--requirement <requirementId>", "需求 ID")
+    .option("--json", "以 JSON 输出")
+    .action((nodeId: string, name: string | undefined, options: { requirement: string; json?: boolean }) => {
+      try {
+        const state = engine.assignNode(options.requirement, nodeId, name ?? null)
+        const step = state.steps.find((s) => s.id === nodeId)
+        if (options.json) {
+          console.log(JSON.stringify({ requirementId: options.requirement, nodeId, assignedTo: step?.assignedTo ?? null }, null, 2))
+          return
+        }
+        console.log(`✅ 已${step?.assignedTo ? `设置负责人 ${step.assignedTo}` : "清除负责人"}（节点 ${nodeId}）`)
+      } catch (error) {
+        console.error(`❌ 节点指派失败: ${(error as Error).message}`)
+        process.exitCode = 1
+      }
+    })
+
   node.command("logs")
     .description("查看运行日志")
     .argument("<runId>", "运行 ID")

@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ConfigError } from "@octopus/core/errors.js"
-import { DEFAULT_CONFIG, loadConfig } from "./config.js"
+import { DEFAULT_CONFIG, getIdentity, loadConfig, saveIdentity } from "./config.js"
 
 const temporaryDirectories: string[] = []
 const originalStoreDir = process.env["OCTOPUS_STORE_DIR"]
+const originalMe = process.env["OCTOPUS_ME"]
 
 afterEach(() => {
   if (originalStoreDir === undefined) delete process.env["OCTOPUS_STORE_DIR"]
   else process.env["OCTOPUS_STORE_DIR"] = originalStoreDir
+  if (originalMe === undefined) delete process.env["OCTOPUS_ME"]
+  else process.env["OCTOPUS_ME"] = originalMe
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -141,5 +144,128 @@ describe("loadConfig", () => {
     }))
 
     expect(() => loadConfig(storeDir)).toThrow(ConfigError)
+  })
+
+  it("omniplan.rootDir 从配置文件加载", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_OMNIPLAN_ROOT"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      omniplan: { rootDir: "/custom/omniplan" },
+    }))
+
+    expect(loadConfig(storeDir).omniplan).toEqual({ rootDir: "/custom/omniplan" })
+  })
+
+  it("环境变量 OCTOPUS_OMNIPLAN_ROOT 覆盖配置文件", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    process.env["OCTOPUS_OMNIPLAN_ROOT"] = "/env/omniplan"
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      omniplan: { rootDir: "/file/omniplan" },
+    }))
+
+    expect(loadConfig(storeDir).omniplan).toEqual({ rootDir: "/env/omniplan" })
+  })
+
+  it("无配置无环境变量时使用默认 omniplan.rootDir", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_OMNIPLAN_ROOT"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+
+    expect(loadConfig(storeDir).omniplan).toEqual({ rootDir: "/Users/ben/Documents/OmniPlan" })
+  })
+})
+
+describe("identity 配置", () => {
+  it("getIdentity 未设置时返回 undefined", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_ME"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+
+    expect(getIdentity(storeDir)).toBeUndefined()
+  })
+
+  it("配置文件写入 identity 后 getIdentity 返回 name", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_ME"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({ identity: { name: "张三" } }))
+
+    expect(getIdentity(storeDir)).toBe("张三")
+  })
+
+  it("环境变量 OCTOPUS_ME 覆盖配置文件", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    process.env["OCTOPUS_ME"] = "envUser"
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({ identity: { name: "fileUser" } }))
+
+    expect(getIdentity(storeDir)).toBe("envUser")
+  })
+
+  it("saveIdentity 只补丁 identity、保留其它键", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_ME"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      ai: { defaultModel: "sonnet" },
+      workflow: { strictPermissions: true },
+    }))
+
+    saveIdentity(storeDir, "李四")
+
+    const parsed = JSON.parse(readFileSync(join(storeDir, "config.json"), "utf-8"))
+    expect(parsed.ai).toEqual({ defaultModel: "sonnet" })
+    expect(parsed.workflow).toEqual({ strictPermissions: true })
+    expect(parsed.identity).toEqual({ name: "李四" })
+  })
+
+  it("saveIdentity(null) 删除 identity 键而 ai/workflow 仍在", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_ME"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      ai: { defaultModel: "sonnet" },
+      workflow: { strictPermissions: true },
+      identity: { name: "李四" },
+    }))
+
+    saveIdentity(storeDir, null)
+
+    const parsed = JSON.parse(readFileSync(join(storeDir, "config.json"), "utf-8"))
+    expect(parsed.ai).toEqual({ defaultModel: "sonnet" })
+    expect(parsed.workflow).toEqual({ strictPermissions: true })
+    expect(parsed.identity).toBeUndefined()
+  })
+
+  it("saveIdentity 空字符串视为删除", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_ME"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({ identity: { name: "李四" } }))
+
+    saveIdentity(storeDir, "")
+
+    const parsed = JSON.parse(readFileSync(join(storeDir, "config.json"), "utf-8"))
+    expect(parsed.identity).toBeUndefined()
+  })
+
+  it("环境变量 OCTOPUS_ME 为空字符串或未设置时不产生 identity", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    process.env["OCTOPUS_ME"] = ""
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+
+    expect(getIdentity(storeDir)).toBeUndefined()
   })
 })

@@ -27,6 +27,21 @@ contextBridge.exposeInMainWorld("octopus", {
   getExecutionSnapshot: (requirementId) => ipcRenderer.invoke("octopus:getExecutionSnapshot", requirementId),
   updateNodeSchedule: (requirementId, nodeId, schedule) =>
     ipcRenderer.invoke("octopus:updateNodeSchedule", requirementId, nodeId, schedule),
+  updateRequirementSchedule: (requirementId, schedule) =>
+    ipcRenderer.invoke("octopus:updateRequirementSchedule", requirementId, schedule),
+  moveRequirementPhase: (requirementId, toPhase) =>
+    ipcRenderer.invoke("octopus:moveRequirementPhase", requirementId, toPhase),
+  listMilestones: (requirementId) => ipcRenderer.invoke("octopus:listMilestones", requirementId),
+  listProjectMilestones: (projectId) => ipcRenderer.invoke("octopus:listProjectMilestones", projectId),
+  addMilestone: (requirementId, input) => ipcRenderer.invoke("octopus:addMilestone", requirementId, input),
+  updateMilestone: (requirementId, milestoneId, patch) =>
+    ipcRenderer.invoke("octopus:updateMilestone", requirementId, milestoneId, patch),
+  reachMilestone: (requirementId, milestoneId) =>
+    ipcRenderer.invoke("octopus:reachMilestone", requirementId, milestoneId),
+  unreachMilestone: (requirementId, milestoneId) =>
+    ipcRenderer.invoke("octopus:unreachMilestone", requirementId, milestoneId),
+  deleteMilestone: (requirementId, milestoneId) =>
+    ipcRenderer.invoke("octopus:deleteMilestone", requirementId, milestoneId),
   runNode: (requirementId, nodeId, force) => ipcRenderer.invoke("octopus:runNode", requirementId, nodeId, force),
   runWorkflow: (requirementId, force, maxParallel) =>
     ipcRenderer.invoke("octopus:runWorkflow", requirementId, force, maxParallel),
@@ -51,4 +66,18 @@ contextBridge.exposeInMainWorld("octopus", {
     ipcRenderer.invoke("octopus:openNodeDirectory", requirementId, nodeId),
   exportTasks: (requirementId) => ipcRenderer.invoke("octopus:exportTasks", requirementId),
   importTasks: (requirementId) => ipcRenderer.invoke("octopus:importTasks", requirementId),
+
+  assignNode: (requirementId, nodeId, assignedTo) => ipcRenderer.invoke("octopus:assignNode", requirementId, nodeId, assignedTo),
+  listMyWork: (identity, projectId) => ipcRenderer.invoke("octopus:listMyWork", identity, projectId),
+  getProjectOverview: (projectId) => ipcRenderer.invoke("octopus:getProjectOverview", projectId),
+  getIdentity: () => ipcRenderer.invoke("octopus:getIdentity"),
+  setIdentity: (name) => ipcRenderer.invoke("octopus:setIdentity", name),
+
+  exportProjectOmniPlan: (projectId, opts) => ipcRenderer.invoke("octopus:exportProjectOmniPlan", projectId, opts),
+  importProjectOmniPlan: (projectId, opts) => ipcRenderer.invoke("octopus:importProjectOmniPlan", projectId, opts),
+  setProjectOmniPlanMeta: (projectId, patch) => ipcRenderer.invoke("octopus:setProjectOmniPlanMeta", projectId, patch),
+  getProjectBrdDesignConfig: (projectId) => ipcRenderer.invoke("octopus:getProjectBrdDesignConfig", projectId),
+  setProjectBrdDesignConfig: (projectId, patch) => ipcRenderer.invoke("octopus:setProjectBrdDesignConfig", projectId, patch),
+  previewBrdPrompts: (projectId, requirementId, opts) =>
+    ipcRenderer.invoke("octopus:previewBrdPrompts", projectId, requirementId, opts),
 })

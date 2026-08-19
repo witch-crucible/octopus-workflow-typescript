@@ -149,3 +149,28 @@ export { TeambitionClient, createTeambitionClient } from "./teambition.js"
 export type { TeambitionIntegrationConfig, TbTask, WorkflowStatus, ChildTask, TbMember, TaskUpdate } from "./teambition.js"
 export { SecurityWatchClient, createSecurityWatchClient } from "./security-watch.js"
 export type { SecurityWatchConfig } from "./security-watch.js"
+
+// OmniPlan
+export {
+  parseOmniPlanActual,
+  buildOmniPlanActual,
+  buildTocXml,
+  packOplx,
+  unpackOplx,
+  escapeXml,
+  dateToOmniPlanIso,
+  omniPlanIsoToDate,
+  slugifyProjectName,
+  validateOmniPlanName,
+  stableTaskId,
+  resolveOmniPlanFolder,
+  resolveOmniPlanFileName,
+} from "./omniplan.js"
+export type {
+  OmniPlanDocument,
+  OmniPlanTask,
+  OmniPlanBuildInput,
+  OmniPlanImportResult,
+  PackedOplx,
+} from "./omniplan.js"
+export { readZip, writeZip } from "./zip-store.js"

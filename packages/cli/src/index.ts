@@ -5,6 +5,7 @@
  * 命令结构：
  *   octopus project create|list|update|delete|bind-tb|unbind-tb|tb-statuses
  *   octopus requirement init|list|delete|bind-task|unbind-task|tb-status|tb-update
+ *   octopus milestone list|add|update|reach|unreach|delete|project
  *   octopus init <name> --project <id>  — requirement init 别名
  *   octopus status                      — 需求状态
  *   octopus phase list|advance|rollback|show
@@ -12,6 +13,7 @@
  *   octopus checklist show              — 清单展示
  *   octopus heinrich show               — 海因里希三角
  *   octopus ai ask <prompt>             — 询问 AI
+ *   octopus brd config|prompts|generate|check — BRD 设计
  */
 
 import { Command } from "commander"
@@ -31,6 +33,9 @@ import { buildAiCommands } from "./commands/ai.js"
 import { buildNodeCommands } from "./commands/node.js"
 import { buildWorkflowCommands } from "./commands/workflow.js"
 import { buildMonitorCommands } from "./commands/monitor.js"
+import { buildMilestoneCommands } from "./commands/milestone.js"
+import { buildMineCommands } from "./commands/mine.js"
+import { buildBrdCommands } from "./commands/brd.js"
 
 async function main(): Promise<void> {
   const config = loadConfig()
@@ -47,6 +52,7 @@ async function main(): Promise<void> {
   buildInitCommand(program, engine)
   buildProjectCommands(program, engine)
   buildRequirementCommands(program, engine)
+  buildMilestoneCommands(program, engine)
   buildStatusCommand(program, engine)
   buildPhaseCommands(program, engine)
   buildTaskCommands(program, engine)
@@ -58,6 +64,8 @@ async function main(): Promise<void> {
   buildNodeCommands(program, engine)
   buildWorkflowCommands(program, engine)
   buildMonitorCommands(program, engine)
+  buildMineCommands(program, engine, config.storeDir)
+  buildBrdCommands(program, engine)
 
   await program.parseAsync(process.argv)
 

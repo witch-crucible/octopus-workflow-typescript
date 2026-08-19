@@ -32,10 +32,10 @@ function recordingClient(): { client: AIAssistantClient; requests: AIRequest[] }
 }
 
 describe("AIAssistantModuleRegistry", () => {
-  it("12 个枚举值与注册项一一对应，无遗漏、无重复", () => {
-    expect(ALL_TYPES).toHaveLength(12)
+  it("全部枚举值与注册项一一对应，无遗漏、无重复", () => {
+    expect(ALL_TYPES).toHaveLength(14)
     const registered = aiAssistantModuleRegistry.list()
-    expect(registered).toHaveLength(12)
+    expect(registered).toHaveLength(14)
     expect(new Set(registered.map((m) => m.type))).toEqual(new Set(ALL_TYPES))
     for (const type of ALL_TYPES) {
       expect(aiAssistantModuleRegistry.get(type).type).toBe(type)
@@ -79,7 +79,16 @@ describe("各 AI 模块", () => {
       expect(system).not.toBe("请回答以下问题。")
       systems.add(system)
     }
-    expect(systems.size).toBe(12)
+    expect(systems.size).toBe(14)
+  })
+
+  it("BRD 模块支持 JSON envelope 覆盖 system/prompt", async () => {
+    const envelope = JSON.stringify({ system: "自定义系统", prompt: "自定义用户" })
+    for (const type of [AIAssistantType.BRD_GENERATE, AIAssistantType.BRD_CHECK]) {
+      const { client, requests } = recordingClient()
+      await executeAIAssistantModule(type, envelope, client)
+      expect(requests[0]).toMatchObject({ system: "自定义系统", prompt: "自定义用户" })
+    }
   })
 
   it("底层调用异常按 AICallError 类型传播", async () => {

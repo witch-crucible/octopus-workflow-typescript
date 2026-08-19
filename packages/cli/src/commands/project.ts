@@ -9,6 +9,9 @@
  *   bind-tb <projectId> (--tb-project <id> | --prefix <PREFIX>)
  *   unbind-tb <projectId>
  *   tb-statuses <projectId> [--json]
+ *   omniplan-export <projectId> [--file name] [--yes] [--json]
+ *   omniplan-import <projectId> [--file pathOrName] [--json]
+ *   omniplan-folder <projectId> [--set <folder>] [--file-name <name>] [--json]
  */
 
 import type { Command } from "commander"
@@ -199,6 +202,143 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
         console.log()
       } catch (err) {
         console.error(`❌ 获取卡片状态失败: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  project
+    .command("overview")
+    .description("查看项目只读概览")
+    .argument("<projectId>", "项目 ID")
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId: string, options: { json?: boolean }) => {
+      try {
+        const overview = engine.getProjectOverview(projectId)
+        if (options.json) {
+          console.log(JSON.stringify(overview, null, 2))
+          return
+        }
+        console.log(`\n📊 项目概览：${overview.projectName}\n`)
+        console.log(`   需求数: ${overview.requirementCount} · 未排期: ${overview.unscheduledCount} · 未绑 TB: ${overview.unboundTbCount} · 无负责人: ${overview.ownerlessCount}`)
+        console.log(`   里程碑: 计划 ${overview.milestonePlanned} / 达成 ${overview.milestoneReached} / 逾期 ${overview.milestoneOverdue}`)
+        console.log(`   海因里希: 重大 ${overview.heinrich.major} / 轻微 ${overview.heinrich.minor} / 未遂 ${overview.heinrich.trivial}`)
+        console.log(`   节点: 可运行 ${overview.readyNodeCount} / 等待 ${overview.waitingNodeCount}`)
+        console.log(`   阶段分布:`)
+        for (const item of overview.byPhase) {
+          console.log(`     ${item.phase}: ${item.count}`)
+        }
+      } catch (err) {
+        console.error(`❌ 查看项目概览失败: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  // ── OmniPlan commands ──
+
+  project
+    .command("omniplan-export")
+    .description("导出项目为 OmniPlan .oplx 文件")
+    .argument("<projectId>", "项目 ID")
+    .option("--file <name>", "文件名（不含 .oplx 后缀）")
+    .option("--yes", "跳过覆盖确认")
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId: string, options: { file?: string; yes?: boolean; json?: boolean }) => {
+      try {
+        const result = engine.exportProjectOmniPlan(projectId, {
+          ...(options.file !== undefined ? { fileName: options.file } : {}),
+        })
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2))
+          return
+        }
+        console.log(`✅ 已导出 OmniPlan 文件`)
+        console.log(`   路径: ${result.path}`)
+        console.log(`   需求数: ${result.taskCount}`)
+        console.log(`   文件夹: ${result.folder}`)
+      } catch (err) {
+        console.error(`❌ 导出 OmniPlan 失败: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  project
+    .command("omniplan-import")
+    .description("从 OmniPlan .oplx 文件导入排期")
+    .argument("<projectId>", "项目 ID")
+    .option("--file <pathOrName>", "文件路径或名称")
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId: string, options: { file?: string; json?: boolean }) => {
+      try {
+        const file = options.file
+        const isAbsolute = file !== undefined && (file.startsWith("/") || file.startsWith("~"))
+        const importOpts: { fileName?: string | undefined; path?: string | undefined } = isAbsolute
+          ? { path: file }
+          : { fileName: file }
+        const result = engine.importProjectOmniPlan(projectId, importOpts)
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2))
+          return
+        }
+        console.log(`✅ 已导入 OmniPlan 文件`)
+        console.log(`   路径: ${result.path}`)
+        console.log(`   更新需求数: ${result.updatedRequirements}`)
+        console.log(`   更新节点数: ${result.updatedNodes}`)
+        if (result.unmatched.length > 0) {
+          console.log(`   未匹配: ${result.unmatched.join(", ")}`)
+        }
+        if (result.skipped.length > 0) {
+          console.log(`   跳过: ${result.skipped.join(", ")}`)
+        }
+      } catch (err) {
+        console.error(`❌ 导入 OmniPlan 失败: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  project
+    .command("omniplan-folder")
+    .description("查看或设置项目的 OmniPlan 文件夹")
+    .argument("<projectId>", "项目 ID")
+    .option("--set <folder>", "设置 OmniPlan 文件夹名")
+    .option("--file-name <name>", "设置目标文件名")
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId: string, options: { set?: string; fileName?: string; json?: boolean }) => {
+      try {
+        if (options.set === undefined && options.fileName === undefined) {
+          // Show current settings
+          const project = engine.getProject(projectId)
+          if (options.json) {
+            console.log(JSON.stringify({
+              projectId,
+              omniplanFolder: project.metadata?.["omniplanFolder"],
+              omniplanFileName: project.metadata?.["omniplanFileName"],
+            }, null, 2))
+            return
+          }
+          console.log(`📌 OmniPlan 设置`)
+          console.log(`   文件夹: ${project.metadata?.["omniplanFolder"] ?? "（未设置）"}`)
+          console.log(`   文件名: ${project.metadata?.["omniplanFileName"] ?? "（未设置）"}`)
+          return
+        }
+
+        const patch: { omniplanFolder?: string; omniplanFileName?: string } = {}
+        if (options.set !== undefined) patch.omniplanFolder = options.set
+        if (options.fileName !== undefined) patch.omniplanFileName = options.fileName
+
+        const updated = engine.setProjectOmniPlanMeta(projectId, patch)
+        if (options.json) {
+          console.log(JSON.stringify({
+            projectId,
+            omniplanFolder: updated.metadata?.["omniplanFolder"],
+            omniplanFileName: updated.metadata?.["omniplanFileName"],
+          }, null, 2))
+          return
+        }
+        console.log(`✅ 已更新 OmniPlan 设置`)
+        console.log(`   文件夹: ${updated.metadata?.["omniplanFolder"] ?? "（未设置）"}`)
+        console.log(`   文件名: ${updated.metadata?.["omniplanFileName"] ?? "（未设置）"}`)
+      } catch (err) {
+        console.error(`❌ 设置 OmniPlan 失败: ${(err as Error).message}`)
         process.exit(1)
       }
     })

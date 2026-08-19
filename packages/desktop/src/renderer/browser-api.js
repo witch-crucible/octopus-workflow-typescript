@@ -53,6 +53,21 @@ if (!window.octopus) {
     getExecutionSnapshot: (requirementId) => invoke("getExecutionSnapshot", requirementId),
     updateNodeSchedule: (requirementId, nodeId, schedule) =>
       invoke("updateNodeSchedule", requirementId, nodeId, schedule),
+    updateRequirementSchedule: (requirementId, schedule) =>
+      invoke("updateRequirementSchedule", requirementId, schedule),
+    moveRequirementPhase: (requirementId, toPhase) =>
+      invoke("moveRequirementPhase", requirementId, toPhase),
+    listMilestones: (requirementId) => invoke("listMilestones", requirementId),
+    listProjectMilestones: (projectId) => invoke("listProjectMilestones", projectId),
+    addMilestone: (requirementId, input) => invoke("addMilestone", requirementId, input),
+    updateMilestone: (requirementId, milestoneId, patch) =>
+      invoke("updateMilestone", requirementId, milestoneId, patch),
+    reachMilestone: (requirementId, milestoneId) =>
+      invoke("reachMilestone", requirementId, milestoneId),
+    unreachMilestone: (requirementId, milestoneId) =>
+      invoke("unreachMilestone", requirementId, milestoneId),
+    deleteMilestone: (requirementId, milestoneId) =>
+      invoke("deleteMilestone", requirementId, milestoneId),
     runNode: (requirementId, nodeId, force) => invoke("runNode", requirementId, nodeId, force),
     runWorkflow: (requirementId, force, maxParallel) =>
       invoke("runWorkflow", requirementId, force, maxParallel),
@@ -85,6 +100,23 @@ if (!window.octopus) {
       if (!window.confirm(`将所选任务进度合并到需求 ${requirementId}？`)) return { canceled: true }
       return { canceled: false, ...await invoke("importTasks", requirementId, document) }
     },
+
+    // OmniPlan
+    exportProjectOmniPlan: (projectId, opts) => invoke("exportProjectOmniPlan", projectId, opts),
+    importProjectOmniPlan: (projectId, opts) => invoke("importProjectOmniPlan", projectId, opts),
+    setProjectOmniPlanMeta: (projectId, patch) => invoke("setProjectOmniPlanMeta", projectId, patch),
+
+    // BRD 设计
+    getProjectBrdDesignConfig: (projectId) => invoke("getProjectBrdDesignConfig", projectId),
+    setProjectBrdDesignConfig: (projectId, patch) => invoke("setProjectBrdDesignConfig", projectId, patch),
+    previewBrdPrompts: (projectId, requirementId, opts) =>
+      invoke("previewBrdPrompts", projectId, requirementId, opts),
+
+    assignNode: (requirementId, nodeId, assignedTo) => invoke("assignNode", requirementId, nodeId, assignedTo),
+    listMyWork: (identity, projectId) => invoke("listMyWork", identity, projectId),
+    getProjectOverview: (projectId) => invoke("getProjectOverview", projectId),
+    getIdentity: () => invoke("getIdentity"),
+    setIdentity: (name) => invoke("setIdentity", name),
   }
   window.octopusRuntime = "web"
 }

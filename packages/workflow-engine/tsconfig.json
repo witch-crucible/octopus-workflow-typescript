@@ -12,6 +12,7 @@
     { "path": "../context" },
     { "path": "../agent-layer" },
     { "path": "../integration" },
-    { "path": "../executor" }
+    { "path": "../executor" },
+    { "path": "../plugin" }
   ]
 }

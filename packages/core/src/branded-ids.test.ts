@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { TaskId, PhaseId, ProjectId, RequirementId, ArtifactId, ObservationId, ChecklistItemId, AgentCallId, createId } from "./branded-ids.js"
+import { TaskId, PhaseId, ProjectId, RequirementId, MilestoneId, ArtifactId, ObservationId, ChecklistItemId, AgentCallId, createId } from "./branded-ids.js"
 
 describe("createId", () => {
   it("创建带品牌类型的 ID", () => {
@@ -21,6 +21,9 @@ describe("工厂函数", () => {
   })
   it("RequirementId 返回传入的字符串", () => {
     expect(RequirementId("req_001")).toBe("req_001")
+  })
+  it("MilestoneId 返回传入的字符串", () => {
+    expect(MilestoneId("ms_001")).toBe("ms_001")
   })
   it("ArtifactId 返回传入的字符串", () => {
     expect(ArtifactId("art_001")).toBe("art_001")

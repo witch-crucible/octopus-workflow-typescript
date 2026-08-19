@@ -82,7 +82,7 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
       entryCriteria: ["项目已创建"],
       exitCriteria: ["BRD 初稿完成", "BRD 已宣讲"],
       steps: [
-        { id: "10.1", name: "Requirements Analysis and BRD Design", description: "PM analyzes requirements and completes the BRD", responsibleRoles: [Role.PM], dependsOn: [] },
+        { id: "10.1", name: "Requirements Analysis and BRD Design", description: "PM analyzes requirements and completes the BRD", responsibleRoles: [Role.PM], dependsOn: [], capabilities: [ai(AIAssistantType.BRD_GENERATE, { outputFile: "brd.md" }), ai(AIAssistantType.BRD_CHECK, { outputFile: "brd-check-report.md" })] },
         { id: "10.2", name: "BRD Walkthrough", description: "PM walks BA through the BRD", responsibleRoles: [Role.PM, Role.BA], dependsOn: ["10.1"] },
       ],
     },

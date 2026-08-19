@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
-import { loadConfig } from "@octopus/context/config.js"
+import { getIdentity, loadConfig, saveIdentity } from "@octopus/context/config.js"
 import { getWorkflowWorkspace } from "@octopus/context/workflow.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
 
@@ -276,6 +276,9 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
         const state = engine.updateRequirement(requirementId(), {
           ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
           ...(typeof patch["description"] === "string" ? { description: patch["description"] } : {}),
+          ...(patch["owner"] === null || typeof patch["owner"] === "string"
+            ? { owner: patch["owner"] as string | null }
+            : {}),
         })
         return {
           projectId: state.projectId,
@@ -304,6 +307,60 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
           plannedEnd: step?.plannedEnd ?? null,
         }
       }
+      case "updateRequirementSchedule": {
+        const state = engine.updateRequirementSchedule(requirementId(), schedulePatch(args[1]))
+        return {
+          requirementId: state.requirementId,
+          plannedStart: state.plannedStart ?? null,
+          plannedEnd: state.plannedEnd ?? null,
+        }
+      }
+      case "moveRequirementPhase": {
+        const toPhase = requiredString(args[1], "toPhase")
+        const state = engine.moveRequirementPhase(requirementId(), toPhase as never)
+        return {
+          requirementId: state.requirementId,
+          currentPhase: state.currentPhase,
+        }
+      }
+      case "listMilestones":
+        return engine.listMilestones(requirementId())
+      case "listProjectMilestones":
+        return engine.listProjectMilestones(projectId())
+      case "addMilestone": {
+        const input = asObject(args[1])
+        return engine.addMilestone(requirementId(), {
+          name: requiredString(input["name"], "name"),
+          date: requiredString(input["date"], "date"),
+          ...(typeof input["phase"] === "string" ? { phase: input["phase"] as never } : {}),
+          ...(typeof input["nodeId"] === "string" ? { nodeId: input["nodeId"] } : {}),
+          ...(typeof input["note"] === "string" ? { note: input["note"] } : {}),
+        })
+      }
+      case "updateMilestone": {
+        const milestoneId = requiredString(args[1], "milestoneId")
+        const patch = asObject(args[2])
+        return engine.updateMilestone(requirementId(), milestoneId, {
+          ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
+          ...(patch["date"] === null || typeof patch["date"] === "string" ? { date: patch["date"] as string | null } : {}),
+          ...(patch["phase"] === null || typeof patch["phase"] === "string"
+            ? { phase: patch["phase"] as never }
+            : {}),
+          ...(patch["nodeId"] === null || typeof patch["nodeId"] === "string"
+            ? { nodeId: patch["nodeId"] as string | null }
+            : {}),
+          ...(patch["note"] === null || typeof patch["note"] === "string"
+            ? { note: patch["note"] as string | null }
+            : {}),
+        })
+      }
+      case "reachMilestone":
+        return engine.reachMilestone(requirementId(), requiredString(args[1], "milestoneId"))
+      case "unreachMilestone":
+        return engine.unreachMilestone(requirementId(), requiredString(args[1], "milestoneId"))
+      case "deleteMilestone":
+        engine.deleteMilestone(requirementId(), requiredString(args[1], "milestoneId"))
+        return { deleted: true, milestoneId: requiredString(args[1], "milestoneId") }
       case "runNode":
         return engine.execution.runNode(
           requirementId(),
@@ -365,6 +422,89 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
       }
       case "importTasks":
         return engine.importTasks(requirementId(), args[1])
+      case "exportProjectOmniPlan": {
+        const opts = asObject(args[1])
+        return engine.exportProjectOmniPlan(projectId(), {
+          ...(typeof opts["fileName"] === "string" ? { fileName: opts["fileName"] } : {}),
+          ...(typeof opts["rootDir"] === "string" ? { rootDir: opts["rootDir"] } : {}),
+        })
+      }
+      case "importProjectOmniPlan": {
+        const opts = asObject(args[1])
+        return engine.importProjectOmniPlan(projectId(), {
+          ...(typeof opts["fileName"] === "string" ? { fileName: opts["fileName"] } : {}),
+          ...(typeof opts["path"] === "string" ? { path: opts["path"] } : {}),
+          ...(typeof opts["rootDir"] === "string" ? { rootDir: opts["rootDir"] } : {}),
+        })
+      }
+      case "setProjectOmniPlanMeta": {
+        const opts = asObject(args[1])
+        return engine.setProjectOmniPlanMeta(projectId(), {
+          ...(typeof opts["omniplanFolder"] === "string" ? { omniplanFolder: opts["omniplanFolder"] } : {}),
+          ...(typeof opts["omniplanIdMap"] === "string" ? { omniplanIdMap: opts["omniplanIdMap"] } : {}),
+          ...(typeof opts["omniplanFileName"] === "string" ? { omniplanFileName: opts["omniplanFileName"] } : {}),
+        })
+      }
+      case "getProjectBrdDesignConfig":
+        return engine.getProjectBrdDesignConfig(projectId())
+      case "setProjectBrdDesignConfig": {
+        const opts = asObject(args[1])
+        const sourcesRaw = opts["sources"]
+        const sources = sourcesRaw && typeof sourcesRaw === "object" ? asObject(sourcesRaw) : undefined
+        return engine.setProjectBrdDesignConfig(projectId(), {
+          ...(sources
+            ? {
+                sources: {
+                  ...(typeof sources["miniprogramCodePath"] === "string"
+                    ? { miniprogramCodePath: sources["miniprogramCodePath"] }
+                    : {}),
+                  ...(typeof sources["websiteCodePath"] === "string"
+                    ? { websiteCodePath: sources["websiteCodePath"] }
+                    : {}),
+                  ...(typeof sources["frontendCodePath"] === "string"
+                    ? { frontendCodePath: sources["frontendCodePath"] }
+                    : {}),
+                  ...(typeof sources["backendCodePath"] === "string"
+                    ? { backendCodePath: sources["backendCodePath"] }
+                    : {}),
+                  ...(typeof sources["miniprogramBuildArtifact"] === "string"
+                    ? { miniprogramBuildArtifact: sources["miniprogramBuildArtifact"] }
+                    : {}),
+                  ...(typeof sources["websiteUrl"] === "string" ? { websiteUrl: sources["websiteUrl"] } : {}),
+                },
+              }
+            : {}),
+          ...(typeof opts["brdSpecPath"] === "string" ? { brdSpecPath: opts["brdSpecPath"] } : {}),
+          ...(typeof opts["brdOutputPath"] === "string" ? { brdOutputPath: opts["brdOutputPath"] } : {}),
+        })
+      }
+      case "previewBrdPrompts": {
+        const requirementId = requiredString(args[1], "requirementId")
+        const opts = asObject(args[2])
+        const mode = opts["mode"]
+        return engine.previewBrdPrompts(projectId(), requirementId, {
+          ...(mode === "generate" || mode === "check" || mode === "all" ? { mode } : {}),
+          ...(opts["includeSummarize"] === true ? { includeSummarize: true } : {}),
+        })
+      }
+      case "assignNode": {
+        const nodeId = requiredString(args[1], "nodeId")
+        const assignedTo = args[2] === null || typeof args[2] === "string" ? (args[2] as string | null) : null
+        const state = engine.assignNode(requirementId(), nodeId, assignedTo)
+        const step = state.steps.find((item) => item.id === nodeId)
+        return { requirementId: state.requirementId, nodeId, assignedTo: step?.assignedTo ?? null }
+      }
+      case "listMyWork":
+        return engine.listMyWork(requiredString(args[0], "identity"), optionalString(args[1]))
+      case "getProjectOverview":
+        return engine.getProjectOverview(projectId())
+      case "getIdentity":
+        return { name: getIdentity(storeDir) ?? null }
+      case "setIdentity": {
+        const name = args[0] === null || args[0] === "" ? null : requiredString(args[0], "name")
+        saveIdentity(storeDir, name)
+        return { name }
+      }
       default:
         throw new WebError(404, `不支持的 API 方法：${method}`)
     }

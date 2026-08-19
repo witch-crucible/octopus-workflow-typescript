@@ -93,4 +93,126 @@ describe("migrateWorkflowState", () => {
     expect(migrated.projectId).toBe("proj_parent")
     expect((migrated as unknown as Record<string, unknown>)["projectName"]).toBeUndefined()
   })
+
+  it("v5→v6 迁移后 schemaVersion=6 且排期字段为 undefined", () => {
+    const v5State = {
+      schemaVersion: 5,
+      projectId: "proj_v5",
+      requirementId: "req_v5",
+      requirementName: "v5 需求",
+      description: "",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:00.000Z",
+      currentPhase: Phase.INTENTION,
+      phaseStatus: { [Phase.INTENTION]: PhaseLock.ACTIVE },
+      steps: [],
+      checklists: {},
+      heinrich: { majorDefects: 0, minorDefects: 0, trivialDefects: 0, observations: [], triggerCounts: {} },
+      artifacts: [],
+      metadata: {},
+      aiGatingEnabled: false,
+      aiGateResults: [],
+    }
+    const migrated = migrateWorkflowState(v5State)
+    expect(migrated.schemaVersion).toBe(CURRENT_SCHEMA_VERSION)
+    expect(migrated.plannedStart).toBeUndefined()
+    expect(migrated.plannedEnd).toBeUndefined()
+    expect(migrated.milestones).toEqual([])
+  })
+
+  it("v6→v7 迁移后补 milestones=[] 且不丢已有排期", () => {
+    const v6State = {
+      schemaVersion: 6,
+      projectId: "proj_v6",
+      requirementId: "req_v6",
+      requirementName: "v6 需求",
+      description: "",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:00.000Z",
+      currentPhase: Phase.INTENTION,
+      phaseStatus: { [Phase.INTENTION]: PhaseLock.ACTIVE },
+      steps: [],
+      checklists: {},
+      heinrich: { majorDefects: 0, minorDefects: 0, trivialDefects: 0, observations: [], triggerCounts: {} },
+      artifacts: [],
+      metadata: {},
+      plannedStart: "2026-03-01",
+      plannedEnd: "2026-03-12",
+      aiGatingEnabled: false,
+      aiGateResults: [],
+    }
+    const migrated = migrateWorkflowState(v6State)
+    expect(migrated.schemaVersion).toBe(CURRENT_SCHEMA_VERSION)
+    expect(migrated.plannedStart).toBe("2026-03-01")
+    expect(migrated.plannedEnd).toBe("2026-03-12")
+    expect(migrated.milestones).toEqual([])
+  })
+
+  it("已有 milestones 在迁移后保留", () => {
+    const existing = [{
+      id: "ms_keep",
+      name: "上线",
+      date: "2026-04-01",
+      status: "planned",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }]
+    const migrated = migrateWorkflowState({
+      schemaVersion: 6,
+      projectId: "proj_ms",
+      requirementId: "req_ms",
+      requirementName: "有里程碑",
+      description: "",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:00.000Z",
+      currentPhase: Phase.INTENTION,
+      phaseStatus: { [Phase.INTENTION]: PhaseLock.ACTIVE },
+      steps: [],
+      checklists: {},
+      heinrich: { majorDefects: 0, minorDefects: 0, trivialDefects: 0, observations: [], triggerCounts: {} },
+      artifacts: [],
+      metadata: {},
+      milestones: existing,
+      aiGatingEnabled: false,
+      aiGateResults: [],
+    })
+    expect(migrated.milestones).toEqual(existing)
+  })
+
+  it("v7→v8 迁移后 schemaVersion=8 且 owner 为 undefined", () => {
+    const v7State = {
+      schemaVersion: 7,
+      projectId: "proj_v7",
+      requirementId: "req_v7",
+      requirementName: "v7 需求",
+      description: "",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:00.000Z",
+      currentPhase: Phase.INTENTION,
+      phaseStatus: { [Phase.INTENTION]: PhaseLock.ACTIVE },
+      steps: [],
+      checklists: {},
+      heinrich: { majorDefects: 0, minorDefects: 0, trivialDefects: 0, observations: [], triggerCounts: {} },
+      artifacts: [],
+      metadata: {},
+      plannedStart: "2026-04-01",
+      plannedEnd: "2026-04-15",
+      milestones: [{
+        id: "ms_v7",
+        name: "里程碑",
+        date: "2026-04-10",
+        status: "planned",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      aiGatingEnabled: false,
+      aiGateResults: [],
+    }
+    const migrated = migrateWorkflowState(v7State)
+    expect(migrated.schemaVersion).toBe(CURRENT_SCHEMA_VERSION)
+    expect(migrated.plannedStart).toBe("2026-04-01")
+    expect(migrated.plannedEnd).toBe("2026-04-15")
+    expect(migrated.milestones).toHaveLength(1)
+    expect(migrated.owner).toBeUndefined()
+  })
 })

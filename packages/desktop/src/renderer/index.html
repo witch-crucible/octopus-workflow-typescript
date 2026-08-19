@@ -795,6 +795,15 @@
         display: inline-block;
         min-width: 100%;
       }
+      .graph-wrap.is-centered {
+        display: flex;
+        align-items: safe center;
+        justify-content: safe center;
+      }
+      .graph-wrap.is-centered .graph-scaler {
+        min-width: 0;
+        flex-shrink: 0;
+      }
       #graph {
         display: block;
         border: 1px solid var(--el-border-color-lighter);
@@ -1255,6 +1264,61 @@
         color: var(--el-text-color-secondary);
         border-color: var(--el-border-color);
       }
+      .ms-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-top: 8px;
+        margin-left: 6px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: color-mix(in srgb, var(--el-color-warning) 14%, transparent);
+        color: var(--el-color-warning);
+        border: 1px solid color-mix(in srgb, var(--el-color-warning) 32%, transparent);
+      }
+      .ms-badge.is-overdue {
+        background: var(--el-color-danger-light-9);
+        color: var(--el-color-danger);
+        border-color: color-mix(in srgb, var(--el-color-danger) 32%, transparent);
+      }
+      .ms-badge.is-done {
+        background: color-mix(in srgb, var(--el-text-color-secondary) 12%, transparent);
+        color: var(--el-text-color-secondary);
+        border-color: var(--el-border-color);
+      }
+      .milestone-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        flex: 1;
+        min-width: 0;
+      }
+      .milestone-chip {
+        border: 1px solid var(--el-border-color);
+        background: var(--el-fill-color-blank);
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .milestone-chip.is-overdue {
+        color: var(--el-color-danger);
+        border-color: color-mix(in srgb, var(--el-color-danger) 40%, transparent);
+      }
+      .milestone-form {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 8px;
+        align-items: end;
+      }
+      .milestone-form .field { margin: 0; }
+      .milestone-form-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+      .milestone-help { font-size: 12px; color: var(--el-text-color-secondary); grid-column: 1 / -1; }
+      @media (max-width: 720px) {
+        .milestone-chip:nth-child(n+2) { display: none; }
+      }
       #projectView {
         position: relative;
         min-height: calc(100vh - var(--header-h));
@@ -1526,14 +1590,40 @@
       .gantt-indent { width: 18px; flex: 0 0 auto; }
       .gantt-name { overflow: hidden; text-overflow: ellipsis; }
       .gantt-row-phase { background: var(--el-fill-color-light); font-weight: 600; }
+      .gantt-row-requirement {
+        cursor: pointer;
+        background: var(--el-fill-color-light);
+        font-weight: 600;
+      }
+      .gantt-row-requirement.is-selected { background: var(--el-color-primary-light-9); }
       .gantt-row-node {
         cursor: pointer;
         background: var(--el-bg-color);
       }
+      .gantt-row-node.is-req-node { background: var(--el-bg-color); }
       .gantt-row.is-hover,
       .gantt-row.is-selected { background: var(--el-color-primary-light-9); }
       .gantt-table-scroll { background: var(--el-bg-color); }
       .gantt-row.is-current .gantt-name { color: var(--el-color-primary); font-weight: 600; }
+      .gantt-row-milestones { background: var(--el-fill-color-light); font-weight: 600; }
+      .gantt-row-milestone { cursor: pointer; background: var(--el-bg-color); }
+      .gantt-row-milestone .gantt-status.is-planned { color: var(--el-color-primary); }
+      .gantt-row-milestone .gantt-status.is-reached { color: #6d28d9; }
+      .gantt-row-milestone .gantt-status.is-overdue { color: var(--el-color-danger); }
+      .gantt-reach-btn {
+        margin-left: 6px;
+        padding: 1px 6px;
+        font-size: 11px;
+        line-height: 1.4;
+        border: 1px solid var(--el-color-primary);
+        border-radius: 3px;
+        background: transparent;
+        color: var(--el-color-primary);
+        cursor: pointer;
+        vertical-align: middle;
+      }
+      .gantt-reach-btn:hover { background: var(--el-color-primary-light-9); }
+      .gantt-diamond-shape { pointer-events: none; }
       .gantt-row input[type="date"] {
         width: 100%;
         max-width: 100%;
@@ -1660,6 +1750,7 @@
         max-width: 200px;
       }
       .gantt-chip .meta { font-size: 11px; color: var(--el-text-color-secondary); }
+      .gantt-chip-req { border-style: dashed; background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
       .gantt-empty { padding: 24px; color: var(--el-text-color-secondary); font-size: 13px; }
 
       @media (max-width: 900px) {
@@ -1701,6 +1792,191 @@
       body.is-narrow-gantt .gantt-chart-pane {
         flex: 1 1 auto;
         min-height: 220px;
+      }
+
+      /* —— Project tabs —— */
+      .project-tabs {
+        display: flex;
+        gap: 0;
+        padding: 0 0 0;
+        border-bottom: 1px solid var(--el-border-color-lighter);
+        margin-bottom: 16px;
+      }
+      .project-tab-btn {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        color: var(--el-text-color-regular);
+        font: 14px/1 var(--font);
+        padding: 12px 20px;
+        margin-bottom: -1px;
+        border-bottom: 2px solid transparent;
+        cursor: pointer;
+        border-radius: 0;
+        box-shadow: none;
+        min-height: 0;
+      }
+      .project-tab-btn:hover {
+        color: var(--el-color-primary);
+        background: transparent;
+        border-color: transparent;
+      }
+      .project-tab-btn.active {
+        color: var(--el-color-primary);
+        border-bottom-color: var(--el-color-primary);
+        font-weight: 600;
+        background: transparent;
+      }
+
+      /* —— Kanban board —— */
+      .kanban-board-container {
+        min-height: 200px;
+      }
+      .kanban-board {
+        display: flex;
+        gap: 12px;
+        overflow-x: auto;
+        padding-bottom: 12px;
+        min-height: 200px;
+      }
+      .kanban-column {
+        flex: 0 0 280px;
+        min-width: 240px;
+        max-width: 320px;
+        display: flex;
+        flex-direction: column;
+        background: var(--el-fill-color-light);
+        border: 1px solid var(--el-border-color-lighter);
+        border-radius: var(--el-border-radius-base);
+      }
+      .kanban-column.drag-over {
+        border-color: var(--el-color-primary);
+        background: var(--el-color-primary-light-9);
+      }
+      .kanban-column-header {
+        padding: 10px 12px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--el-text-color-primary);
+        border-bottom: 1px solid var(--el-border-color-lighter);
+        background: var(--el-fill-color-blank);
+        border-radius: var(--el-border-radius-base) var(--el-border-radius-base) 0 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .kanban-column-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--el-fill-color);
+        color: var(--el-text-color-secondary);
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .kanban-column-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-height: 60px;
+      }
+      .kanban-card {
+        padding: 12px;
+        border: 1px solid var(--el-border-color);
+        border-radius: var(--el-border-radius-card);
+        background: var(--el-bg-color);
+        box-shadow: var(--el-box-shadow-lighter);
+        cursor: pointer;
+        transition: border-color .15s ease, box-shadow .15s ease;
+      }
+      .kanban-card:hover {
+        border-color: var(--el-color-primary-light-5);
+      }
+      .kanban-card.highlight {
+        border-color: var(--el-color-primary);
+        box-shadow: 0 0 0 3px var(--el-color-primary-light-8);
+      }
+      .kanban-card.dragging {
+        opacity: 0.5;
+      }
+      .kanban-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin-bottom: 4px;
+      }
+      .kanban-card-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--el-text-color-primary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .kanban-card-desc {
+        margin: 0 0 6px;
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .kanban-card-meta {
+        display: flex;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--el-text-color-placeholder);
+        flex-wrap: wrap;
+      }
+      .kanban-tb-status {
+        width: 100%;
+        max-width: 100%;
+        margin: 6px 0;
+        height: 26px;
+        font-size: 12px;
+      }
+      .kanban-card-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      .kanban-card-actions button {
+        height: 26px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
+      /* —— Project Gantt (full-width) —— */
+      .project-gantt-host {
+        min-height: 480px;
+        height: calc(100vh - var(--header-h) - 160px);
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--el-border-color-lighter);
+        border-radius: var(--el-border-radius-base);
+        background: var(--el-bg-color);
+        overflow: hidden;
+      }
+      .project-gantt-host[hidden] { display: none !important; }
+
+      @media (max-width: 900px) {
+        .kanban-board {
+          flex-direction: column;
+        }
+        .kanban-column {
+          flex: none;
+          max-width: none;
+          width: 100%;
+        }
       }
     </style>
   </head>
@@ -1763,49 +2039,47 @@
             <h2 id="projectPageTitle">项目需求</h2>
             <input id="projectFilter" type="search" placeholder="按需求名称或 ID 筛选" />
           </div>
+          <div class="project-tabs">
+            <button type="button" class="project-tab-btn active" data-tab="board" aria-selected="true">看板</button>
+            <button type="button" class="project-tab-btn" data-tab="list" aria-selected="false">列表</button>
+            <button type="button" class="project-tab-btn" data-tab="gantt" aria-selected="false">甘特</button>
+            <button type="button" class="project-tab-btn" data-tab="settings" aria-selected="false">设置</button>
+          </div>
           <div id="projectEmpty" class="empty-state">
             该项目还没有需求。在右侧创建需求；可绑定 Teambition 项目后同步卡片状态。
           </div>
-          <div id="requirementCards" class="hub-cards"></div>
+          <div id="kanbanBoard" class="kanban-board-container"></div>
+          <div id="kanbanEmpty" class="empty-state" hidden>
+            该项目还没有需求。在右侧创建需求。
+          </div>
+          <div id="requirementCards" class="hub-cards" hidden></div>
+          <div id="projectGanttHost" class="project-gantt-host" hidden></div>
+          <div id="projectSettings" hidden></div>
           <div id="hubGanttPark">
             <div id="hubGanttHost" class="hub-gantt-host" hidden></div>
           </div>
         </div>
         <aside class="panel-card hub-create">
-          <h3>创建需求</h3>
-          <p class="help">在源码根目录生成 <code>workflow.yaml</code>（已有文件不会覆盖），并写入该需求的工作流状态。</p>
-          <div class="field">
-            <label for="reqName">需求名称</label>
-            <input id="reqName" placeholder="例如：支付页改版" />
-          </div>
-          <div class="field">
-            <label for="reqDesc">需求描述（可选）</label>
-            <input id="reqDesc" placeholder="简要说明需求目标" />
-          </div>
-          <div class="field">
-            <label for="reqRoot">源码根目录（可选）</label>
-            <input id="reqRoot" placeholder="默认使用当前仓库根目录" />
-          </div>
-          <button id="createRequirement" class="primary-wide">创建需求</button>
-          <hr style="margin: 18px 0; border: none; border-top: 1px solid var(--el-border-color);" />
-          <div class="project-tb-panel">
-            <h3>绑定 Teambition 项目</h3>
-            <p class="help">填写 Teambition 项目 ID，或用任务编号前缀解析。未配置凭据时会显示可读错误。</p>
+          <div id="createRequirementPanel">
+            <h3>创建需求</h3>
+            <p class="help">在源码根目录生成 <code>workflow.yaml</code>（已有文件不会覆盖），并写入该需求的工作流状态。</p>
             <div class="field">
-              <label for="tbProjectId">Teambition 项目 ID</label>
-              <input id="tbProjectId" placeholder="可选" />
+              <label for="reqName">需求名称</label>
+              <input id="reqName" placeholder="例如：支付页改版" />
             </div>
             <div class="field">
-              <label for="tbPrefix">前缀（prefix）</label>
-              <input id="tbPrefix" placeholder="例如：ACME" />
+              <label for="reqDesc">需求描述（可选）</label>
+              <input id="reqDesc" placeholder="简要说明需求目标" />
             </div>
-            <div class="tb-actions">
-              <button id="bindTbProject" type="button">绑定</button>
-              <button id="unbindTbProject" class="secondary" type="button">解绑</button>
-              <button id="loadTbStatuses" class="secondary" type="button">查看卡片状态</button>
+            <div class="field">
+              <label for="reqRoot">源码根目录（可选）</label>
+              <input id="reqRoot" placeholder="默认使用当前仓库根目录" />
             </div>
-            <div id="tbBindInfo" class="muted" style="margin-top:8px"></div>
-            <div id="tbStatusList" class="tb-status-list" hidden></div>
+            <button id="createRequirement" class="primary-wide">创建需求</button>
+          </div>
+          <div id="settingsPanel" hidden>
+            <h3>项目设置</h3>
+            <p class="help">Teambition 绑定与 OmniPlan 配置已移至「设置」标签页。</p>
           </div>
         </aside>
       </div>
@@ -1825,7 +2099,7 @@
           <ol class="guide-list">
             <li>项目管理中心可创建 / 编辑 / 删除项目</li>
             <li>项目页管理需求，并可绑定 Teambition 项目</li>
-            <li>需求工作区查看角色泳道图；顶栏可绑定任务与改状态</li>
+            <li>需求工作区查看角色泳道图；顶栏可绑定任务、改状态并管理里程碑</li>
             <li>拖拽空白处平移；Ctrl/⌘+滚轮缩放；两侧按钮收起 / 展开侧栏</li>
             <li>节点详情可打开 / 复制脚本目录；Ctrl/⌘+单击节点亦可跳转</li>
             <li>项目页需求卡片可展开甘特图排期</li>
@@ -1846,6 +2120,47 @@
           </select>
           <button id="updateTbStatus" class="secondary" type="button">改状态</button>
         </div>
+        <div id="requirementMilestoneBar" class="tb-bar">
+          <span class="tb-label">里程碑</span>
+          <div id="milestoneChips" class="milestone-chips"></div>
+          <button id="toggleReachedMilestones" class="secondary" type="button" hidden>已达成 0</button>
+          <button id="addMilestone" class="secondary" type="button">+ 添加</button>
+        </div>
+        <form id="milestoneForm" class="tb-bar milestone-form" hidden>
+          <input type="hidden" id="milestoneEditId" />
+          <div class="field">
+            <label for="milestoneName">名称</label>
+            <input id="milestoneName" required maxlength="80" placeholder="例如：设计评审" />
+          </div>
+          <div class="field">
+            <label for="milestoneDate">日期</label>
+            <input id="milestoneDate" type="date" required />
+          </div>
+          <div class="field">
+            <label for="milestonePhase">挂钩阶段（可选）</label>
+            <select id="milestonePhase">
+              <option value="">不挂钩</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="milestoneNode">挂钩节点（可选）</label>
+            <select id="milestoneNode">
+              <option value="">不挂钩</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="milestoneNote">备注（可选）</label>
+            <input id="milestoneNote" maxlength="500" placeholder="不会改变需求阶段" />
+          </div>
+          <div class="milestone-form-actions">
+            <button id="saveMilestone" type="submit">保存</button>
+            <button id="reachMilestone" class="secondary" type="button" hidden>标记达成</button>
+            <button id="unreachMilestone" class="secondary" type="button" hidden>取消达成</button>
+            <button id="deleteMilestone" class="danger" type="button" hidden>删除</button>
+            <button id="cancelMilestone" class="secondary" type="button">取消</button>
+          </div>
+          <p class="milestone-help">标记达成不会改变需求阶段。</p>
+        </form>
         <div class="toolbar">
           <button id="runWorkflow" title="并行启动所有依赖已满足的节点">▶ 运行可运行节点</button>
           <button id="health" class="secondary" title="检查外部集成健康状态">健康检查</button>

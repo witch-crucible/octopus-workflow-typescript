@@ -27,6 +27,16 @@ export interface TeambitionConfig {
   timeoutMs?: number
 }
 
+/** OmniPlan 集成配置 */
+export interface OmniPlanConfig {
+  rootDir: string
+}
+
+/** 本机身份配置 */
+export interface IdentityConfig {
+  name: string
+}
+
 /** 全局配置 */
 export interface OctopusConfig {
   /** 状态存储目录 */
@@ -46,6 +56,10 @@ export interface OctopusConfig {
   plugins: PluginRef[]
   /** Teambition 凭据；缺省时不装配客户端 */
   teambition?: TeambitionConfig
+  /** OmniPlan 配置 */
+  omniplan?: OmniPlanConfig
+  /** 本机身份 */
+  identity?: IdentityConfig
 }
 
 /**
@@ -104,6 +118,16 @@ const configFileSchema = z.object({
       timeoutMs: z.number().optional(),
     })
     .optional(),
+  omniplan: z
+    .object({
+      rootDir: z.string().optional(),
+    })
+    .optional(),
+  identity: z
+    .object({
+      name: z.string().optional(),
+    })
+    .optional(),
 })
 
 /** 默认配置 */
@@ -123,6 +147,7 @@ export const DEFAULT_CONFIG: OctopusConfig = {
     heinrichThreshold: 3,
   },
   plugins: [],
+  omniplan: { rootDir: "/Users/ben/Documents/OmniPlan" },
 }
 
 /** 从环境变量加载配置 */
@@ -156,6 +181,15 @@ function loadFromEnv(): Partial<OctopusConfig> {
       teambition.refStrategy = refStrategy
     }
     config.teambition = teambition
+  }
+
+  if (process.env["OCTOPUS_OMNIPLAN_ROOT"]) {
+    config.omniplan = { rootDir: process.env["OCTOPUS_OMNIPLAN_ROOT"] }
+  }
+
+  const me = process.env["OCTOPUS_ME"]
+  if (me && me.trim() !== "") {
+    config.identity = { name: me.trim() }
   }
 
   return config
@@ -216,6 +250,22 @@ function mergeConfigs(...configs: Partial<OctopusConfig>[]): OctopusConfig {
           : { ...config.teambition },
       }
     }
+    if (config.omniplan) {
+      result = {
+        ...result,
+        omniplan: result.omniplan
+          ? { ...result.omniplan, ...config.omniplan }
+          : { ...config.omniplan },
+      }
+    }
+    if (config.identity) {
+      result = {
+        ...result,
+        identity: result.identity
+          ? { ...result.identity, ...config.identity }
+          : { ...config.identity },
+      }
+    }
   }
 
   return result
@@ -227,6 +277,29 @@ export function loadConfig(storeDir?: string): OctopusConfig {
   const envConfig = loadFromEnv()
   const explicitStoreConfig = storeDir === undefined ? {} : { storeDir }
   return mergeConfigs(fileConfig, explicitStoreConfig, envConfig)
+}
+
+/** 读取本机身份：OCTOPUS_ME 环境变量优先，其次配置文件 identity.name；无则 undefined。 */
+export function getIdentity(storeDir?: string): string | undefined {
+  const config = loadConfig(storeDir)
+  const name = config.identity?.name?.trim()
+  return name && name !== "" ? name : undefined
+}
+
+/** 只补丁 identity 键写入 config.json，禁止重写整个 config 丢掉其它字段；空 name 删除该键。 */
+export function saveIdentity(storeDir: string, name: string | null): void {
+  const configPath = join(storeDir, "config.json")
+  let config: Record<string, unknown> = {}
+  if (existsSync(configPath)) {
+    config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>
+  }
+  if (name === null || name.trim() === "") {
+    delete config["identity"]
+  } else {
+    config["identity"] = { ...(config["identity"] as Record<string, unknown> | undefined), name: name.trim() }
+  }
+  if (!existsSync(storeDir)) mkdirSync(storeDir, { recursive: true })
+  writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8")
 }
 
 /** 保存配置到文件 */

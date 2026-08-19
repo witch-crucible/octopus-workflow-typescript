@@ -47,6 +47,8 @@ window.OctopusGantt = (() => {
     for (const key of Object.keys(els)) delete els[key]
   }
 
+  let currentMode = "nodes"
+
   function mount(el, opts = {}) {
     if (root) unmount()
     root = el
@@ -61,7 +63,10 @@ window.OctopusGantt = (() => {
         <button type="button" class="secondary" data-action="today">今天</button>
         <button type="button" class="secondary" data-action="readonly" aria-pressed="false">只读</button>
         <button type="button" class="secondary" data-action="deps" aria-pressed="true">依赖线</button>
-        <span class="gantt-hint muted">左侧改日期或拖条排期；未排期节点在底部</span>
+        <button type="button" class="secondary" data-action="add-milestone">添加里程碑</button>
+        <button type="button" class="secondary" data-action="export-omniplan">导出 OmniPlan</button>
+        <button type="button" class="secondary" data-action="import-omniplan">导入 OmniPlan</button>
+        <span class="gantt-hint muted">左侧改日期或拖条排期；未排期在底部</span>
       </div>
       <div class="gantt-body">
         <div class="gantt-table-pane" style="width:${ui.tableWidth}px">
@@ -168,13 +173,21 @@ window.OctopusGantt = (() => {
     if (!root || !model) return
     if (dragging) return
     cachedInput = model
-    lastModel = buildModel(model)
+    currentMode = model.mode === "requirements" ? "requirements" : "nodes"
+    lastModel = currentMode === "requirements" ? buildRequirementsModel(model) : buildModel(model)
     syncToolbar()
     applyNarrowLayout()
     renderTable(lastModel)
     renderChart(lastModel)
     renderUnscheduled(lastModel)
     restoreScroll()
+  }
+
+  function isMilestoneOverdue(m) {
+    if (m.status === "reached") return false
+    const today = startOfToday()
+    const date = parseDate(m.date)
+    return date < today
   }
 
   function buildModel(input) {
@@ -184,6 +197,8 @@ window.OctopusGantt = (() => {
     const labels = input.labels || {}
     const phaseOrder = labels.phaseOrder || []
     const selectedNodeId = input.selectedNodeId
+    const milestones = input.milestones || []
+    const requirementId = input.requirementId || ""
 
     const byPhase = new Map()
     for (const step of steps) {
@@ -202,6 +217,30 @@ window.OctopusGantt = (() => {
     const rows = []
     const scheduled = []
     const unscheduled = []
+
+    if (milestones.length) {
+      rows.push({
+        kind: "milestones",
+        id: "milestones",
+        label: "里程碑",
+        childCount: milestones.length,
+      })
+      for (const m of milestones) {
+        const overdue = isMilestoneOverdue(m)
+        const statusLabel = m.status === "reached" ? "已达成" : overdue ? "逾期" : "计划中"
+        rows.push({
+          kind: "milestone",
+          id: m.id,
+          milestone: m,
+          date: m.date,
+          label: m.name,
+          status: m.status,
+          statusLabel,
+          overdue,
+          requirementId,
+        })
+      }
+    }
 
     for (const phase of phases) {
       const children = byPhase.get(phase) || []
@@ -259,6 +298,7 @@ window.OctopusGantt = (() => {
       if (row.plannedEnd) allDates.push(parseDate(row.plannedEnd))
       if (row.actual?.start) allDates.push(parseDate(row.actual.start))
       if (row.actual?.end) allDates.push(parseDate(row.actual.end))
+      if (row.kind === "milestone" && row.date) allDates.push(parseDate(row.date))
     }
     if (allDates.length) {
       const min = new Date(Math.min(...allDates.map((d) => d.getTime())))
@@ -292,8 +332,127 @@ window.OctopusGantt = (() => {
     return { start: toDateOnly(startIso), end: toDateOnly(endIso) }
   }
 
+  function buildRequirementsModel(input) {
+    const requirements = input.requirements || []
+    const selectedId = input.selectedId
+    const labels = input.labels || {}
+
+    const rows = []
+    const scheduled = []
+    const unscheduled = []
+
+    for (const req of requirements) {
+      const hasPlan = Boolean(req.plannedStart && req.plannedEnd)
+      const reqRow = {
+        kind: "requirement",
+        id: req.id,
+        label: req.name || req.id,
+        phase: req.phase || "",
+        plannedStart: req.plannedStart,
+        plannedEnd: req.plannedEnd,
+        statusLabel: req.statusLabel || req.phase || "",
+        progress: req.progress ?? 0,
+        teambitionStatusName: req.teambitionStatusName || "",
+        steps: req.steps || [],
+        collapsed: ui.collapsed.has(`req:${req.id}`),
+        selected: req.id === selectedId,
+        childCount: (req.steps || []).length,
+      }
+      if (hasPlan) scheduled.push(reqRow)
+      else unscheduled.push(reqRow)
+      rows.push(reqRow)
+
+      if (!reqRow.collapsed && req.steps && req.steps.length) {
+        for (const step of req.steps) {
+          const nodeHasPlan = Boolean(step.plannedStart && step.plannedEnd)
+          const actual = deriveActual(step, [])
+          const nodeRow = {
+            kind: "node",
+            id: step.id,
+            phase: req.phase || "",
+            step,
+            label: step.name || step.id,
+            role: step.responsibleRole || "",
+            status: step.status,
+            statusLabel: step.status,
+            plannedStart: step.plannedStart,
+            plannedEnd: step.plannedEnd,
+            actual,
+            ready: false,
+            current: false,
+            selected: false,
+            requirementId: req.id,
+          }
+          if (nodeHasPlan) scheduled.push(nodeRow)
+          else unscheduled.push(nodeRow)
+          rows.push(nodeRow)
+        }
+      }
+    }
+
+    const today = startOfToday()
+    let rangeStart = addDays(today, -14)
+    let rangeEnd = addDays(today, 14)
+    const allDates = []
+    for (const row of rows) {
+      if (row.plannedStart) allDates.push(parseDate(row.plannedStart))
+      if (row.plannedEnd) allDates.push(parseDate(row.plannedEnd))
+      if (row.actual?.start) allDates.push(parseDate(row.actual.start))
+      if (row.actual?.end) allDates.push(parseDate(row.actual.end))
+    }
+    if (allDates.length) {
+      const min = new Date(Math.min(...allDates.map((d) => d.getTime())))
+      const max = new Date(Math.max(...allDates.map((d) => d.getTime())))
+      rangeStart = addDays(min < today ? min : today, -7)
+      rangeEnd = addDays(max > today ? max : today, 21)
+    }
+
+    return {
+      rows,
+      unscheduled,
+      scheduled,
+      rangeStart,
+      rangeEnd,
+      today,
+      dayCount: Math.max(1, daysBetween(rangeStart, rangeEnd) + 1),
+      px: SCALE_PX[ui.scale],
+      labels,
+      selectedNodeId: selectedId,
+    }
+  }
+
   function renderTable(model) {
     const html = model.rows.map((row) => {
+      if (row.kind === "milestones") {
+        return `
+          <div class="gantt-row gantt-row-milestones" data-row-id="${escapeAttr(row.id)}">
+            <div class="gantt-col gantt-col-name">
+              <strong>${escapeHtml(row.label)}</strong>
+              <span class="muted">· ${row.childCount}</span>
+            </div>
+            <div class="gantt-col gantt-col-role"></div>
+            <div class="gantt-col gantt-col-status"></div>
+            <div class="gantt-col gantt-col-date muted">—</div>
+            <div class="gantt-col gantt-col-date muted">—</div>
+          </div>`
+      }
+      if (row.kind === "milestone") {
+        const statusClass = row.overdue ? "is-overdue" : row.status === "reached" ? "is-reached" : "is-planned"
+        const reachBtn = row.status !== "reached" && !ui.readOnly
+          ? ` <button type="button" class="gantt-reach-btn" data-reach-milestone="${escapeAttr(row.id)}" data-reach-req="${escapeAttr(row.requirementId)}" title="标记达成">达成</button>`
+          : ""
+        return `
+          <div class="gantt-row gantt-row-milestone" data-row-id="${escapeAttr(row.id)}" data-milestone-id="${escapeAttr(row.id)}">
+            <div class="gantt-col gantt-col-name" title="${escapeAttr(row.label)}">
+              <span class="gantt-indent"></span>
+              <span class="gantt-name">◇ ${escapeHtml(row.label)}</span>
+            </div>
+            <div class="gantt-col gantt-col-role"></div>
+            <div class="gantt-col gantt-col-status"><span class="gantt-status ${statusClass}">${escapeHtml(row.statusLabel)}</span>${reachBtn}</div>
+            <div class="gantt-col gantt-col-date muted">${escapeHtml(row.date)}</div>
+            <div class="gantt-col gantt-col-date muted">—</div>
+          </div>`
+      }
       if (row.kind === "phase") {
         return `
           <div class="gantt-row gantt-row-phase${row.collapsed ? " is-collapsed" : ""}" data-row-id="${escapeAttr(row.id)}" data-phase="${escapeAttr(row.phase)}">
@@ -308,9 +467,31 @@ window.OctopusGantt = (() => {
             <div class="gantt-col gantt-col-date muted">${row.plannedEnd || "—"}</div>
           </div>`
       }
+      if (row.kind === "requirement") {
+        const disabled = ui.readOnly ? "disabled" : ""
+        const tbText = row.teambitionStatusName ? ` · ${escapeHtml(row.teambitionStatusName)}` : ""
+        return `
+          <div class="gantt-row gantt-row-requirement${row.selected ? " is-selected" : ""}" data-row-id="${escapeAttr(row.id)}" data-requirement-id="${escapeAttr(row.id)}">
+            <div class="gantt-col gantt-col-name" title="${escapeAttr(row.label)}">
+              <button type="button" class="gantt-twist" data-toggle-req="${escapeAttr(row.id)}" aria-label="展开需求">${row.collapsed ? "▸" : "▾"}</button>
+              <span class="gantt-name">${escapeHtml(row.label)}</span>
+              <span class="muted">· ${row.childCount}</span>
+            </div>
+            <div class="gantt-col gantt-col-role">${tbText ? escapeHtml(tbText) : ""}</div>
+            <div class="gantt-col gantt-col-status"><span class="gantt-status status-${escapeAttr(String(row.phase || "").toLowerCase())}">${escapeHtml(row.statusLabel)}</span></div>
+            <div class="gantt-col gantt-col-date">
+              <input type="date" data-date="start" data-req-id="${escapeAttr(row.id)}" value="${escapeAttr(row.plannedStart || "")}" ${disabled} />
+            </div>
+            <div class="gantt-col gantt-col-date">
+              <input type="date" data-date="end" data-req-id="${escapeAttr(row.id)}" value="${escapeAttr(row.plannedEnd || "")}" ${disabled} />
+            </div>
+          </div>`
+      }
       const disabled = ui.readOnly ? "disabled" : ""
+      const isReqNode = Boolean(row.requirementId)
+      const dateDataAttr = isReqNode ? `data-req-node-id="${escapeAttr(row.id)}"` : `data-node-id="${escapeAttr(row.id)}"`
       return `
-        <div class="gantt-row gantt-row-node${row.selected ? " is-selected" : ""}${row.current ? " is-current" : ""}" data-row-id="${escapeAttr(row.id)}" data-node-id="${escapeAttr(row.id)}">
+        <div class="gantt-row gantt-row-node${row.selected ? " is-selected" : ""}${row.current ? " is-current" : ""}${isReqNode ? " is-req-node" : ""}" data-row-id="${escapeAttr(row.id)}" data-node-id="${escapeAttr(row.id)}" ${isReqNode ? `data-requirement-id="${escapeAttr(row.requirementId)}"` : ""}>
           <div class="gantt-col gantt-col-name" title="${escapeAttr(row.label)}">
             <span class="gantt-indent"></span>
             <span class="gantt-name">${escapeHtml(row.label)}</span>
@@ -318,10 +499,10 @@ window.OctopusGantt = (() => {
           <div class="gantt-col gantt-col-role">${escapeHtml(row.role)}</div>
           <div class="gantt-col gantt-col-status"><span class="gantt-status status-${escapeAttr(String(row.status || "").toLowerCase())}">${escapeHtml(row.statusLabel)}</span></div>
           <div class="gantt-col gantt-col-date">
-            <input type="date" data-date="start" data-node-id="${escapeAttr(row.id)}" value="${escapeAttr(row.plannedStart || "")}" ${disabled} />
+            <input type="date" data-date="start" ${dateDataAttr} value="${escapeAttr(row.plannedStart || "")}" ${disabled} />
           </div>
           <div class="gantt-col gantt-col-date">
-            <input type="date" data-date="end" data-node-id="${escapeAttr(row.id)}" value="${escapeAttr(row.plannedEnd || "")}" ${disabled} />
+            <input type="date" data-date="end" ${dateDataAttr} value="${escapeAttr(row.plannedEnd || "")}" ${disabled} />
           </div>
         </div>`
     }).join("")
@@ -338,6 +519,17 @@ window.OctopusGantt = (() => {
       }
     }
 
+    for (const button of els.tableScroll.querySelectorAll("[data-toggle-req]")) {
+      button.onclick = (event) => {
+        event.stopPropagation()
+        const reqId = button.getAttribute("data-toggle-req")
+        const key = `req:${reqId}`
+        if (ui.collapsed.has(key)) ui.collapsed.delete(key)
+        else ui.collapsed.add(key)
+        if (cachedInput) render(cachedInput)
+      }
+    }
+
     for (const rowEl of els.tableScroll.querySelectorAll(".gantt-row-node")) {
       rowEl.onmouseenter = () => highlightRow(rowEl.dataset.nodeId, true)
       rowEl.onmouseleave = () => highlightRow(rowEl.dataset.nodeId, false)
@@ -347,9 +539,58 @@ window.OctopusGantt = (() => {
       }
     }
 
+    for (const rowEl of els.tableScroll.querySelectorAll(".gantt-row-requirement")) {
+      rowEl.onmouseenter = () => highlightRow(rowEl.dataset.requirementId, true)
+      rowEl.onmouseleave = () => highlightRow(rowEl.dataset.requirementId, false)
+      rowEl.onclick = (event) => {
+        if (event.target.closest("input,button")) return
+        callbacks.onSelectRequirement?.(rowEl.dataset.requirementId)
+      }
+    }
+
+    for (const rowEl of els.tableScroll.querySelectorAll(".gantt-row-milestone")) {
+      rowEl.onmouseenter = () => highlightRow(rowEl.dataset.milestoneId, true)
+      rowEl.onmouseleave = () => highlightRow(rowEl.dataset.milestoneId, false)
+      rowEl.onclick = (event) => {
+        if (event.target.closest("input,button")) return
+        callbacks.onSelectMilestone?.(rowEl.dataset.milestoneId)
+      }
+    }
+
+    for (const btn of els.tableScroll.querySelectorAll("[data-reach-milestone]")) {
+      btn.onclick = (event) => {
+        event.stopPropagation()
+        callbacks.onReach?.(btn.dataset.reachReq, btn.dataset.reachMilestone)
+      }
+    }
+
     for (const input of els.tableScroll.querySelectorAll("input[type=date]")) {
       input.onchange = () => {
-        const nodeId = input.dataset.nodeId
+        const nodeId = input.dataset.nodeId || input.dataset.reqNodeId
+        const reqId = input.dataset.reqId
+        if (reqId) {
+          const startInput = els.tableScroll.querySelector(`input[data-date="start"][data-req-id="${cssEscape(reqId)}"]`)
+          const endInput = els.tableScroll.querySelector(`input[data-date="end"][data-req-id="${cssEscape(reqId)}"]`)
+          const start = startInput?.value || ""
+          const end = endInput?.value || ""
+          if (!start && !end) {
+            callbacks.onSchedule?.(reqId, { plannedStart: null, plannedEnd: null }, "requirement")
+            return
+          }
+          if (!start || !end) {
+            callbacks.onError?.("计划起止日期必须成对填写")
+            if (cachedInput) render(cachedInput)
+            return
+          }
+          if (end < start) {
+            callbacks.onError?.("计划结束日期不能早于开始日期")
+            if (cachedInput) render(cachedInput)
+            return
+          }
+          callbacks.onSchedule?.(reqId, { plannedStart: start, plannedEnd: end }, "requirement")
+          return
+        }
+        if (!nodeId) return
         const startInput = els.tableScroll.querySelector(`input[data-date="start"][data-node-id="${cssEscape(nodeId)}"]`)
         const endInput = els.tableScroll.querySelector(`input[data-date="end"][data-node-id="${cssEscape(nodeId)}"]`)
         const start = startInput?.value || ""
@@ -407,6 +648,19 @@ window.OctopusGantt = (() => {
 
     for (const [id, pos] of positions) {
       const { row, y } = pos
+      if (row.kind === "milestones" || row.kind === "milestone") {
+        if (row.kind === "milestone" && row.date) {
+          drawDiamond(els.chartBody, model, {
+            id: row.id,
+            date: row.date,
+            y: y + ROW_H / 2,
+            status: row.status,
+            overdue: row.overdue,
+            interactive: !ui.readOnly,
+          })
+        }
+        continue
+      }
       if (row.kind === "phase") {
         if (row.plannedStart && row.plannedEnd) {
           drawBar(els.chartBody, model, {
@@ -419,6 +673,25 @@ window.OctopusGantt = (() => {
             label: "",
             kind: "phase",
             interactive: false,
+          })
+        }
+        continue
+      }
+      if (row.kind === "requirement") {
+        if (row.plannedStart && row.plannedEnd) {
+          const color = barColor({ ready: false, status: row.phase || "PENDING" })
+          drawBar(els.chartBody, model, {
+            id,
+            y: y + (ROW_H - BAR_H) / 2,
+            h: BAR_H,
+            start: row.plannedStart,
+            end: row.plannedEnd,
+            color,
+            label: row.label,
+            kind: "requirement",
+            interactive: !ui.readOnly,
+            selected: row.selected,
+            progress: row.progress,
           })
         }
         continue
@@ -465,7 +738,9 @@ window.OctopusGantt = (() => {
       lane.addEventListener("mouseleave", () => highlightRow(rowId, false))
       lane.addEventListener("click", () => {
         if (rowId.startsWith("phase:")) return
-        callbacks.onSelectNode?.(rowId)
+        const row = model.rows.find((r) => r.id === rowId)
+        if (row?.kind === "requirement") callbacks.onSelectRequirement?.(rowId)
+        else callbacks.onSelectNode?.(rowId)
       })
     }
   }
@@ -607,20 +882,66 @@ window.OctopusGantt = (() => {
     }
     group.addEventListener("click", (event) => {
       event.stopPropagation()
-      if (opts.kind === "node") callbacks.onSelectNode?.(opts.id)
+      if (opts.kind === "requirement") callbacks.onSelectRequirement?.(opts.id)
+      else if (opts.kind === "node") callbacks.onSelectNode?.(opts.id)
     })
     svgRoot.appendChild(group)
   }
 
+  function drawDiamond(svgRoot, model, opts) {
+    const cx = xForDate(model, opts.date) + model.px / 2
+    const cy = opts.y
+    const r = 7
+    const points = `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`
+    const isReached = opts.status === "reached"
+    const fillColor = isReached ? "#6d28d9" : opts.overdue ? "#f56c6c" : "none"
+    const strokeColor = opts.overdue ? "#f56c6c" : "#6d28d9"
+    const g = svg("g", {
+      class: `gantt-diamond gantt-diamond-${isReached ? "reached" : opts.overdue ? "overdue" : "planned"}`,
+      "data-bar-id": opts.id,
+    })
+    g.appendChild(svg("polygon", {
+      points,
+      fill: fillColor,
+      stroke: strokeColor,
+      "stroke-width": 2,
+      class: "gantt-diamond-shape",
+    }))
+    if (opts.interactive) {
+      const hitArea = svg("rect", {
+        x: cx - r - 3, y: cy - r - 3, width: (r + 3) * 2, height: (r + 3) * 2,
+        fill: "transparent", class: "gantt-handle",
+      })
+      hitArea.style.cursor = "grab"
+      hitArea.addEventListener("pointerdown", (event) => {
+        startDrag(event, model, {
+          id: opts.id,
+          kind: "milestone",
+          start: opts.date,
+          end: opts.date,
+        }, "move")
+      })
+      g.appendChild(hitArea)
+    }
+    g.addEventListener("click", (event) => {
+      event.stopPropagation()
+      callbacks.onSelectMilestone?.(opts.id)
+    })
+    svgRoot.appendChild(g)
+  }
+
   function startDrag(event, model, opts, mode) {
-    if (ui.readOnly || opts.kind !== "node") return
+    if (ui.readOnly) return
+    if (opts.kind !== "node" && opts.kind !== "milestone" && opts.kind !== "requirement") return
     event.preventDefault()
     event.stopPropagation()
     const pointerId = event.pointerId
     const originX = event.clientX
+    const isMilestone = opts.kind === "milestone"
     dragging = {
       nodeId: opts.id,
-      mode,
+      kind: opts.kind,
+      mode: isMilestone ? "move" : mode,
       originX,
       start: opts.start,
       end: opts.end,
@@ -632,6 +953,20 @@ window.OctopusGantt = (() => {
     const onMove = (moveEvent) => {
       if (!dragging) return
       const deltaDays = Math.round((moveEvent.clientX - originX) / model.px)
+      if (dragging.kind === "milestone") {
+        dragging.previewDate = formatDate(addDays(parseDate(dragging.start), deltaDays))
+        const bar = els.chartBody.querySelector(`[data-bar-id="${cssEscape(opts.id)}"]`)
+        if (bar) {
+          const polygon = bar.querySelector(".gantt-diamond-shape")
+          if (polygon) {
+            const cx = xForDate(model, dragging.previewDate) + model.px / 2
+            const cy = opts.y
+            const r = 7
+            polygon.setAttribute("points", `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`)
+          }
+        }
+        return
+      }
       let nextStart = dragging.start
       let nextEnd = dragging.end
       if (mode === "move") {
@@ -668,12 +1003,19 @@ window.OctopusGantt = (() => {
       window.removeEventListener("pointerup", onUp)
       const result = dragging
       dragging = null
-      if (!result?.previewStart || !result?.previewEnd) return
+      if (!result) return
+      if (result.kind === "milestone") {
+        if (!result.previewDate || result.previewDate === result.start) return
+        callbacks.onSchedule?.(result.nodeId, { date: result.previewDate }, "milestone")
+        return
+      }
+      if (!result.previewStart || !result.previewEnd) return
       if (result.previewStart === result.start && result.previewEnd === result.end) return
+      const kind = result.kind === "requirement" ? "requirement" : "node"
       callbacks.onSchedule?.(result.nodeId, {
         plannedStart: result.previewStart,
         plannedEnd: result.previewEnd,
-      })
+      }, kind)
     }
 
     window.addEventListener("pointermove", onMove)
@@ -683,17 +1025,22 @@ window.OctopusGantt = (() => {
   function renderUnscheduled(model) {
     els.unscheduledCount.textContent = String(model.unscheduled.length)
     if (!model.unscheduled.length) {
-      els.unscheduledList.innerHTML = `<div class="muted">所有节点都已排期</div>`
+      els.unscheduledList.innerHTML = `<div class="muted">${currentMode === "requirements" ? "所有需求和节点都已排期" : "所有节点都已排期"}</div>`
       return
     }
-    els.unscheduledList.innerHTML = model.unscheduled.map((row) => `
-      <button type="button" class="gantt-chip" data-node-id="${escapeAttr(row.id)}">
+    els.unscheduledList.innerHTML = model.unscheduled.map((row) => {
+      const isReq = row.kind === "requirement"
+      return `
+      <button type="button" class="gantt-chip${isReq ? " gantt-chip-req" : ""}" data-node-id="${escapeAttr(row.id)}" data-kind="${escapeAttr(row.kind || "node")}" ${isReq ? `data-requirement-id="${escapeAttr(row.id)}"` : ""}>
         <span class="name">${escapeHtml(row.label)}</span>
-        <span class="meta">${escapeHtml(row.role)} · ${escapeHtml(row.statusLabel)}</span>
-      </button>
-    `).join("")
+        <span class="meta">${isReq ? escapeHtml(row.statusLabel) : `${escapeHtml(row.role)} · ${escapeHtml(row.statusLabel)}`}</span>
+      </button>`
+    }).join("")
     for (const chip of els.unscheduledList.querySelectorAll(".gantt-chip")) {
-      chip.onclick = () => callbacks.onSelectNode?.(chip.dataset.nodeId)
+      chip.onclick = () => {
+        if (chip.dataset.kind === "requirement") callbacks.onSelectRequirement?.(chip.dataset.requirementId || chip.dataset.nodeId)
+        else callbacks.onSelectNode?.(chip.dataset.nodeId)
+      }
     }
   }
 
@@ -718,6 +1065,15 @@ window.OctopusGantt = (() => {
         ui.showDeps = !ui.showDeps
         syncToolbar()
         if (cachedInput) render(cachedInput)
+      }
+      if (action === "add-milestone") {
+        callbacks.onAddMilestone?.()
+      }
+      if (action === "export-omniplan") {
+        callbacks.onExportOmniPlan?.()
+      }
+      if (action === "import-omniplan") {
+        callbacks.onImportOmniPlan?.()
       }
     })
   }

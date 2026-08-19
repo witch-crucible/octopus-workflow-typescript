@@ -6,7 +6,7 @@
   "description": "Octopus 工作流引擎的 macOS 桌面外壳（Electron）",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -b",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "start": "pnpm build && node ../../scripts/ensure-sqlite.mjs electron && electron .",
     "web": "pnpm build && node ../../scripts/ensure-sqlite.mjs node && node dist/web.js",

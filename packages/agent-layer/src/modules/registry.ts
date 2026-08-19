@@ -1,5 +1,5 @@
 /**
- * AI 模块注册表 —— 12 类 AI 辅助能力的集中装配与查询。
+ * AI 模块注册表 —— 内置 AI 辅助能力的集中装配与查询。
  *
  * 注册表在模块加载时装配全部 AIAssistantType，`callAssistant` 按类型查找并执行。
  * 缺少注册视为开发错误，不再回退到通用提示词。
@@ -7,6 +7,8 @@
 
 import type { AIResponse } from "@octopus/core/agent.js"
 import type { AIAssistantClient, AIAssistantModule } from "./types.js"
+import { brdCheckModule } from "./brd-check.js"
+import { brdGenerateModule } from "./brd-generate.js"
 import { checklistRecommendationModule } from "./checklist-recommendation.js"
 import { codeReviewModule } from "./code-review.js"
 import { documentSyncModule } from "./document-sync.js"
@@ -57,7 +59,7 @@ export class AIAssistantModuleRegistry {
   }
 }
 
-/** 默认注册表 —— 集中装配 12 类能力 */
+/** 默认注册表 —— 集中装配全部内置能力（含 BRD 生成/检查） */
 export const aiAssistantModuleRegistry = new AIAssistantModuleRegistry()
 aiAssistantModuleRegistry.register(meetingMinutesModule)
 aiAssistantModuleRegistry.register(requirementsAnalysisModule)
@@ -71,6 +73,8 @@ aiAssistantModuleRegistry.register(testScriptGenerationModule)
 aiAssistantModuleRegistry.register(sqlRiskCheckModule)
 aiAssistantModuleRegistry.register(releaseRiskAssessmentModule)
 aiAssistantModuleRegistry.register(techDebtQuantificationModule)
+aiAssistantModuleRegistry.register(brdGenerateModule)
+aiAssistantModuleRegistry.register(brdCheckModule)
 
 /** 按类型获取模块（未注册视为开发错误） */
 export function getAIAssistantModule(type: string): AIAssistantModule {

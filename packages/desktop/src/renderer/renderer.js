@@ -36,11 +36,26 @@ const viewSubtitleEl = document.getElementById("viewSubtitle")
 const graphPaneEl = document.getElementById("graphPane")
 const hubGanttParkEl = document.getElementById("hubGanttPark")
 const hubGanttHostEl = document.getElementById("hubGanttHost")
+const projectGanttHostEl = document.getElementById("projectGanttHost")
 const requirementTbLabelEl = document.getElementById("requirementTbLabel")
 const tbTaskRefEl = document.getElementById("tbTaskRef")
 const tbStatusSelectEl = document.getElementById("tbStatusSelect")
 const tbBindInfoEl = document.getElementById("tbBindInfo")
 const tbStatusListEl = document.getElementById("tbStatusList")
+const milestoneChipsEl = document.getElementById("milestoneChips")
+const milestoneFormEl = document.getElementById("milestoneForm")
+const milestoneEditIdEl = document.getElementById("milestoneEditId")
+const milestoneNameEl = document.getElementById("milestoneName")
+const milestoneDateEl = document.getElementById("milestoneDate")
+const milestonePhaseEl = document.getElementById("milestonePhase")
+const milestoneNodeEl = document.getElementById("milestoneNode")
+const milestoneNoteEl = document.getElementById("milestoneNote")
+const toggleReachedMilestonesEl = document.getElementById("toggleReachedMilestones")
+const addMilestoneEl = document.getElementById("addMilestone")
+const reachMilestoneEl = document.getElementById("reachMilestone")
+const unreachMilestoneEl = document.getElementById("unreachMilestone")
+const deleteMilestoneEl = document.getElementById("deleteMilestone")
+const cancelMilestoneEl = document.getElementById("cancelMilestone")
 
 let selectedRequirement
 let selectedProjectId
@@ -64,10 +79,15 @@ let graphZoom = window.innerWidth < 900 ? 1 : 1.4
 /** 上次自动滚入视口的当前节点集合签名，避免轮询刷新打断用户滚动 */
 let lastScrolledCurrentKey = ""
 /** 项目页当前展开排期的需求；空字符串表示未展开 */
+let projectTab = "board"
 let expandedScheduleId = ""
 let hubGanttSelectedNode = ""
 let hubGanttState
 let hubGanttMounted = false
+let projectGanttMounted = false
+let projectGanttSelectedReq = ""
+let workspaceMilestones = []
+let showReachedMilestones = false
 /** 泳道图画布拖拽平移状态 */
 let graphPan = null
 /** 工作台左右栏收起状态 */
@@ -593,14 +613,17 @@ function setupGraphPan() {
 function routeFromHash() {
   const raw = location.hash.replace(/^#/, "")
   if (raw === "hub" || raw === "" || raw === "/") return { view: "hub" }
-  const legacy = /^project\/([^/]+)\/(gantt|graph)$/.exec(raw)
-  if (legacy) {
-    const id = decodeURIComponent(legacy[1])
-    return { view: "legacyProject", projectId: id, redirectCandidate: true }
+  const projectTabMatch = /^project\/([^/]+)\/(board|list|gantt|settings)$/.exec(raw)
+  if (projectTabMatch) {
+    return {
+      view: "project",
+      projectId: decodeURIComponent(projectTabMatch[1]),
+      projectTab: projectTabMatch[2],
+    }
   }
   const projectMatch = /^project\/([^/]+)$/.exec(raw)
   if (projectMatch) {
-    return { view: "project", projectId: decodeURIComponent(projectMatch[1]) }
+    return { view: "project", projectId: decodeURIComponent(projectMatch[1]), projectTab: "board" }
   }
   const requirementMatch = /^requirement\/([^/]+)$/.exec(raw)
   if (requirementMatch) {
@@ -622,8 +645,9 @@ function goToHub() {
   setHash("hub")
 }
 
-function goToProject(projectId) {
-  setHash(`project/${encodeURIComponent(projectId)}`)
+function goToProject(projectId, tab) {
+  const suffix = tab && tab !== "board" ? `/${tab}` : ""
+  setHash(`project/${encodeURIComponent(projectId)}${suffix}`)
 }
 
 function goToRequirement(requirementId) {
@@ -668,8 +692,39 @@ function ensureHubGanttMounted() {
       hubGanttSelectedNode = nodeId
       renderHubGantt()
     },
-    onSchedule: (nodeId, schedule) => {
-      updateHubNodeSchedule(nodeId, schedule).catch(showError)
+    onSchedule: (id, schedule, kind) => {
+      if (kind === "milestone") {
+        window.octopus.updateMilestone(expandedScheduleId, id, { date: schedule.date })
+          .then(async () => {
+            statusEl.textContent = "里程碑日期已保存"
+            statusEl.className = "badge good"
+            await loadRequirementSummaries(selectedProjectId)
+            renderProjectPage()
+            await loadHubGantt(expandedScheduleId)
+          })
+          .catch(showError)
+        return
+      }
+      updateHubNodeSchedule(id, schedule).catch(showError)
+    },
+    onReach: (requirementId, milestoneId) => {
+      window.octopus.reachMilestone(requirementId, milestoneId)
+        .then(async () => {
+          statusEl.textContent = "里程碑已达成"
+          statusEl.className = "badge good"
+          await loadRequirementSummaries(selectedProjectId)
+          renderProjectPage()
+          await loadHubGantt(requirementId)
+        })
+        .catch(showError)
+    },
+    onSelectMilestone: (milestoneId) => {
+      if (!hubGanttState?.milestones) return
+      const m = hubGanttState.milestones.find((item) => item.id === milestoneId)
+      if (m) openWorkspace(expandedScheduleId).then(() => openMilestoneForm(m))
+    },
+    onAddMilestone: () => {
+      openWorkspace(expandedScheduleId).then(() => openMilestoneForm())
     },
     onError: (message) => {
       statusEl.textContent = message
@@ -688,6 +743,8 @@ function renderHubGantt() {
     snapshot: hubGanttState.snapshot || {},
     selectedNodeId: hubGanttSelectedNode,
     labels: ganttLabels(),
+    milestones: hubGanttState.milestones || [],
+    requirementId: hubGanttState.requirementId || "",
   })
 }
 
@@ -713,8 +770,150 @@ async function loadHubGantt(requirementId) {
     steps: state.steps || [],
     snapshot,
     runs,
+    milestones: state.milestones || [],
   }
   renderHubGantt()
+}
+
+function parkProjectGantt() {
+  if (projectGanttHostEl) projectGanttHostEl.hidden = true
+}
+
+function unmountProjectGantt() {
+  if (projectGanttMounted && window.OctopusGantt) {
+    window.OctopusGantt.unmount()
+  }
+  projectGanttMounted = false
+  projectGanttSelectedReq = ""
+}
+
+function ensureProjectGanttMounted() {
+  if (projectGanttMounted || !projectGanttHostEl || !window.OctopusGantt) return
+  projectGanttHostEl.hidden = false
+  window.OctopusGantt.mount(projectGanttHostEl, {
+    onSelectNode: (nodeId) => {
+      const req = requirementSummaries.find((item) => {
+        return currentState?.steps?.some((step) => step.id === nodeId)
+      })
+      if (req) goToRequirement(req.requirementId)
+    },
+    onSelectRequirement: (reqId) => {
+      goToRequirement(reqId)
+    },
+    onSchedule: (id, schedule, kind) => {
+      if (kind === "requirement") {
+        window.octopus.updateRequirementSchedule(id, schedule)
+          .then(async () => {
+            statusEl.textContent = schedule.plannedStart ? "需求排期已保存" : "已清除需求排期"
+            statusEl.className = "badge good"
+            await loadRequirementSummaries(selectedProjectId)
+            renderProjectGantt()
+          })
+          .catch(showError)
+      } else {
+        const req = requirementSummaries.find((item) => item.requirementId === id || item.steps?.some?.((s) => s.id === id))
+        const reqId = req?.requirementId || selectedRequirement || ""
+        if (reqId && window.octopus.updateNodeSchedule) {
+          window.octopus.updateNodeSchedule(reqId, id, schedule)
+            .then(async () => {
+              statusEl.textContent = schedule.plannedStart ? "节点排期已保存" : "已清除节点排期"
+              statusEl.className = "badge good"
+              await loadRequirementSummaries(selectedProjectId)
+              renderProjectGantt()
+            })
+            .catch(showError)
+        }
+      }
+    },
+    onExportOmniPlan: () => {
+      if (!selectedProjectId) return
+      window.octopus.exportProjectOmniPlan(selectedProjectId)
+        .then(async (result) => {
+          statusEl.textContent = `已导出：${result.path}`
+          statusEl.className = "badge good"
+        })
+        .catch(showError)
+    },
+    onImportOmniPlan: () => {
+      if (!selectedProjectId) return
+      if (!window.confirm("导入 OmniPlan 将合并日期到当前项目的需求和节点。\n继续？")) return
+      window.octopus.importProjectOmniPlan(selectedProjectId)
+        .then(async (result) => {
+          const parts = []
+          if (result.updatedRequirements) parts.push(`${result.updatedRequirements} 个需求`)
+          if (result.updatedNodes) parts.push(`${result.updatedNodes} 个节点`)
+          if (result.unmatched?.length) parts.push(`${result.unmatched.length} 个未匹配`)
+          statusEl.textContent = parts.length ? `已导入：${parts.join("、")}` : "导入完成（无变更）"
+          statusEl.className = "badge good"
+          await loadRequirementSummaries(selectedProjectId)
+          renderProjectGantt()
+        })
+        .catch(showError)
+    },
+    onAddMilestone: () => {},
+    onSelectMilestone: () => {},
+    onReach: () => {},
+    onError: (message) => {
+      statusEl.textContent = message
+      statusEl.className = "badge warn"
+    },
+  })
+  projectGanttMounted = true
+}
+
+async function renderProjectGantt() {
+  if (!projectGanttMounted || !projectGanttHostEl || projectGanttHostEl.hidden) return
+  if (window.OctopusGantt?.isDragging?.()) return
+  await loadRequirementSummaries(selectedProjectId)
+  const requirements = []
+  for (const item of requirementSummaries) {
+    let steps = []
+    try {
+      const state = await window.octopus.getState(item.requirementId)
+      steps = (state.steps || []).map((step) => ({
+        id: step.id,
+        name: step.name || step.id,
+        phase: step.phase,
+        plannedStart: step.plannedStart,
+        plannedEnd: step.plannedEnd,
+        status: step.status,
+        responsibleRole: step.responsibleRole || "",
+        dependsOn: step.dependsOn || [],
+      }))
+    } catch {
+      steps = []
+    }
+    requirements.push({
+      id: item.requirementId,
+      name: item.requirementName || item.requirementId,
+      phase: item.currentPhase || "",
+      plannedStart: item.plannedStart,
+      plannedEnd: item.plannedEnd,
+      statusLabel: phaseLabel(item.currentPhase),
+      progress: item.totalTasks ? (item.completedTasks || 0) / item.totalTasks : 0,
+      teambitionStatusName: item.teambitionStatusName || "",
+      steps,
+    })
+  }
+  ensureProjectGanttMounted()
+  window.OctopusGantt.render({
+    mode: "requirements",
+    requirements,
+    selectedId: projectGanttSelectedReq,
+    labels: {
+      phaseOrder: PHASE_ORDER,
+      phaseLabel,
+      roleLabel,
+      statusLabel,
+      nodeName: nodeNameZh,
+    },
+  })
+}
+
+async function loadProjectGanttData() {
+  if (!selectedProjectId) return
+  if (window.OctopusGantt?.isDragging?.()) return
+  await renderProjectGantt()
 }
 
 async function updateHubNodeSchedule(nodeId, schedule) {
@@ -756,7 +955,7 @@ function setChrome(view) {
     document.title = "Octopus Workflow · 项目管理中心"
   } else if (view === "project") {
     if (viewPulseEl) viewPulseEl.textContent = "需求管理"
-    if (viewSubtitleEl) viewSubtitleEl.textContent = "项目内需求列表与 Teambition 绑定"
+    if (viewSubtitleEl) viewSubtitleEl.textContent = "看板 · 列表 · 甘特 · 设置"
     document.title = "Octopus Workflow · 项目需求"
   } else {
     setWorkspaceChrome()
@@ -857,6 +1056,80 @@ function buildHubCardsMarkup(items, options = {}) {
   return { kind: "cards", filtered, html }
 }
 
+function formatMilestoneDate(value) {
+  const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""))
+  return matched ? `${matched[2]}-${matched[3]}` : String(value || "")
+}
+
+function milestoneBadgeHtml(item) {
+  if (!item.milestoneCount) return ""
+  if (item.nextMilestone) {
+    const overdue = item.nextMilestone.overdue ? " is-overdue" : ""
+    return `<span class="ms-badge${overdue}">里程碑 ${escapeHtml(formatMilestoneDate(item.nextMilestone.date))} ${escapeHtml(item.nextMilestone.name)}</span>`
+  }
+  return `<span class="ms-badge is-done">里程碑已全部达成</span>`
+}
+
+function buildKanbanMarkup(items, options = {}) {
+  const filter = String(options.filter || "")
+  const createdId = options.lastCreatedId || ""
+  const query = filter.trim().toLowerCase()
+  const filtered = items.filter((item) => {
+    if (!query) return true
+    return [item.requirementName, item.requirementId, item.description]
+      .some((field) => String(field || "").toLowerCase().includes(query))
+  })
+  const columns = PHASE_ORDER.map((phase) => {
+    const cards = filtered.filter((item) => item.currentPhase === phase)
+    return { phase, cards }
+  })
+  if (!items.length) {
+    return { kind: "empty", filtered, html: "" }
+  }
+  if (!filtered.length) {
+    return {
+      kind: "nomatch",
+      filtered,
+      html: `<div class="empty-state">没有匹配「${escapeHtml(filter)}」的需求</div>`,
+    }
+  }
+  const html = `<div class="kanban-board">${columns.map(({ phase, cards }) => `
+    <div class="kanban-column" data-phase="${escapeHtml(phase)}">
+      <div class="kanban-column-header">${escapeHtml(phaseLabel(phase))} <span class="kanban-column-count">${cards.length}</span></div>
+      <div class="kanban-column-body">${cards.map((item) => {
+        const scheduleText = item.plannedStart && item.plannedEnd
+          ? `${escapeHtml(item.plannedStart.slice(5))} → ${escapeHtml(item.plannedEnd.slice(5))}`
+          : "未排期"
+        const tbBadge = item.teambitionTaskId || item.teambitionStatusName
+          ? `<span class="tb-badge">TB${item.teambitionStatusName ? ` · ${escapeHtml(item.teambitionStatusName)}` : ""}</span>`
+          : `<span class="tb-badge unbound">未绑定任务</span>`
+        const selectHtml = item.teambitionTaskId
+          ? `<select class="kanban-tb-status" data-requirement-id="${escapeHtml(item.requirementId)}" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()" draggable="false">${(options.tbStatuses || []).map((s) => `<option value="${escapeHtml(s.id || s.statusId || "")}"${item.teambitionStatusId === (s.id || s.statusId) ? " selected" : ""}>${escapeHtml(s.name || s.statusName || s.id || s.statusId || "")}</option>`).join("")}</select>`
+          : ""
+        return `
+      <article class="kanban-card${item.requirementId === createdId ? " highlight" : ""}" draggable="true" data-requirement-id="${escapeHtml(item.requirementId)}" data-phase="${escapeHtml(phase)}">
+        <div class="kanban-card-header">
+          <span class="kanban-card-title">${escapeHtml(item.requirementName || item.requirementId)}</span>
+          ${tbBadge}
+        </div>
+        <p class="kanban-card-desc">${escapeHtml(item.description || "")}</p>
+        <div class="kanban-card-meta">
+          <span class="kanban-card-nodes">节点 ${item.completedTasks ?? 0}/${item.totalTasks ?? 0}</span>
+          <span class="kanban-card-schedule">${scheduleText}</span>
+          ${item.updatedAt ? `<span class="kanban-card-updated">${escapeHtml(formatUpdatedAt(item.updatedAt))}</span>` : ""}
+        </div>
+        ${selectHtml}
+        <div class="kanban-card-actions">
+          <button type="button" data-open>打开</button>
+          <button type="button" class="secondary" data-edit>编辑</button>
+          <button type="button" class="danger" data-delete>删除</button>
+        </div>
+      </article>`
+      }).join("")}</div>
+    </div>`).join("")}</div>`
+  return { kind: "cards", filtered, html }
+}
+
 function buildRequirementCardsMarkup(items, options = {}) {
   const filter = String(options.filter || "")
   const createdId = options.lastCreatedId || ""
@@ -885,6 +1158,7 @@ function buildRequirementCardsMarkup(items, options = {}) {
       ${item.teambitionTaskId || item.teambitionStatusName
         ? `<span class="tb-badge">TB 任务${item.teambitionStatusName ? ` · ${escapeHtml(item.teambitionStatusName)}` : ""}</span>`
         : `<span class="tb-badge unbound">未绑定任务</span>`}
+      ${milestoneBadgeHtml(item)}
       <div class="meta">${escapeHtml(item.requirementId)}${item.projectRoot ? `<br />${escapeHtml(item.projectRoot)}` : ""}${item.updatedAt ? `<br />更新于 ${escapeHtml(formatUpdatedAt(item.updatedAt))}` : ""}</div>
       <div class="hub-card-edit" hidden>
         <input class="edit-name" value="${escapeHtml(item.requirementName || "")}" placeholder="需求名称" />
@@ -987,16 +1261,366 @@ function renderProjectTbPanel() {
   }
 }
 
+function syncProjectTabs() {
+  const tabBtns = document.querySelectorAll(".project-tab-btn")
+  for (const btn of tabBtns) {
+    const isActive = btn.dataset.tab === projectTab
+    btn.classList.toggle("active", isActive)
+    btn.setAttribute("aria-selected", isActive ? "true" : "false")
+  }
+}
+
+function renderKanbanBoard() {
+  const kanbanBoardEl = document.getElementById("kanbanBoard")
+  const kanbanEmptyEl = document.getElementById("kanbanEmpty")
+  if (!kanbanBoardEl) return
+  const built = buildKanbanMarkup(requirementSummaries, {
+    filter: projectFilter,
+    lastCreatedId: lastCreatedRequirementId,
+    tbStatuses: cardStatusesCache,
+  })
+  if (built.kind === "empty") {
+    if (kanbanEmptyEl) kanbanEmptyEl.hidden = false
+    kanbanBoardEl.innerHTML = ""
+    return
+  }
+  if (kanbanEmptyEl) kanbanEmptyEl.hidden = true
+  kanbanBoardEl.innerHTML = built.html
+  if (built.kind !== "cards") return
+  setupKanbanDragDrop(kanbanBoardEl)
+  for (const card of kanbanBoardEl.querySelectorAll(".kanban-card")) {
+    const requirementId = card.dataset.requirementId
+    card.querySelector("[data-open]").onclick = (e) => { e.stopPropagation(); goToRequirement(requirementId) }
+    card.querySelector("[data-edit]").onclick = (e) => { e.stopPropagation(); goToRequirement(requirementId) }
+    card.querySelector("[data-delete]").onclick = async (e) => {
+      e.stopPropagation()
+      const item = requirementSummaries.find((entry) => entry.requirementId === requirementId)
+      const label = item?.requirementName || requirementId
+      if (!window.confirm(`删除需求「${label}」的状态？\n只删除状态库记录，不会删除源码目录。此操作不可恢复。`)) return
+      try {
+        await window.octopus.deleteRequirement(requirementId)
+        if (lastCreatedRequirementId === requirementId) lastCreatedRequirementId = ""
+        if (selectedRequirement === requirementId) selectedRequirement = undefined
+        if (expandedScheduleId === requirementId) collapseHubSchedule()
+        statusEl.textContent = "需求已删除"
+        statusEl.className = "badge good"
+        await showProjectPage(selectedProjectId)
+      } catch (error) {
+        showError(error)
+      }
+    }
+    const tbSelect = card.querySelector(".kanban-tb-status")
+    if (tbSelect) {
+      tbSelect.onchange = async () => {
+        const statusId = tbSelect.value
+        if (!statusId) return
+        try {
+          await window.octopus.updateRequirementTeambitionStatus(requirementId, statusId)
+          statusEl.textContent = "Teambition 状态已更新"
+          statusEl.className = "badge good"
+          await loadRequirementSummaries(selectedProjectId)
+          renderProjectPage()
+        } catch (error) {
+          showError(error)
+        }
+      }
+    }
+    card.onclick = () => goToRequirement(requirementId)
+  }
+}
+
+function renderProjectSettings() {
+  const projectSettingsEl = document.getElementById("projectSettings")
+  if (!projectSettingsEl) return
+  const binding = currentProject?.teambition
+  const omniplanFolder = currentProject?.metadata?.omniplanFolder || ""
+  const omniplanFileName = currentProject?.metadata?.omniplanFileName || ""
+  projectSettingsEl.innerHTML = `
+    <div class="panel-card">
+      <h3>Teambition 绑定</h3>
+      <p class="help">填写 Teambition 项目 ID，或用任务编号前缀解析。未配置凭据时会显示可读错误。</p>
+      <div class="field">
+        <label for="settingsTbProjectId">Teambition 项目 ID</label>
+        <input id="settingsTbProjectId" value="${escapeHtml(binding?.projectId || "")}" placeholder="可选" />
+      </div>
+      <div class="field">
+        <label for="settingsTbPrefix">前缀（prefix）</label>
+        <input id="settingsTbPrefix" value="${escapeHtml(binding?.uniqueIdPrefix || "")}" placeholder="例如：ACME" />
+      </div>
+      <div class="tb-actions">
+        <button id="settingsBindTb" type="button">绑定</button>
+        <button id="settingsUnbindTb" class="secondary" type="button">解绑</button>
+        <button id="settingsLoadTbStatuses" class="secondary" type="button">查看卡片状态</button>
+      </div>
+      <div id="settingsTbBindInfo" class="muted" style="margin-top:8px">${binding?.projectId ? `已绑定：${binding.name || binding.projectId}` : "尚未绑定 Teambition 项目"}</div>
+      <div id="settingsTbStatusList" class="tb-status-list" hidden></div>
+    </div>
+    <div class="panel-card">
+      <h3>OmniPlan</h3>
+      <p class="help">OmniPlan 文件夹名用于导出/导入甘特图。根目录来自配置。</p>
+      <div class="field">
+        <label for="settingsOmniplanFolder">文件夹名</label>
+        <input id="settingsOmniplanFolder" value="${escapeHtml(omniplanFolder)}" placeholder="例如：cdc-dior" />
+      </div>
+      <div class="field">
+        <label for="settingsOmniplanFileName">目标文件名（可选）</label>
+        <input id="settingsOmniplanFileName" value="${escapeHtml(omniplanFileName)}" placeholder="默认使用项目名" />
+      </div>
+      <button id="settingsSaveOmniplan" type="button">保存 OmniPlan 设置</button>
+    </div>
+    <div class="panel-card" id="settingsBrdCard">
+      <h3>BRD 设计</h3>
+      <p class="help">按项目配置小程序/官网/前后端代码与展示信息，供 AI 生成或检查 BRD。提示词可用 CLI <code>octopus brd prompt-set</code> 覆盖。</p>
+      <div class="field"><label for="brdMiniprogram">小程序代码路径</label><input id="brdMiniprogram" placeholder="相对项目根或绝对路径" /></div>
+      <div class="field"><label for="brdWebsiteCode">官网代码路径</label><input id="brdWebsiteCode" /></div>
+      <div class="field"><label for="brdFrontend">前端代码路径</label><input id="brdFrontend" /></div>
+      <div class="field"><label for="brdBackend">后端代码路径</label><input id="brdBackend" /></div>
+      <div class="field"><label for="brdMiniArtifact">小程序编译产物</label><input id="brdMiniArtifact" /></div>
+      <div class="field"><label for="brdWebsiteUrl">官网展示域名</label><input id="brdWebsiteUrl" placeholder="https://..." /></div>
+      <div class="field"><label for="brdSpecPath">BRD 规范路径</label><input id="brdSpecPath" /></div>
+      <div class="field"><label for="brdOutputPath">BRD 产出路径</label><input id="brdOutputPath" placeholder="默认节点目录 brd.md" /></div>
+      <div class="tb-actions">
+        <button id="settingsSaveBrd" type="button">保存 BRD 设置</button>
+        <button id="settingsPreviewBrdPrompts" class="secondary" type="button">预览提示词</button>
+      </div>
+      <pre id="settingsBrdPromptPreview" class="muted" style="margin-top:8px;white-space:pre-wrap;max-height:240px;overflow:auto" hidden></pre>
+    </div>
+  `
+  void loadBrdSettingsForm()
+  document.getElementById("settingsBindTb")?.addEventListener("click", async () => {
+    if (!selectedProjectId) return
+    const tbProjectId = document.getElementById("settingsTbProjectId")?.value.trim() || undefined
+    const prefix = document.getElementById("settingsTbPrefix")?.value.trim() || undefined
+    try {
+      currentProject = await window.octopus.bindProjectTeambition(selectedProjectId, {
+        ...(tbProjectId ? { projectId: tbProjectId } : {}),
+        ...(prefix ? { prefix } : {}),
+      })
+      cardStatusesCache = []
+      statusEl.textContent = "已绑定 Teambition 项目"
+      statusEl.className = "badge good"
+      await loadProjectSummaries()
+      renderProjectPage()
+    } catch (error) {
+      statusEl.textContent = readableError(error)
+      statusEl.className = "badge bad"
+    }
+  })
+  document.getElementById("settingsUnbindTb")?.addEventListener("click", async () => {
+    if (!selectedProjectId) return
+    try {
+      currentProject = await window.octopus.unbindProjectTeambition(selectedProjectId)
+      cardStatusesCache = []
+      const statusList = document.getElementById("settingsTbStatusList")
+      if (statusList) { statusList.hidden = true; statusList.innerHTML = "" }
+      statusEl.textContent = "已解除 Teambition 项目绑定"
+      statusEl.className = "badge good"
+      await loadProjectSummaries()
+      renderProjectPage()
+    } catch (error) {
+      statusEl.textContent = readableError(error)
+      statusEl.className = "badge bad"
+    }
+  })
+  document.getElementById("settingsLoadTbStatuses")?.addEventListener("click", async () => {
+    if (!selectedProjectId) return
+    try {
+      cardStatusesCache = await window.octopus.listTeambitionCardStatuses(selectedProjectId)
+      const statusList = document.getElementById("settingsTbStatusList")
+      if (statusList) {
+        statusList.hidden = false
+        statusList.innerHTML = cardStatusesCache.length
+          ? cardStatusesCache.map((item) => `<div>${escapeHtml(item.name || item.id)} <span class="muted">${escapeHtml(item.id || "")}</span></div>`).join("")
+          : `<div class="muted">暂无卡片状态</div>`
+      }
+      statusEl.textContent = `已加载 ${cardStatusesCache.length} 个卡片状态`
+      statusEl.className = "badge good"
+    } catch (error) {
+      statusEl.textContent = readableError(error)
+      statusEl.className = "badge bad"
+    }
+  })
+  document.getElementById("settingsSaveOmniplan")?.addEventListener("click", async () => {
+    if (!selectedProjectId || !window.octopus.setProjectOmniPlanMeta) return
+    const folder = document.getElementById("settingsOmniplanFolder")?.value.trim() || ""
+    const fileName = document.getElementById("settingsOmniplanFileName")?.value.trim() || ""
+    try {
+      await window.octopus.setProjectOmniPlanMeta(selectedProjectId, {
+        ...(folder ? { omniplanFolder: folder } : {}),
+        ...(fileName ? { omniplanFileName: fileName } : {}),
+      })
+      currentProject = await window.octopus.getProject(selectedProjectId)
+      statusEl.textContent = "OmniPlan 设置已保存"
+      statusEl.className = "badge good"
+    } catch (error) {
+      showError(error)
+    }
+  })
+  document.getElementById("settingsSaveBrd")?.addEventListener("click", async () => {
+    if (!selectedProjectId || !window.octopus.setProjectBrdDesignConfig) return
+    try {
+      await window.octopus.setProjectBrdDesignConfig(selectedProjectId, {
+        sources: {
+          miniprogramCodePath: document.getElementById("brdMiniprogram")?.value ?? "",
+          websiteCodePath: document.getElementById("brdWebsiteCode")?.value ?? "",
+          frontendCodePath: document.getElementById("brdFrontend")?.value ?? "",
+          backendCodePath: document.getElementById("brdBackend")?.value ?? "",
+          miniprogramBuildArtifact: document.getElementById("brdMiniArtifact")?.value ?? "",
+          websiteUrl: document.getElementById("brdWebsiteUrl")?.value ?? "",
+        },
+        brdSpecPath: document.getElementById("brdSpecPath")?.value ?? "",
+        brdOutputPath: document.getElementById("brdOutputPath")?.value ?? "",
+      })
+      currentProject = await window.octopus.getProject(selectedProjectId)
+      statusEl.textContent = "BRD 设置已保存"
+      statusEl.className = "badge good"
+    } catch (error) {
+      showError(error)
+    }
+  })
+  document.getElementById("settingsPreviewBrdPrompts")?.addEventListener("click", async () => {
+    if (!selectedProjectId || !window.octopus.previewBrdPrompts) return
+    const requirementId = requirementSummaries[0]?.requirementId
+    if (!requirementId) {
+      statusEl.textContent = "请先在本项目下创建需求后再预览提示词"
+      statusEl.className = "badge bad"
+      return
+    }
+    try {
+      const preview = await window.octopus.previewBrdPrompts(selectedProjectId, requirementId, { mode: "all" })
+      const previewEl = document.getElementById("settingsBrdPromptPreview")
+      if (previewEl) {
+        previewEl.hidden = false
+        previewEl.textContent = preview.prompts
+          .map((item) => `── ${item.id} ──\n[system]\n${item.system}\n\n[user]\n${item.prompt}`)
+          .join("\n\n")
+      }
+      statusEl.textContent = `已预览 ${preview.prompts.length} 条提示词`
+      statusEl.className = "badge good"
+    } catch (error) {
+      showError(error)
+    }
+  })
+}
+
+async function loadBrdSettingsForm() {
+  if (!selectedProjectId || !window.octopus.getProjectBrdDesignConfig) return
+  try {
+    const config = await window.octopus.getProjectBrdDesignConfig(selectedProjectId)
+    const setValue = (id, value) => {
+      const el = document.getElementById(id)
+      if (el) el.value = value || ""
+    }
+    setValue("brdMiniprogram", config.sources?.miniprogramCodePath)
+    setValue("brdWebsiteCode", config.sources?.websiteCodePath)
+    setValue("brdFrontend", config.sources?.frontendCodePath)
+    setValue("brdBackend", config.sources?.backendCodePath)
+    setValue("brdMiniArtifact", config.sources?.miniprogramBuildArtifact)
+    setValue("brdWebsiteUrl", config.sources?.websiteUrl)
+    setValue("brdSpecPath", config.brdSpecPath)
+    setValue("brdOutputPath", config.brdOutputPath)
+  } catch (error) {
+    showError(error)
+  }
+}
+
+let kanbanDragData = null
+
+function setupKanbanDragDrop(boardEl) {
+  for (const card of boardEl.querySelectorAll(".kanban-card[draggable]")) {
+    card.addEventListener("dragstart", (e) => {
+      if (e.target.closest(".kanban-tb-status")) { e.preventDefault(); return }
+      kanbanDragData = {
+        requirementId: card.dataset.requirementId,
+        fromPhase: card.dataset.phase,
+      }
+      e.dataTransfer.effectAllowed = "move"
+      e.dataTransfer.setData("text/plain", card.dataset.requirementId)
+      card.classList.add("dragging")
+    })
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging")
+      kanbanDragData = null
+      for (const col of boardEl.querySelectorAll(".kanban-column.drag-over")) {
+        col.classList.remove("drag-over")
+      }
+    })
+  }
+  for (const column of boardEl.querySelectorAll(".kanban-column")) {
+    column.addEventListener("dragover", (e) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = "move"
+      column.classList.add("drag-over")
+    })
+    column.addEventListener("dragleave", (e) => {
+      if (!column.contains(e.relatedTarget)) column.classList.remove("drag-over")
+    })
+    column.addEventListener("drop", async (e) => {
+      e.preventDefault()
+      column.classList.remove("drag-over")
+      if (!kanbanDragData) return
+      const toPhase = column.dataset.phase
+      if (kanbanDragData.fromPhase === toPhase) return
+      try {
+        await window.octopus.moveRequirementPhase(kanbanDragData.requirementId, toPhase)
+        statusEl.textContent = `需求已移至「${phaseLabel(toPhase)}」`
+        statusEl.className = "badge good"
+        await loadRequirementSummaries(selectedProjectId)
+        renderProjectPage()
+      } catch (error) {
+        showError(error)
+        await loadRequirementSummaries(selectedProjectId)
+        renderProjectPage()
+      }
+      kanbanDragData = null
+    })
+  }
+}
+
 function renderProjectPage() {
   if (!requirementCardsEl || !projectEmptyEl) return
   if (window.OctopusGantt?.isDragging?.()) return
   parkHubGantt()
+  const tabTitles = { board: "看板", list: "列表", gantt: "甘特", settings: "设置" }
   if (projectPageTitleEl) {
     projectPageTitleEl.textContent = currentProject
-      ? `${currentProject.name || currentProject.projectId} · 需求列表`
+      ? `${currentProject.name || currentProject.projectId} · ${tabTitles[projectTab] || "看板"}`
       : "项目需求"
   }
   renderProjectTbPanel()
+  syncProjectTabs()
+
+  const kanbanBoardEl = document.getElementById("kanbanBoard")
+  const projectSettingsEl = document.getElementById("projectSettings")
+  const createRequirementPanel = document.getElementById("createRequirementPanel")
+  const settingsPanel = document.getElementById("settingsPanel")
+
+  if (kanbanBoardEl) kanbanBoardEl.hidden = projectTab !== "board"
+  if (requirementCardsEl) requirementCardsEl.hidden = projectTab !== "list"
+  if (projectEmptyEl) projectEmptyEl.hidden = projectTab === "settings" || projectTab === "gantt"
+  if (projectSettingsEl) projectSettingsEl.hidden = projectTab !== "settings"
+  if (projectGanttHostEl) {
+    projectGanttHostEl.hidden = projectTab !== "gantt"
+    if (projectTab !== "gantt" && projectGanttMounted) unmountProjectGantt()
+  }
+  if (createRequirementPanel) createRequirementPanel.hidden = projectTab === "settings"
+  if (settingsPanel) settingsPanel.hidden = projectTab !== "settings"
+
+  if (projectTab === "board") {
+    renderKanbanBoard()
+    return
+  }
+  if (projectTab === "gantt") {
+    parkHubGantt()
+    collapseHubSchedule()
+    renderProjectGantt()
+    return
+  }
+  if (projectTab === "settings") {
+    renderProjectSettings()
+    return
+  }
+
   let built = buildRequirementCardsMarkup(requirementSummaries, {
     filter: projectFilter,
     lastCreatedId: lastCreatedRequirementId,
@@ -1094,6 +1718,7 @@ async function showHub() {
   selectedNode = undefined
   currentProject = null
   collapseHubSchedule()
+  unmountProjectGantt()
   await loadProjectSummaries()
   setChrome("hub")
   renderHub()
@@ -1102,9 +1727,10 @@ async function showHub() {
   statusEl.className = "badge"
 }
 
-async function showProjectPage(projectId) {
+async function showProjectPage(projectId, tab) {
   selectedRequirement = undefined
   selectedNode = undefined
+  projectTab = tab || "board"
   try {
     currentProject = await window.octopus.getProject(projectId)
   } catch {
@@ -1143,6 +1769,7 @@ async function openWorkspace(requirementId) {
     return
   }
   selectedProjectId = state.projectId
+  unmountProjectGantt()
   await loadRequirementSummaries(state.projectId)
   try {
     currentProject = await window.octopus.getProject(state.projectId)
@@ -1160,19 +1787,7 @@ async function applyRoute() {
     await showHub()
     return
   }
-  if (route.view === "legacyProject") {
-    // 旧 hash：先当项目，失败再当需求
-    try {
-      await window.octopus.getProject(route.projectId)
-      setHash(`project/${encodeURIComponent(route.projectId)}`, true)
-      await showProjectPage(route.projectId)
-    } catch {
-      setHash(`requirement/${encodeURIComponent(route.projectId)}`, true)
-      await openWorkspace(route.projectId)
-    }
-    return
-  }
-  if (route.view === "project") await showProjectPage(route.projectId)
+  if (route.view === "project") await showProjectPage(route.projectId, route.projectTab)
   else if (route.view === "workspace") await openWorkspace(route.requirementId)
   else await showHub()
 }
@@ -1216,6 +1831,81 @@ async function refreshRequirementTbBar() {
   }
 }
 
+function fillMilestoneSelects(selectedPhase, selectedNodeId) {
+  if (milestonePhaseEl) {
+    const options = [`<option value="">不挂钩</option>`]
+    for (const phase of PHASE_ORDER) {
+      const selected = phase === selectedPhase ? " selected" : ""
+      options.push(`<option value="${escapeHtml(phase)}"${selected}>${escapeHtml(phaseLabel(phase))}</option>`)
+    }
+    milestonePhaseEl.innerHTML = options.join("")
+  }
+  if (milestoneNodeEl) {
+    const options = [`<option value="">不挂钩</option>`]
+    for (const step of currentState?.steps || []) {
+      const selected = step.id === selectedNodeId ? " selected" : ""
+      options.push(`<option value="${escapeHtml(step.id)}"${selected}>${escapeHtml(step.name || step.id)}</option>`)
+    }
+    milestoneNodeEl.innerHTML = options.join("")
+  }
+}
+
+function hideMilestoneForm() {
+  if (milestoneFormEl) milestoneFormEl.hidden = true
+  if (milestoneEditIdEl) milestoneEditIdEl.value = ""
+}
+
+function openMilestoneForm(milestone) {
+  if (!milestoneFormEl) return
+  fillMilestoneSelects(milestone?.phase, milestone?.nodeId)
+  if (milestoneEditIdEl) milestoneEditIdEl.value = milestone?.id || ""
+  if (milestoneNameEl) milestoneNameEl.value = milestone?.name || ""
+  if (milestoneDateEl) milestoneDateEl.value = milestone?.date || ""
+  if (milestoneNoteEl) milestoneNoteEl.value = milestone?.note || ""
+  if (reachMilestoneEl) reachMilestoneEl.hidden = !milestone || milestone.status === "reached"
+  if (unreachMilestoneEl) unreachMilestoneEl.hidden = !milestone || milestone.status !== "reached"
+  if (deleteMilestoneEl) deleteMilestoneEl.hidden = !milestone
+  milestoneFormEl.hidden = false
+  milestoneNameEl?.focus()
+}
+
+function renderRequirementMilestoneBar() {
+  if (!milestoneChipsEl) return
+  const planned = workspaceMilestones.filter((item) => item.status === "planned")
+  const reached = workspaceMilestones.filter((item) => item.status === "reached")
+  const visible = showReachedMilestones ? [...planned, ...reached] : planned.slice(0, 3)
+  const extra = !showReachedMilestones && planned.length > 3 ? planned.length - 3 : 0
+  const today = new Date()
+  const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`
+  const chips = visible.map((item) => {
+    const overdue = item.status === "planned" && item.date < todayYmd
+    return `<button type="button" class="milestone-chip${overdue ? " is-overdue" : ""}" data-milestone-id="${escapeHtml(item.id)}">${escapeHtml(item.name)} ${escapeHtml(formatMilestoneDate(item.date))}${overdue ? "（逾期）" : item.status === "reached" ? "（已达成）" : ""}</button>`
+  })
+  if (extra > 0) chips.push(`<span class="muted">还有 ${extra} 个</span>`)
+  if (!workspaceMilestones.length) chips.push(`<span class="muted">尚未添加</span>`)
+  milestoneChipsEl.innerHTML = chips.join("")
+  for (const chip of milestoneChipsEl.querySelectorAll("[data-milestone-id]")) {
+    chip.onclick = () => {
+      const item = workspaceMilestones.find((entry) => entry.id === chip.dataset.milestoneId)
+      if (item) openMilestoneForm(item)
+    }
+  }
+  if (toggleReachedMilestonesEl) {
+    toggleReachedMilestonesEl.hidden = reached.length === 0
+    toggleReachedMilestonesEl.textContent = showReachedMilestones ? "收起已达成" : `已达成 ${reached.length}`
+  }
+}
+
+async function refreshRequirementMilestoneBar() {
+  if (!selectedRequirement || !window.octopus.listMilestones) {
+    workspaceMilestones = []
+    renderRequirementMilestoneBar()
+    return
+  }
+  workspaceMilestones = await window.octopus.listMilestones(selectedRequirement)
+  renderRequirementMilestoneBar()
+}
+
 async function showRequirement(id) {
   if (!id) return
   selectedRequirement = id
@@ -1241,6 +1931,7 @@ async function showRequirement(id) {
   renderSummary()
   renderGraph()
   await refreshRequirementTbBar()
+  await refreshRequirementMilestoneBar()
   if (selectedNode) await showNode(selectedNode)
 }
 
@@ -1285,11 +1976,19 @@ function applyGraphZoom() {
   // 放大用 transform，同时撑开布局尺寸，保证滚动条能滚到全部内容
   graphScalerEl.style.width = width ? `${Math.ceil(width * graphZoom)}px` : "auto"
   graphScalerEl.style.height = height ? `${Math.ceil(height * graphZoom)}px` : "auto"
+  // 内容小于可视区时居中（减去 wrap 内边距，避免贴死边缘）
+  if (graphWrapEl && width > 0 && height > 0) {
+    const padX = 16 // 左右 padding
+    const padY = 28 // 12(上) + 16(下)
+    const centered = width * graphZoom < graphWrapEl.clientWidth - padX ||
+      height * graphZoom < graphWrapEl.clientHeight - padY
+    graphWrapEl.classList.toggle("is-centered", centered)
+  }
 }
 
 function setGraphZoom(next, anchor) {
   const before = graphZoom
-  const clamped = Math.min(2.2, Math.max(0.9, Math.round(next * 100) / 100))
+  const clamped = Math.min(5, Math.max(0.2, Math.round(next * 100) / 100))
   if (clamped === before) {
     applyGraphZoom()
     return
@@ -1312,7 +2011,9 @@ function setupGraphWheelZoom() {
     event.preventDefault()
     const intensity = Math.min(0.35, Math.abs(event.deltaY) / 240)
     const direction = event.deltaY > 0 ? -1 : 1
-    setGraphZoom(graphZoom + direction * Math.max(0.08, intensity), {
+    setGraphZoom(direction > 0
+      ? graphZoom * (1 + Math.max(0.08, intensity))
+      : graphZoom / (1 + Math.max(0.08, intensity)), {
       clientX: event.clientX,
       clientY: event.clientY,
     })
@@ -1939,64 +2640,6 @@ document.getElementById("createRequirement").onclick = async () => {
   }
 }
 
-document.getElementById("bindTbProject").onclick = async () => {
-  if (!selectedProjectId) return
-  const tbProjectId = document.getElementById("tbProjectId").value.trim() || undefined
-  const prefix = document.getElementById("tbPrefix").value.trim() || undefined
-  try {
-    currentProject = await window.octopus.bindProjectTeambition(selectedProjectId, {
-      ...(tbProjectId ? { projectId: tbProjectId } : {}),
-      ...(prefix ? { prefix } : {}),
-    })
-    cardStatusesCache = []
-    statusEl.textContent = "已绑定 Teambition 项目"
-    statusEl.className = "badge good"
-    await loadProjectSummaries()
-    renderProjectPage()
-  } catch (error) {
-    statusEl.textContent = readableError(error)
-    statusEl.className = "badge bad"
-  }
-}
-
-document.getElementById("unbindTbProject").onclick = async () => {
-  if (!selectedProjectId) return
-  try {
-    currentProject = await window.octopus.unbindProjectTeambition(selectedProjectId)
-    cardStatusesCache = []
-    if (tbStatusListEl) {
-      tbStatusListEl.hidden = true
-      tbStatusListEl.innerHTML = ""
-    }
-    statusEl.textContent = "已解除 Teambition 项目绑定"
-    statusEl.className = "badge good"
-    await loadProjectSummaries()
-    renderProjectPage()
-  } catch (error) {
-    statusEl.textContent = readableError(error)
-    statusEl.className = "badge bad"
-  }
-}
-
-document.getElementById("loadTbStatuses").onclick = async () => {
-  if (!selectedProjectId) return
-  try {
-    cardStatusesCache = await window.octopus.listTeambitionCardStatuses(selectedProjectId)
-    fillTbStatusSelect(cardStatusesCache, currentState?.teambition?.statusId)
-    if (tbStatusListEl) {
-      tbStatusListEl.hidden = false
-      tbStatusListEl.innerHTML = cardStatusesCache.length
-        ? cardStatusesCache.map((item) => `<div>${escapeHtml(item.name || item.id)} <span class="muted">${escapeHtml(item.id || "")}</span></div>`).join("")
-        : `<div class="muted">暂无卡片状态</div>`
-    }
-    statusEl.textContent = `已加载 ${cardStatusesCache.length} 个卡片状态`
-    statusEl.className = "badge good"
-  } catch (error) {
-    statusEl.textContent = readableError(error)
-    statusEl.className = "badge bad"
-  }
-}
-
 document.getElementById("bindTbTask").onclick = async () => {
   if (!selectedRequirement) return
   const raw = tbTaskRefEl?.value.trim()
@@ -2070,6 +2713,103 @@ document.getElementById("updateTbStatus").onclick = async () => {
   }
 }
 
+if (addMilestoneEl) {
+  addMilestoneEl.onclick = () => openMilestoneForm()
+}
+if (toggleReachedMilestonesEl) {
+  toggleReachedMilestonesEl.onclick = () => {
+    showReachedMilestones = !showReachedMilestones
+    renderRequirementMilestoneBar()
+  }
+}
+if (cancelMilestoneEl) {
+  cancelMilestoneEl.onclick = () => hideMilestoneForm()
+}
+if (milestoneFormEl) {
+  milestoneFormEl.onsubmit = async (event) => {
+    event.preventDefault()
+    if (!selectedRequirement) return
+    const name = milestoneNameEl?.value.trim() || ""
+    const date = milestoneDateEl?.value || ""
+    const phase = milestonePhaseEl?.value || ""
+    const nodeId = milestoneNodeEl?.value || ""
+    const note = milestoneNoteEl?.value || ""
+    const milestoneId = milestoneEditIdEl?.value || ""
+    const payload = {
+      name,
+      date,
+      ...(phase ? { phase } : milestoneId ? { phase: null } : {}),
+      ...(nodeId ? { nodeId } : milestoneId ? { nodeId: null } : {}),
+      ...(note ? { note } : milestoneId ? { note: null } : {}),
+    }
+    try {
+      if (milestoneId) {
+        await window.octopus.updateMilestone(selectedRequirement, milestoneId, payload)
+        statusEl.textContent = "里程碑已更新"
+      } else {
+        await window.octopus.addMilestone(selectedRequirement, payload)
+        statusEl.textContent = "里程碑已添加"
+      }
+      statusEl.className = "badge good"
+      hideMilestoneForm()
+      await showRequirement(selectedRequirement)
+      if (selectedProjectId) {
+        await loadRequirementSummaries(selectedProjectId)
+        renderProjectPage()
+      }
+    } catch (error) {
+      showError(error)
+    }
+  }
+}
+if (reachMilestoneEl) {
+  reachMilestoneEl.onclick = async () => {
+    const milestoneId = milestoneEditIdEl?.value
+    if (!selectedRequirement || !milestoneId) return
+    try {
+      await window.octopus.reachMilestone(selectedRequirement, milestoneId)
+      statusEl.textContent = "已标记达成（不会改变需求阶段）"
+      statusEl.className = "badge good"
+      hideMilestoneForm()
+      await showRequirement(selectedRequirement)
+    } catch (error) {
+      showError(error)
+    }
+  }
+}
+if (unreachMilestoneEl) {
+  unreachMilestoneEl.onclick = async () => {
+    const milestoneId = milestoneEditIdEl?.value
+    if (!selectedRequirement || !milestoneId) return
+    try {
+      await window.octopus.unreachMilestone(selectedRequirement, milestoneId)
+      statusEl.textContent = "已取消达成"
+      statusEl.className = "badge good"
+      hideMilestoneForm()
+      await showRequirement(selectedRequirement)
+    } catch (error) {
+      showError(error)
+    }
+  }
+}
+if (deleteMilestoneEl) {
+  deleteMilestoneEl.onclick = async () => {
+    const milestoneId = milestoneEditIdEl?.value
+    const item = workspaceMilestones.find((entry) => entry.id === milestoneId)
+    if (!selectedRequirement || !milestoneId) return
+    if (!window.confirm(`删除里程碑「${item?.name || milestoneId}」？此操作不可恢复。`)) return
+    try {
+      await window.octopus.deleteMilestone(selectedRequirement, milestoneId)
+      statusEl.textContent = "里程碑已删除"
+      statusEl.className = "badge good"
+      hideMilestoneForm()
+      await showRequirement(selectedRequirement)
+    } catch (error) {
+      showError(error)
+    }
+  }
+}
+
 document.getElementById("refresh").onclick = () => {
   if (selectedRequirement) showRequirement(selectedRequirement).catch(showError)
 }
@@ -2133,8 +2873,8 @@ function defaultGraphZoom() {
   return window.innerWidth < 900 ? 1 : 1.4
 }
 
-document.getElementById("zoomIn").onclick = () => setGraphZoom(graphZoom + 0.15)
-document.getElementById("zoomOut").onclick = () => setGraphZoom(graphZoom - 0.15)
+document.getElementById("zoomIn").onclick = () => setGraphZoom(graphZoom * 1.2)
+document.getElementById("zoomOut").onclick = () => setGraphZoom(graphZoom / 1.2)
 document.getElementById("zoomReset").onclick = () => setGraphZoom(defaultGraphZoom())
 
 if (themeToggleEl) themeToggleEl.onclick = () => toggleTheme()
@@ -2178,6 +2918,12 @@ if (projectFilterEl) {
     renderProjectPage()
   })
 }
+document.querySelectorAll(".project-tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const tab = btn.dataset.tab
+    if (tab && selectedProjectId) goToProject(selectedProjectId, tab)
+  })
+})
 window.addEventListener("hashchange", () => {
   applyRoute().catch(showError)
 })

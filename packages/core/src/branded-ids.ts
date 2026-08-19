@@ -25,6 +25,7 @@ export type RiskEventId = BrandedId<"RiskEventId">
 
 export type ProjectId = BrandedId<"ProjectId">
 export type RequirementId = BrandedId<"RequirementId">
+export type MilestoneId = BrandedId<"MilestoneId">
 export type ChecklistItemId = BrandedId<"ChecklistItemId">
 export type ObservationId = BrandedId<"ObservationId">
 export type AgentCallId = BrandedId<"AgentCallId">
@@ -75,6 +76,11 @@ export function ProjectId(id: string): ProjectId {
 
 export function RequirementId(id: string): RequirementId {
   return id as RequirementId
+}
+
+/** 里程碑 ID 工厂，前缀 ms */
+export function MilestoneId(id: string): MilestoneId {
+  return id as MilestoneId
 }
 
 export function ChecklistItemId(id: string): ChecklistItemId {

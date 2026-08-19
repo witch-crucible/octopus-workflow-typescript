@@ -14,7 +14,7 @@ export interface AIAssistantClient {
 
 /** AI 辅助模块 */
 export interface AIAssistantModule {
-  /** 唯一类型标识。内置 12 类使用 AIAssistantType；插件可注册额外字符串 id。 */
+  /** 唯一类型标识。内置类型使用 AIAssistantType；插件可注册额外字符串 id。 */
   readonly type: string
   /** 模块名称 */
   readonly name: string

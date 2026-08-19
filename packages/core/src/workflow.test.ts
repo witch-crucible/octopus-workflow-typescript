@@ -36,6 +36,7 @@ describe("createEmptyState", () => {
     expect(state.steps).toEqual([])
     expect(state.artifacts).toEqual([])
     expect(state.checklists).toEqual({})
+    expect(state.milestones).toEqual([])
   })
 
   it("有创建和更新时间戳", () => {

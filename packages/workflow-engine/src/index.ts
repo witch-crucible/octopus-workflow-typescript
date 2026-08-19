@@ -18,6 +18,24 @@ import type {
   RequirementTeambitionBinding,
 } from "@octopus/core/workflow.js"
 import type { Project, ProjectSummary, ProjectTeambitionBinding } from "@octopus/core/project.js"
+import {
+  BRD_DESIGN_METADATA_KEY,
+  mergeBrdDesignConfig,
+  parseBrdDesignConfigFromMetadata,
+  serializeBrdDesignConfig,
+  type ProjectBrdDesignConfig,
+  type ProjectBrdDesignConfigPatch,
+} from "@octopus/core/brd-design.js"
+import { AIAssistantType } from "@octopus/core/agent.js"
+import { dirname } from "node:path"
+import {
+  encodeBrdPromptEnvelope,
+  gatherBrdSourceContext,
+  renderBrdPromptsForContext,
+  resolveBrdCheckReportPath,
+  toProjectRelative,
+  type BrdRenderedPrompt,
+} from "./brd-context.js"
 import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER } from "@octopus/core/phase.js"
 import type {
   Task,
@@ -33,10 +51,24 @@ import type { Checklist } from "@octopus/core/checklist.js"
 import { ChecklistItemStatus } from "@octopus/core/checklist.js"
 import type { HeinrichRecord, HeinrichObservation, QualityAssessment } from "@octopus/core/risk.js"
 import { QualityVerdict, HEINRICH_IDEAL_RATIO, createEmptyHeinrichRecord, HeinrichLevel } from "@octopus/core/risk.js"
-import type { Artifact, ArtifactType } from "@octopus/core/artifact.js"
-import { PhaseId, TaskId, ChecklistItemId, ObservationId, ArtifactId } from "@octopus/core/branded-ids.js"
+import { ArtifactType, type Artifact } from "@octopus/core/artifact.js"
+import { PhaseId, TaskId, ChecklistItemId, ObservationId, ArtifactId, MilestoneId } from "@octopus/core/branded-ids.js"
 import { Role } from "@octopus/core/role.js"
 import { InvalidPhaseTransitionError, PhaseLockedError } from "@octopus/core/errors.js"
+import {
+  MilestoneStatus,
+  assertMilestonePhase,
+  isMilestoneOverdue,
+  nextOpenMilestone,
+  normalizeMilestoneDate,
+  normalizeMilestoneName,
+  normalizeMilestoneNote,
+  sortMilestones,
+  todayYmd,
+  type ProjectMilestone,
+  type RequirementMilestone,
+} from "@octopus/core/milestone.js"
+import type { MyWorkItem, MyWorkList, ProjectOverview } from "@octopus/core/my-work.js"
 import { stepToTask, stepToStageInfo } from "@octopus/core/workflow.js"
 import type { StepRuntime } from "@octopus/core/step.js"
 import { createEmptyChecklist } from "@octopus/core/checklist.js"
@@ -52,12 +84,13 @@ import {
   resolveWorkflowNodeKey,
 } from "@octopus/context/workflow.js"
 import type { OctopusConfig } from "@octopus/context/config.js"
-import { toAIClientConfig } from "@octopus/context/config.js"
+import { toAIClientConfig, loadConfig } from "@octopus/context/config.js"
 import {
   createStepFromNode,
   createStepsForPhase,
   createStepsFromDefinition,
 } from "@octopus/task-library/index.js"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import type { AIClient } from "@octopus/agent-layer/index.js"
 import { createAIClient } from "@octopus/agent-layer/index.js"
 import type { AIEventHandler, AIEventPayload, AIGateResult } from "@octopus/core/agent.js"
@@ -67,6 +100,19 @@ import {
   createTeambitionClient,
   type WorkflowStatus,
   type TbTask,
+} from "@octopus/integration/index.js"
+import {
+  parseOmniPlanActual,
+  buildOmniPlanActual,
+  buildTocXml,
+  packOplx,
+  unpackOplx,
+  resolveOmniPlanFolder,
+  resolveOmniPlanFileName,
+  validateOmniPlanName,
+  omniPlanIsoToDate,
+  type OmniPlanBuildInput,
+  type OmniPlanImportResult,
 } from "@octopus/integration/index.js"
 import type { PluginHost } from "@octopus/plugin/index.js"
 import { emptyPluginHost, loadPlugins } from "@octopus/plugin/index.js"
@@ -104,6 +150,28 @@ function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && !Number.isNaN(Date.parse(value))
 }
 
+function requirementMilestoneSummary(state: WorkflowState): {
+  milestoneCount?: number
+  nextMilestone?: { id: string; name: string; date: string; overdue: boolean }
+} {
+  const milestones = state.milestones ?? []
+  if (milestones.length === 0) return {}
+  const next = nextOpenMilestone(milestones)
+  return {
+    milestoneCount: milestones.length,
+    ...(next
+      ? {
+          nextMilestone: {
+            id: next.id,
+            name: next.name,
+            date: next.date,
+            overdue: isMilestoneOverdue(next),
+          },
+        }
+      : {}),
+  }
+}
+
 /** 本地日历日 YYYY-MM-DD（不做时区换算）。 */
 function isDateOnly(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
@@ -113,6 +181,10 @@ function isDateOnly(value: string): boolean {
   const day = Number(dayText)
   const date = new Date(year, month - 1, day)
   return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+}
+
+function identityMatches(value: string | undefined, identity: string): boolean {
+  return (value ?? "").trim().toLowerCase() === identity.trim().toLowerCase()
 }
 
 function validateTaskExportDocument(document: unknown): TaskExportDocument {
@@ -354,6 +426,55 @@ export class WorkflowEngine {
     })
   }
 
+  /** 项目概览（只读投影，从 state 派生）。 */
+  getProjectOverview(projectId: string): ProjectOverview {
+    const project = this.store.loadProject(projectId)
+    const requirementIds = this.listRequirements(projectId)
+    const byPhase: Array<{ phase: Phase; count: number }> = PHASE_ORDER.map((phase) => ({ phase, count: 0 }))
+    let unscheduledCount = 0, unboundTbCount = 0, ownerlessCount = 0
+    let milestonePlanned = 0, milestoneReached = 0, milestoneOverdue = 0
+    const heinrich = { major: 0, minor: 0, trivial: 0 }
+    let readyNodeCount = 0, waitingNodeCount = 0
+    const today = todayYmd()
+    for (const requirementId of requirementIds) {
+      const state = this.getState(requirementId)
+      const idx = PHASE_ORDER.indexOf(state.currentPhase)
+      if (idx >= 0 && byPhase[idx]) byPhase[idx].count++
+      if (!(state.plannedStart && state.plannedEnd)) unscheduledCount++
+      if (!state.teambition?.taskId) unboundTbCount++
+      if (state.owner === undefined || state.owner.trim() === "") ownerlessCount++
+      heinrich.major += state.heinrich.majorDefects
+      heinrich.minor += state.heinrich.minorDefects
+      heinrich.trivial += state.heinrich.trivialDefects
+      for (const ms of state.milestones ?? []) {
+        if (ms.status === MilestoneStatus.PLANNED) {
+          milestonePlanned++
+          if (ms.date < today) milestoneOverdue++
+        } else if (ms.status === MilestoneStatus.REACHED) {
+          milestoneReached++
+        }
+      }
+      const snapshot = this.nodeExecution.getSnapshot(requirementId)
+      readyNodeCount += snapshot.readyNodeIds.length
+      waitingNodeCount += snapshot.waitingNodeIds.length
+    }
+    return {
+      projectId,
+      projectName: project.name,
+      requirementCount: requirementIds.length,
+      byPhase,
+      unscheduledCount,
+      unboundTbCount,
+      milestonePlanned,
+      milestoneReached,
+      milestoneOverdue,
+      heinrich,
+      readyNodeCount,
+      waitingNodeCount,
+      ownerlessCount,
+    }
+  }
+
   /** 创建项目容器。 */
   createProject(name: string, description?: string): Project {
     return this.store.createProject(name, description)
@@ -408,6 +529,9 @@ export class WorkflowEngine {
         ...(state.teambition?.statusName !== undefined
           ? { teambitionStatusName: state.teambition.statusName }
           : {}),
+        ...(state.plannedStart !== undefined ? { plannedStart: state.plannedStart } : {}),
+        ...(state.plannedEnd !== undefined ? { plannedEnd: state.plannedEnd } : {}),
+        ...requirementMilestoneSummary(state),
       }
     })
   }
@@ -435,7 +559,7 @@ export class WorkflowEngine {
   }
 
   /** 更新需求名称或描述。 */
-  updateRequirement(requirementId: string, patch: { name?: string; description?: string }): WorkflowState {
+  updateRequirement(requirementId: string, patch: { name?: string; description?: string; owner?: string | null }): WorkflowState {
     const name = patch.name === undefined ? undefined : patch.name.trim()
     if (name !== undefined && name === "") {
       throw new Error("需求名称必须是非空字符串")
@@ -443,6 +567,19 @@ export class WorkflowEngine {
     return this.transactionalUpdate(requirementId, (current) => {
       if (name !== undefined) current.requirementName = name
       if (patch.description !== undefined) current.description = patch.description
+      if (patch.owner !== undefined) {
+        if (patch.owner === null) {
+          delete current.owner
+        } else {
+          const trimmed = patch.owner.trim()
+          if (trimmed === "") {
+            delete current.owner
+          } else {
+            if (trimmed.length > 80) throw new Error("负责人必须是 1–80 个字符")
+            current.owner = trimmed
+          }
+        }
+      }
       return current
     })
   }
@@ -496,6 +633,323 @@ export class WorkflowEngine {
       step.updatedAt = new Date().toISOString()
       return current
     })
+  }
+
+  /** 为节点设置或清除负责人。 */
+  assignNode(requirementId: string, nodeId: string, assignedTo: string | null): WorkflowState {
+    return this.transactionalUpdate(requirementId, (current) => {
+      const step = current.steps.find((item) => item.id === nodeId)
+      if (!step) throw new Error(`节点不存在: ${nodeId}`)
+      if (assignedTo === null || assignedTo === "") {
+        delete step.assignedTo
+      } else {
+        const trimmed = assignedTo.trim()
+        if (trimmed.length > 80) throw new Error("负责人必须是 1–80 个字符")
+        step.assignedTo = trimmed
+      }
+      step.updatedAt = new Date().toISOString()
+      return current
+    })
+  }
+
+  /** 更新需求级计划起止日期（甘特图排期）。
+   * 两个都空则清除排期；否则必须成对提供 YYYY-MM-DD，且结束不早于开始。
+   */
+  updateRequirementSchedule(
+    requirementId: string,
+    schedule: { plannedStart?: string | null; plannedEnd?: string | null },
+  ): WorkflowState {
+    const startRaw = schedule.plannedStart
+    const endRaw = schedule.plannedEnd
+    const startEmpty = startRaw === undefined || startRaw === null || startRaw === ""
+    const endEmpty = endRaw === undefined || endRaw === null || endRaw === ""
+    const clearing = startEmpty && endEmpty
+
+    let plannedStart: string | undefined
+    let plannedEnd: string | undefined
+    if (!clearing) {
+      if (startEmpty || endEmpty || typeof startRaw !== "string" || typeof endRaw !== "string") {
+        throw new Error("计划起止日期必须成对提供，格式为 YYYY-MM-DD")
+      }
+      if (!isDateOnly(startRaw) || !isDateOnly(endRaw)) {
+        throw new Error("计划起止日期必须成对提供，格式为 YYYY-MM-DD")
+      }
+      if (endRaw < startRaw) {
+        throw new Error("计划结束日期不能早于开始日期")
+      }
+      plannedStart = startRaw
+      plannedEnd = endRaw
+    }
+
+    return this.transactionalUpdate(requirementId, (current) => {
+      if (clearing || plannedStart === undefined || plannedEnd === undefined) {
+        delete current.plannedStart
+        delete current.plannedEnd
+      } else {
+        current.plannedStart = plannedStart
+        current.plannedEnd = plannedEnd
+      }
+      current.updatedAt = new Date().toISOString()
+      return current
+    })
+  }
+
+  /** 移动需求到指定阶段（看板换列薄封装）。
+   * to === from 时 no-op；toIdx === fromIdx+1 走 advancePhase；
+   * toIdx < fromIdx 走 rollbackTo；否则抛 InvalidPhaseTransitionError。
+   */
+  moveRequirementPhase(requirementId: string, toPhase: Phase): WorkflowState {
+    const state = this.getState(requirementId)
+    const from = state.currentPhase
+    if (toPhase === from) return state
+    if (!PHASE_ORDER.includes(toPhase)) {
+      throw new Error("未知阶段")
+    }
+    const fromIdx = getPhaseIndex(from)
+    const toIdx = getPhaseIndex(toPhase)
+    if (toIdx === fromIdx + 1) {
+      return this.advancePhase(requirementId)
+    }
+    if (toIdx < fromIdx) {
+      return this.rollbackTo(requirementId, toPhase)
+    }
+    throw new InvalidPhaseTransitionError(from, toPhase, "看板只能前进到下一阶段，或回退到已到达的阶段")
+  }
+
+  /** 列出需求里程碑（按日期、创建时间排序）。 */
+  listMilestones(requirementId: string): RequirementMilestone[] {
+    return sortMilestones(this.getState(requirementId).milestones ?? [])
+  }
+
+  /** 列出项目下全部需求的里程碑（投影，按日期 / 需求名 / id）。 */
+  listProjectMilestones(projectId: string): ProjectMilestone[] {
+    this.store.loadProject(projectId)
+    const items: ProjectMilestone[] = []
+    for (const requirementId of this.listRequirements(projectId)) {
+      const state = this.getState(requirementId)
+      for (const milestone of state.milestones ?? []) {
+        items.push({
+          ...milestone,
+          requirementId: state.requirementId,
+          requirementName: state.requirementName,
+        })
+      }
+    }
+    return items.sort((a, b) =>
+      a.date.localeCompare(b.date)
+      || a.requirementName.localeCompare(b.requirementName)
+      || a.id.localeCompare(b.id))
+  }
+
+  /** 按身份（姓名/邮箱等）查询分配给自己的需求与节点。 */
+  listMyWork(identity: string, projectId?: string): MyWorkList {
+    if (identity.trim() === "") return { identity: "", requirements: [], nodes: [] }
+    const requirements: MyWorkItem[] = []
+    const nodes: MyWorkItem[] = []
+    const requirementIds = projectId ? this.listRequirements(projectId) : this.listRequirements()
+    for (const requirementId of requirementIds) {
+      const state = this.getState(requirementId)
+      const projectName = this.store.loadProject(state.projectId).name
+      const base = {
+        projectId: state.projectId,
+        projectName,
+        requirementId: state.requirementId,
+        requirementName: state.requirementName,
+      }
+      const next = requirementMilestoneSummary(state).nextMilestone
+      const plannedEnd = state.plannedEnd
+      const overdue = (next?.overdue === true) || (plannedEnd !== undefined && plannedEnd < todayYmd())
+      if (identityMatches(state.owner, identity)) {
+        requirements.push({
+          kind: "requirement",
+          ...base,
+          phase: state.currentPhase,
+          ...(state.owner !== undefined ? { owner: state.owner } : {}),
+          ...(next ? { nextMilestone: next } : {}),
+          ...(plannedEnd !== undefined ? { plannedEnd } : {}),
+          overdue,
+        })
+      }
+      for (const step of state.steps) {
+        if (identityMatches(step.assignedTo, identity) && (step.status === TaskStatus.PENDING || step.status === TaskStatus.IN_PROGRESS || step.status === TaskStatus.BLOCKED)) {
+          nodes.push({
+            kind: "node",
+            ...base,
+            phase: step.phase,
+            ...(state.owner !== undefined ? { owner: state.owner } : {}),
+            nodeId: step.id,
+            nodeName: step.name,
+            status: step.status,
+            ...(step.assignedTo !== undefined ? { assignedTo: step.assignedTo } : {}),
+            ...(step.plannedEnd !== undefined ? { plannedEnd: step.plannedEnd } : {}),
+            overdue: step.plannedEnd !== undefined && step.plannedEnd < todayYmd(),
+          })
+        }
+      }
+    }
+    const sortFn = (a: MyWorkItem, b: MyWorkItem): number => {
+      if (a.overdue !== b.overdue) return a.overdue ? -1 : 1
+      const dateA = a.plannedEnd ?? ("nextMilestone" in a && a.nextMilestone ? a.nextMilestone.date : "") ?? ""
+      const dateB = b.plannedEnd ?? ("nextMilestone" in b && b.nextMilestone ? b.nextMilestone.date : "") ?? ""
+      const dateCmp = dateA.localeCompare(dateB)
+      if (dateCmp !== 0) return dateCmp
+      return a.requirementName.localeCompare(b.requirementName)
+    }
+    return {
+      identity: identity.trim(),
+      requirements: requirements.sort(sortFn),
+      nodes: nodes.sort(sortFn),
+    }
+  }
+
+  /** 新增需求里程碑。 */
+  addMilestone(
+    requirementId: string,
+    input: { name: string; date: string; phase?: Phase; nodeId?: string; note?: string },
+  ): RequirementMilestone {
+    const name = normalizeMilestoneName(input.name)
+    const date = normalizeMilestoneDate(input.date)
+    const phase = input.phase === undefined ? undefined : assertMilestonePhase(input.phase)
+    const note = input.note === undefined ? undefined : normalizeMilestoneNote(input.note)
+    const now = new Date().toISOString()
+    const created: RequirementMilestone = {
+      id: MilestoneId(`ms_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+      name,
+      date,
+      status: MilestoneStatus.PLANNED,
+      createdAt: now,
+      updatedAt: now,
+      ...(phase !== undefined ? { phase } : {}),
+      ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
+      ...(note !== undefined ? { note } : {}),
+    }
+
+    this.transactionalUpdate(requirementId, (current) => {
+      if (created.nodeId !== undefined && !current.steps.some((step) => step.id === created.nodeId)) {
+        throw new Error(`节点不存在: ${created.nodeId}`)
+      }
+      current.milestones = [...(current.milestones ?? []), created]
+      return current
+    })
+    return created
+  }
+
+  /** 更新里程碑字段；日期不能清空。 */
+  updateMilestone(
+    requirementId: string,
+    milestoneId: string,
+    patch: {
+      name?: string
+      date?: string | null
+      phase?: Phase | null
+      nodeId?: string | null
+      note?: string | null
+    },
+  ): RequirementMilestone {
+    let updated: RequirementMilestone | undefined
+    this.transactionalUpdate(requirementId, (current) => {
+      const milestones = [...(current.milestones ?? [])]
+      const index = milestones.findIndex((item) => item.id === milestoneId)
+      if (index === -1) throw new Error(`里程碑不存在: ${milestoneId}`)
+      const currentMilestone = milestones[index]
+      if (!currentMilestone) throw new Error(`里程碑不存在: ${milestoneId}`)
+
+      if (patch.date !== undefined && (patch.date === null || patch.date === "")) {
+        throw new Error("里程碑日期必须是 YYYY-MM-DD")
+      }
+      if (patch.nodeId) {
+        if (!current.steps.some((step) => step.id === patch.nodeId)) {
+          throw new Error(`节点不存在: ${patch.nodeId}`)
+        }
+      }
+
+      const next: RequirementMilestone = { ...currentMilestone, updatedAt: new Date().toISOString() }
+      if (patch.name !== undefined) next.name = normalizeMilestoneName(patch.name)
+      if (typeof patch.date === "string") next.date = normalizeMilestoneDate(patch.date)
+      if (patch.phase === null) delete next.phase
+      else if (patch.phase !== undefined) next.phase = assertMilestonePhase(patch.phase)
+      if (patch.nodeId === null) delete next.nodeId
+      else if (patch.nodeId !== undefined) next.nodeId = patch.nodeId
+      if (patch.note === null) delete next.note
+      else if (patch.note !== undefined) next.note = normalizeMilestoneNote(patch.note)
+
+      milestones[index] = next
+      current.milestones = milestones
+      updated = next
+      return current
+    })
+    if (!updated) throw new Error(`里程碑不存在: ${milestoneId}`)
+    return updated
+  }
+
+  /** 标记里程碑已达成。已达成则 no-op。 */
+  reachMilestone(requirementId: string, milestoneId: string): RequirementMilestone {
+    return this.setMilestoneReached(requirementId, milestoneId, true)
+  }
+
+  /** 取消达成。计划中则 no-op。 */
+  unreachMilestone(requirementId: string, milestoneId: string): RequirementMilestone {
+    return this.setMilestoneReached(requirementId, milestoneId, false)
+  }
+
+  /** 删除里程碑。 */
+  deleteMilestone(requirementId: string, milestoneId: string): void {
+    this.transactionalUpdate(requirementId, (current) => {
+      const milestones = current.milestones ?? []
+      if (!milestones.some((item) => item.id === milestoneId)) {
+        throw new Error(`里程碑不存在: ${milestoneId}`)
+      }
+      current.milestones = milestones.filter((item) => item.id !== milestoneId)
+      return current
+    })
+  }
+
+  private setMilestoneReached(
+    requirementId: string,
+    milestoneId: string,
+    reached: boolean,
+  ): RequirementMilestone {
+    let result: RequirementMilestone | undefined
+    this.transactionalUpdate(requirementId, (current) => {
+      const milestones = [...(current.milestones ?? [])]
+      const index = milestones.findIndex((item) => item.id === milestoneId)
+      if (index === -1) throw new Error(`里程碑不存在: ${milestoneId}`)
+      const currentMilestone = milestones[index]
+      if (!currentMilestone) throw new Error(`里程碑不存在: ${milestoneId}`)
+
+      if (reached) {
+        if (currentMilestone.status === MilestoneStatus.REACHED) {
+          result = currentMilestone
+          return current
+        }
+        const now = new Date().toISOString()
+        const next: RequirementMilestone = {
+          ...currentMilestone,
+          status: MilestoneStatus.REACHED,
+          reachedAt: now,
+          updatedAt: now,
+        }
+        milestones[index] = next
+        result = next
+      } else {
+        if (currentMilestone.status === MilestoneStatus.PLANNED) {
+          result = currentMilestone
+          return current
+        }
+        const next: RequirementMilestone = {
+          ...currentMilestone,
+          status: MilestoneStatus.PLANNED,
+          updatedAt: new Date().toISOString(),
+        }
+        delete next.reachedAt
+        milestones[index] = next
+        result = next
+      }
+      current.milestones = milestones
+      return current
+    })
+    if (!result) throw new Error(`里程碑不存在: ${milestoneId}`)
+    return result
   }
 
   /** 获取当前节点、READY 节点和活动运行摘要。 */
@@ -1739,6 +2193,608 @@ export class WorkflowEngine {
       return current
     })
     return next
+  }
+
+  // ── OmniPlan 导入导出 ──
+
+  /**
+   * 更新项目的 OmniPlan 元数据（仅允许 omniplanFolder / omniplanIdMap / omniplanFileName 三个键）。
+   */
+  setProjectOmniPlanMeta(
+    projectId: string,
+    patch: { omniplanFolder?: string; omniplanIdMap?: string; omniplanFileName?: string },
+  ): Project {
+    const allowedKeys = new Set(["omniplanFolder", "omniplanIdMap", "omniplanFileName"])
+    const invalidKeys = Object.keys(patch).filter((k) => !allowedKeys.has(k))
+    if (invalidKeys.length > 0) {
+      throw new Error(`不允许修改以下 OmniPlan 元数据键: ${invalidKeys.join(", ")}`)
+    }
+
+    return this.store.updateProject(projectId, (current) => {
+      if (!current.metadata) current.metadata = {}
+      if (patch.omniplanFolder !== undefined) {
+        validateOmniPlanName(patch.omniplanFolder, "folder")
+        current.metadata["omniplanFolder"] = patch.omniplanFolder
+      }
+      if (patch.omniplanIdMap !== undefined) {
+        current.metadata["omniplanIdMap"] = patch.omniplanIdMap
+      }
+      if (patch.omniplanFileName !== undefined) {
+        current.metadata["omniplanFileName"] = patch.omniplanFileName
+      }
+      return current
+    })
+  }
+
+  // ── BRD 设计（项目配置 + AI 生成/检查）──
+
+  /** 读取项目 BRD 设计配置（无配置时返回空对象） */
+  getProjectBrdDesignConfig(projectId: string): ProjectBrdDesignConfig {
+    const project = this.store.loadProject(projectId)
+    return parseBrdDesignConfigFromMetadata(project.metadata)
+  }
+
+  /** 深合并更新项目 BRD 设计配置；空串字段表示清除 */
+  setProjectBrdDesignConfig(projectId: string, patch: ProjectBrdDesignConfigPatch): Project {
+    return this.store.updateProject(projectId, (current) => {
+      if (!current.metadata) current.metadata = {}
+      const merged = mergeBrdDesignConfig(
+        parseBrdDesignConfigFromMetadata(current.metadata),
+        patch,
+      )
+      const serialized = serializeBrdDesignConfig(merged)
+      if (serialized === undefined) {
+        delete current.metadata[BRD_DESIGN_METADATA_KEY]
+      } else {
+        current.metadata[BRD_DESIGN_METADATA_KEY] = serialized
+      }
+      return current
+    })
+  }
+
+  /** 预览已渲染提示词（不调用 AI） */
+  previewBrdPrompts(
+    projectId: string,
+    requirementId: string,
+    options?: { mode?: "generate" | "check" | "all"; includeSummarize?: boolean },
+  ): { prompts: BrdRenderedPrompt[]; warnings: string[]; outputPath: string } {
+    const { config, context } = this.prepareBrdContext(projectId, requirementId)
+    const prompts = renderBrdPromptsForContext(
+      config,
+      context,
+      options?.mode ?? "all",
+      options?.includeSummarize === true ? { includeSummarize: true } : undefined,
+    )
+    return { prompts, warnings: context.warnings, outputPath: context.outputPath }
+  }
+
+  /** AI 生成 BRD；dryRun 只返回提示词不写文件 */
+  async generateBrd(
+    projectId: string,
+    requirementId: string,
+    options?: { dryRun?: boolean },
+  ): Promise<{
+    outputPath: string
+    result?: string
+    promptsUsed: BrdRenderedPrompt[]
+    warnings: string[]
+    dryRun: boolean
+  }> {
+    const { config, context, state } = this.prepareBrdContext(projectId, requirementId)
+    const promptsUsed = renderBrdPromptsForContext(config, context, "generate")
+    const generatePrompt = promptsUsed.find((item) => item.id === "generate")
+    if (!generatePrompt) {
+      throw new Error("未找到 generate 提示词")
+    }
+    if (options?.dryRun) {
+      return {
+        outputPath: context.outputPath,
+        promptsUsed,
+        warnings: context.warnings,
+        dryRun: true,
+      }
+    }
+    if (!this.aiClient) {
+      throw new Error("未配置 AI 客户端，无法生成 BRD")
+    }
+    const envelope = encodeBrdPromptEnvelope(generatePrompt.system, generatePrompt.prompt)
+    const response = await this.aiClient.callAssistant(AIAssistantType.BRD_GENERATE, envelope)
+    mkdirSync(dirname(context.absoluteOutputPath), { recursive: true })
+    writeFileSync(context.absoluteOutputPath, response.result, "utf8")
+    this.createArtifact(requirementId, {
+      type: ArtifactType.BRD,
+      title: `${state.requirementName} BRD`,
+      description: "AI 生成的商业需求文档",
+      phase: Phase.INTENTION,
+      createdBy: Role.AI,
+      content: response.result.slice(0, 4_000),
+      filePath: toProjectRelative(state.projectRoot || ".", context.absoluteOutputPath),
+    })
+    return {
+      outputPath: context.outputPath,
+      result: response.result,
+      promptsUsed,
+      warnings: context.warnings,
+      dryRun: false,
+    }
+  }
+
+  /** AI 检查 BRD；dryRun 只返回提示词；缺少已有 BRD 时抛错 */
+  async checkBrd(
+    projectId: string,
+    requirementId: string,
+    options?: { dryRun?: boolean },
+  ): Promise<{
+    reportPath: string
+    result?: string
+    promptsUsed: BrdRenderedPrompt[]
+    warnings: string[]
+    dryRun: boolean
+  }> {
+    const { config, context, state } = this.prepareBrdContext(projectId, requirementId)
+    if (!context.existingBrd.trim()) {
+      throw new Error(
+        `未找到已有 BRD（${context.outputPath}）。请先运行 brd generate，或将 BRD 放入该路径后再检查。`,
+      )
+    }
+    const promptsUsed = renderBrdPromptsForContext(config, context, "check")
+    const checkPrompt = promptsUsed.find((item) => item.id === "check")
+    if (!checkPrompt) {
+      throw new Error("未找到 check 提示词")
+    }
+    const reportAbsolute = resolveBrdCheckReportPath(context.absoluteOutputPath)
+    const reportPath = toProjectRelative(state.projectRoot || ".", reportAbsolute)
+    if (options?.dryRun) {
+      return {
+        reportPath,
+        promptsUsed,
+        warnings: context.warnings,
+        dryRun: true,
+      }
+    }
+    if (!this.aiClient) {
+      throw new Error("未配置 AI 客户端，无法检查 BRD")
+    }
+    const envelope = encodeBrdPromptEnvelope(checkPrompt.system, checkPrompt.prompt)
+    const response = await this.aiClient.callAssistant(AIAssistantType.BRD_CHECK, envelope)
+    mkdirSync(dirname(reportAbsolute), { recursive: true })
+    writeFileSync(reportAbsolute, response.result, "utf8")
+    return {
+      reportPath,
+      result: response.result,
+      promptsUsed,
+      warnings: context.warnings,
+      dryRun: false,
+    }
+  }
+
+  private prepareBrdContext(projectId: string, requirementId: string): {
+    config: ProjectBrdDesignConfig
+    context: ReturnType<typeof gatherBrdSourceContext>
+    state: WorkflowState
+  } {
+    const project = this.store.loadProject(projectId)
+    const state = this.getState(requirementId)
+    if (state.projectId !== project.projectId) {
+      throw new Error(`需求 ${requirementId} 不属于项目 ${projectId}`)
+    }
+    const projectRoot = state.projectRoot
+    if (!projectRoot) {
+      throw new Error(`需求 ${requirementId} 未设置 projectRoot，无法采集 BRD 上下文`)
+    }
+    const config = parseBrdDesignConfigFromMetadata(project.metadata)
+    const context = gatherBrdSourceContext(config, projectRoot, {
+      name: state.requirementName,
+      description: state.description,
+    })
+    return { config, context, state }
+  }
+
+  /**
+   * 导出项目为 OmniPlan .oplx 文件。
+   */
+  exportProjectOmniPlan(
+    projectId: string,
+    options?: { fileName?: string | undefined; rootDir?: string | undefined },
+  ): { path: string; taskCount: number; folder: string } {
+    const project = this.store.loadProject(projectId)
+    const requirementIds = this.store.listRequirements(projectId)
+
+    // Resolve root directory
+    const config = loadConfig()
+    const rootDir = options?.rootDir ?? config.omniplan?.rootDir ?? "/Users/ben/Documents/OmniPlan"
+
+    // Resolve folder
+    const folder = resolveOmniPlanFolder(project.name, projectId, project.metadata)
+
+    // Resolve file name
+    const projectsDir = `${rootDir}/Projects/${folder}`
+    let existingFiles: string[] | undefined
+    if (existsSync(projectsDir)) {
+      try {
+        existingFiles = readdirSync(projectsDir)
+          .filter((f) => f.endsWith(".oplx"))
+          .map((f) => f)
+      } catch {
+        // ignore read errors
+      }
+    }
+
+    const fileName = resolveOmniPlanFileName(
+      project.name,
+      project.metadata,
+      options?.fileName,
+      existingFiles,
+    )
+
+    // Build requirements data
+    const requirements: OmniPlanBuildInput["requirements"] = []
+    let totalTaskCount = 0
+
+    for (const reqId of requirementIds) {
+      const state = this.getState(reqId)
+      const nodes = state.steps.map((step) => ({
+        id: step.id,
+        name: step.name,
+        nodeId: step.id,
+        requirementId: reqId,
+        plannedStart: step.plannedStart,
+        plannedEnd: step.plannedEnd,
+        dependsOn: step.dependsOn,
+      }))
+      totalTaskCount += nodes.length
+
+      requirements.push({
+        id: reqId,
+        name: state.requirementName,
+        plannedStart: state.plannedStart,
+        plannedEnd: state.plannedEnd,
+        nodes,
+        milestones: (state.milestones ?? []).map((ms) => ({
+          id: ms.id,
+          name: ms.name,
+          date: ms.date,
+        })),
+      })
+    }
+
+    // Parse existing ID map
+    let idMap: Record<string, string> = {}
+    if (project.metadata?.["omniplanIdMap"]) {
+      try {
+        idMap = JSON.parse(project.metadata["omniplanIdMap"]) as Record<string, string>
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    // Generate scenario ID
+    const scenarioId = `op-${folder.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20)}`
+
+    // Build Actual.xml
+    const actualXml = buildOmniPlanActual({
+      projectName: project.name,
+      scenarioId,
+      startDate: requirements.find((r) => r.plannedStart)?.plannedStart,
+      requirements,
+      idMap,
+    })
+
+    // Build TOC.xml
+    const tocXml = buildTocXml(scenarioId)
+
+    // Pack and write
+    const oplxBuffer = packOplx(actualXml, tocXml)
+
+    // Ensure directory exists
+    if (!existsSync(projectsDir)) {
+      mkdirSync(projectsDir, { recursive: true })
+    }
+
+    const filePath = `${projectsDir}/${fileName}`
+    writeFileSync(filePath, oplxBuffer)
+
+    // Save updated ID map
+    const updatedIdMap = JSON.stringify(idMap)
+    this.store.updateProject(projectId, (current) => {
+      if (!current.metadata) current.metadata = {}
+      current.metadata["omniplanFolder"] = folder
+      current.metadata["omniplanIdMap"] = updatedIdMap
+      current.metadata["omniplanFileName"] = fileName
+      return current
+    })
+
+    return { path: filePath, taskCount: totalTaskCount, folder }
+  }
+
+  /**
+   * 导入 OmniPlan .oplx 文件到项目。
+   */
+  importProjectOmniPlan(
+    projectId: string,
+    options?: { fileName?: string | undefined; path?: string | undefined; rootDir?: string | undefined },
+  ): OmniPlanImportResult {
+    const project = this.store.loadProject(projectId)
+    const requirementIds = this.store.listRequirements(projectId)
+
+    // Resolve root directory
+    const config = loadConfig()
+    const rootDir = options?.rootDir ?? config.omniplan?.rootDir ?? "/Users/ben/Documents/OmniPlan"
+
+    // Resolve file path
+    let filePath: string
+    if (options?.path) {
+      // Absolute path bypasses mapping
+      filePath = options.path
+    } else {
+      const folder = resolveOmniPlanFolder(project.name, projectId, project.metadata)
+      const projectsDir = `${rootDir}/Projects/${folder}`
+      let existingFiles: string[] | undefined
+      if (existsSync(projectsDir)) {
+        try {
+          existingFiles = readdirSync(projectsDir)
+            .filter((f) => f.endsWith(".oplx"))
+            .map((f) => f)
+        } catch {
+          // ignore read errors
+        }
+      }
+
+      const fileName = resolveOmniPlanFileName(
+        project.name,
+        project.metadata,
+        options?.fileName,
+        existingFiles,
+      )
+
+      filePath = `${projectsDir}/${fileName}`
+    }
+
+    // Read and parse the .oplx file
+    const buffer = readFileSync(filePath)
+    const { actualXml } = unpackOplx(buffer)
+    const doc = parseOmniPlanActual(actualXml)
+
+    // Parse existing ID map
+    let idMap: Record<string, string> = {}
+    if (project.metadata?.["omniplanIdMap"]) {
+      try {
+        idMap = JSON.parse(project.metadata["omniplanIdMap"]) as Record<string, string>
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    // Build reverse maps
+    const noteToTask = new Map<string, typeof doc.tasks[0]>()
+    const titleToTask = new Map<string, typeof doc.tasks[0]>()
+    const omniIdToTask = new Map<string, typeof doc.tasks[0]>()
+
+    for (const task of doc.tasks) {
+      if (task.note) {
+        noteToTask.set(task.note, task)
+      }
+      if (task.title) {
+        const parentKey = `${task.title}`
+        titleToTask.set(parentKey, task)
+      }
+      omniIdToTask.set(task.id, task)
+    }
+
+    // Map octopus keys to OmniPlan tasks
+    const requirementMap = new Map<string, typeof doc.tasks[0]>()
+    const nodeMap = new Map<string, typeof doc.tasks[0]>()
+    const milestoneMap = new Map<string, typeof doc.tasks[0]>()
+    const unmatched: string[] = []
+    const skipped: string[] = []
+
+    // Match by note first
+    for (const reqId of requirementIds) {
+      const note = `octopus:requirement:${reqId}`
+      const task = noteToTask.get(note)
+      if (task) {
+        requirementMap.set(reqId, task)
+        continue
+      }
+      unmatched.push(`requirement:${reqId}`)
+    }
+
+    // Match nodes by note
+    for (const reqId of requirementIds) {
+      const state = this.getState(reqId)
+      for (const step of state.steps) {
+        const nodeNote = `octopus:node:${reqId}:${step.id}`
+        const task = noteToTask.get(nodeNote)
+        if (task) {
+          nodeMap.set(step.id, task)
+          continue
+        }
+
+        // Try title match in same parent group
+        const reqTask = requirementMap.get(reqId)
+        if (reqTask) {
+          const childTasks = doc.tasks.filter((t) =>
+            reqTask.childIds.includes(t.id) ||
+            reqTask.childIds.some((cid) => {
+              const parent = omniIdToTask.get(cid)
+              return parent?.childIds.includes(t.id)
+            }),
+          )
+          const titleMatch = childTasks.find((t) => t.title === step.name)
+          if (titleMatch) {
+            nodeMap.set(step.id, titleMatch)
+            continue
+          }
+        }
+
+        unmatched.push(`node:${reqId}:${step.id}`)
+      }
+    }
+
+    // Match milestones by note → idMap → title+type=milestone (unique)
+    for (const reqId of requirementIds) {
+      const state = this.getState(reqId)
+      const octopusMsIds = new Set<string>((state.milestones ?? []).map((ms) => ms.id))
+
+      // Track which Octopus milestones matched
+      const matchedMsIds = new Set<string>()
+
+      for (const ms of state.milestones ?? []) {
+        // 1. note match
+        const msNote = `octopus:milestone:${reqId}:${ms.id}`
+        const noteTask = noteToTask.get(msNote)
+        if (noteTask) {
+          milestoneMap.set(ms.id, noteTask)
+          matchedMsIds.add(ms.id)
+          continue
+        }
+
+        // 2. idMap match
+        const msKey = `milestone:${reqId}:${ms.id}`
+        const omniId = idMap[msKey]
+        if (omniId) {
+          const omniTask = omniIdToTask.get(omniId)
+          if (omniTask) {
+            milestoneMap.set(ms.id, omniTask)
+            matchedMsIds.add(ms.id)
+            continue
+          }
+        }
+
+        // 3. title match: unique milestone with same name in same requirement group
+        const reqTask = requirementMap.get(reqId)
+        if (reqTask) {
+          const childTasks = doc.tasks.filter((t) =>
+            reqTask.childIds.includes(t.id) ||
+            reqTask.childIds.some((cid) => {
+              const parent = omniIdToTask.get(cid)
+              return parent?.childIds.includes(t.id)
+            }),
+          )
+          const sameName = childTasks.filter(
+            (t) => t.type === "milestone" && t.title === ms.name,
+          )
+          if (sameName.length === 1) {
+            milestoneMap.set(ms.id, sameName[0]!)
+            matchedMsIds.add(ms.id)
+            continue
+          }
+        }
+
+        // 4. no match → skipped
+        skipped.push(`milestone:${reqId}:${ms.id}`)
+      }
+
+      // 5. OmniPlan milestones with no Octopus counterpart → skipped
+      if (requirementMap.has(reqId)) {
+        const reqTask = requirementMap.get(reqId)!
+        for (const task of doc.tasks) {
+          if (task.type !== "milestone") continue
+          if (!task.note?.startsWith(`octopus:milestone:${reqId}:`)) continue
+          const omniMsId = task.note.split(":")[3]
+          if (omniMsId && !octopusMsIds.has(omniMsId)) {
+            skipped.push(`milestone:${reqId}:${omniMsId}`)
+          }
+        }
+      }
+    }
+
+    // Import dates
+    let updatedRequirements = 0
+    let updatedNodes = 0
+    let updatedMilestones = 0
+
+    for (const reqId of requirementIds) {
+      const reqTask = requirementMap.get(reqId)
+      if (!reqTask) continue
+
+      // Import requirement schedule
+      if (reqTask.lockedStartDate) {
+        const start = omniPlanIsoToDate(reqTask.lockedStartDate)
+        if (reqTask.effort) {
+          const days = Math.ceil(reqTask.effort / 28800)
+          const endDate = new Date(start)
+          endDate.setDate(endDate.getDate() + days - 1)
+          const end = endDate.toISOString().slice(0, 10)
+
+          try {
+            this.updateRequirementSchedule(reqId, { plannedStart: start, plannedEnd: end })
+            updatedRequirements++
+          } catch {
+            // Skip if invalid dates
+          }
+        }
+      }
+
+      // Import node schedules
+      const state = this.getState(reqId)
+      for (const step of state.steps) {
+        const nodeTask = nodeMap.get(step.id)
+        if (!nodeTask) continue
+
+        if (!nodeTask.lockedStartDate) {
+          skipped.push(`node:${reqId}:${step.id}`)
+          continue
+        }
+
+        const start = omniPlanIsoToDate(nodeTask.lockedStartDate)
+        let end: string | undefined
+        if (nodeTask.effort) {
+          const days = Math.ceil(nodeTask.effort / 28800)
+          const endDate = new Date(start)
+          endDate.setDate(endDate.getDate() + days - 1)
+          end = endDate.toISOString().slice(0, 10)
+        }
+
+        if (start && end) {
+          try {
+            this.updateNodeSchedule(reqId, step.id, { plannedStart: start, plannedEnd: end })
+            updatedNodes++
+          } catch {
+            // Skip if invalid dates
+          }
+        } else {
+          skipped.push(`node:${reqId}:${step.id}`)
+        }
+      }
+
+      // Import milestone dates
+      const state2 = this.getState(reqId)
+      for (const ms of state2.milestones ?? []) {
+        const msTask = milestoneMap.get(ms.id)
+        if (!msTask) continue
+
+        if (!msTask.lockedStartDate) {
+          skipped.push(`milestone:${reqId}:${ms.id}`)
+          continue
+        }
+
+        try {
+          const start = omniPlanIsoToDate(msTask.lockedStartDate)
+          this.updateMilestone(reqId, ms.id, { date: start })
+          updatedMilestones++
+        } catch {
+          // Skip if invalid dates
+        }
+      }
+    }
+
+    // Save updated ID map
+    const updatedIdMap = JSON.stringify(idMap)
+    this.store.updateProject(projectId, (current) => {
+      if (!current.metadata) current.metadata = {}
+      current.metadata["omniplanIdMap"] = updatedIdMap
+      return current
+    })
+
+    return {
+      updatedRequirements,
+      updatedNodes,
+      updatedMilestones,
+      unmatched,
+      skipped,
+      path: filePath,
+    }
   }
 }
 

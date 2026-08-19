@@ -13,6 +13,9 @@ import { buildAiCommands } from "./commands/ai.js"
 import { buildTaskCommands } from "./commands/task.js"
 import { buildNodeCommands } from "./commands/node.js"
 import { buildWorkflowCommands } from "./commands/workflow.js"
+import { buildMilestoneCommands } from "./commands/milestone.js"
+import { buildMineCommands } from "./commands/mine.js"
+import { buildBrdCommands } from "./commands/brd.js"
 import { createStateStore } from "@octopus/context/index.js"
 import { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 import { TaskStatus } from "@octopus/core/task.js"
@@ -600,6 +603,67 @@ describe("CLI 命令验证", () => {
     consoleErrorSpy.mockRestore()
   })
 
+  it("brd config set/get 与 prompts dry-run", async () => {
+    const engine = createEngine()
+    const projectRoot = mkdtempSync(join(tmpdir(), "octopus-cli-brd-"))
+    temporaryProjectRoots.push(projectRoot)
+    writeFileSync(join(projectRoot, "README.md"), "# app")
+    const project = engine.createProject("BRD CLI")
+    const req = engine.initRequirement(project.projectId, "需求BRD", "desc", projectRoot)
+
+    const program = new Command()
+    buildBrdCommands(program, engine)
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    await program.parseAsync([
+      "node",
+      "octopus",
+      "brd",
+      "config",
+      "set",
+      project.projectId,
+      "--frontend",
+      ".",
+      "--website-url",
+      "https://example.com",
+      "--output",
+      "docs/brd.md",
+      "--json",
+    ])
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    expect(engine.getProjectBrdDesignConfig(project.projectId).sources.websiteUrl).toBe("https://example.com")
+
+    await program.parseAsync([
+      "node",
+      "octopus",
+      "brd",
+      "prompts",
+      project.projectId,
+      req.requirementId,
+      "--mode",
+      "generate",
+      "--json",
+    ])
+    const promptsJson = consoleLogSpy.mock.calls.map((c) => String(c[0])).find((line) => line.includes('"prompts"'))
+    expect(promptsJson).toBeTruthy()
+    expect(promptsJson).toContain("generate")
+
+    await program.parseAsync([
+      "node",
+      "octopus",
+      "brd",
+      "generate",
+      req.requirementId,
+      "--dry-run",
+      "--json",
+    ])
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
   it("ai ask --json 应输出 JSON 格式", () => {
     const engine = createEngine()
     const program = new Command()
@@ -616,6 +680,223 @@ describe("CLI 命令验证", () => {
     const parsed = JSON.parse(jsonOutput)
     expect(parsed.prompt).toBe("你好")
     expect(parsed.result).toBeDefined()
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("milestone add/list/reach/delete 应往返", () => {
+    const engine = createEngine()
+    const createdReq = seedRequirement(engine, "里程碑需求")
+    const program = new Command()
+    buildMilestoneCommands(program, engine)
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    program.parse([
+      "node",
+      "octopus",
+      "milestone",
+      "add",
+      createdReq.requirementId,
+      "--name",
+      "设计评审",
+      "--date",
+      "2026-03-12",
+      "--json",
+    ])
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    const created = JSON.parse(String(consoleLogSpy.mock.calls.at(-1)?.[0])) as { id: string; name: string }
+    expect(created.name).toBe("设计评审")
+
+    consoleLogSpy.mockClear()
+    program.parse(["node", "octopus", "milestone", "list", createdReq.requirementId, "--json"])
+    const listed = JSON.parse(String(consoleLogSpy.mock.calls.at(-1)?.[0])) as Array<{ id: string }>
+    expect(listed).toHaveLength(1)
+    expect(listed[0]?.id).toBe(created.id)
+
+    consoleLogSpy.mockClear()
+    program.parse([
+      "node",
+      "octopus",
+      "milestone",
+      "reach",
+      created.id,
+      "--requirement",
+      createdReq.requirementId,
+      "--json",
+    ])
+    const reached = JSON.parse(String(consoleLogSpy.mock.calls.at(-1)?.[0])) as { status: string }
+    expect(reached.status).toBe("reached")
+
+    program.parse([
+      "node",
+      "octopus",
+      "milestone",
+      "delete",
+      created.id,
+      "--requirement",
+      createdReq.requirementId,
+      "--yes",
+    ])
+    expect(engine.listMilestones(createdReq.requirementId)).toEqual([])
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("mine --json 应列出我负责的需求与指派给我的节点", () => {
+    const engine = createEngine()
+    const project = engine.createProject("Mine 项目")
+    const state = engine.initRequirement(project.projectId, "我的需求")
+    engine.updateRequirement(state.requirementId, { owner: "Alice" })
+    engine.assignNode(state.requirementId, state.steps[0]!.id, "alice")
+
+    const program = new Command()
+    buildMineCommands(program, engine, TEST_STORE_DIR)
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    program.parse(["node", "octopus", "mine", "--me", "Alice", "--json"])
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    const lastLog = consoleLogSpy.mock.calls.at(-1)?.[0]
+    expect(lastLog).toBeDefined()
+    const list = JSON.parse(String(lastLog))
+    expect(list.identity).toBe("Alice")
+    expect(list.requirements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requirementId: state.requirementId }),
+    ]))
+    expect(list.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeId: state.steps[0]!.id }),
+    ]))
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("mine 无身份时应提示", () => {
+    const engine = createEngine()
+    const program = new Command()
+    buildMineCommands(program, engine, TEST_STORE_DIR)
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+
+    program.parse(["node", "octopus", "mine"])
+
+    expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining("尚未设置身份"))
+    consoleLogSpy.mockRestore()
+  })
+
+  it("node assign 应设置/清除节点负责人", () => {
+    const engine = createEngine()
+    const state = seedRequirement(engine, "指派测试需求")
+    const program = new Command()
+    buildNodeCommands(program, engine)
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    program.parse([
+      "node", "octopus", "node", "assign", state.steps[0]!.id, "Bob",
+      "--requirement", state.requirementId,
+    ])
+    expect(engine.getState(state.requirementId).steps[0]!.assignedTo).toBe("Bob")
+
+    consoleLogSpy.mockClear()
+    program.parse([
+      "node", "octopus", "node", "assign", state.steps[0]!.id,
+      "--requirement", state.requirementId,
+    ])
+    expect(engine.getState(state.requirementId).steps[0]!.assignedTo).toBeUndefined()
+
+    consoleErrorSpy.mockClear()
+    process.exitCode = undefined
+    program.parse([
+      "node", "octopus", "node", "assign", "nonexistent-node-id", "Bob",
+      "--requirement", state.requirementId,
+    ])
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("节点指派失败"))
+    expect(process.exitCode).toBe(1)
+    process.exitCode = undefined
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it("project overview --json 应输出项目概览", () => {
+    const engine = createEngine()
+    const project = engine.createProject("概览项目")
+    const state = engine.initRequirement(project.projectId, "需求甲")
+    engine.updateRequirement(state.requirementId, { owner: "X" })
+    engine.updateRequirementSchedule(state.requirementId, { plannedStart: "2026-01-01", plannedEnd: "2026-02-01" })
+
+    const program = new Command()
+    buildProjectCommands(program, engine)
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    program.parse(["node", "octopus", "project", "overview", project.projectId, "--json"])
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    const lastLog = consoleLogSpy.mock.calls.at(-1)?.[0]
+    expect(lastLog).toBeDefined()
+    const overview = JSON.parse(String(lastLog))
+    expect(overview.requirementCount).toBe(1)
+    expect(overview.projectName).toBe("概览项目")
+    expect(overview.unscheduledCount).toBe(0)
+    const intentionPhase = overview.byPhase.find((p: { phase: string }) => p.phase === "Intention")
+    expect(intentionPhase?.count).toBe(1)
+
+    consoleLogSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+})
+
+describe("omniplan CLI 命令", () => {
+  let program: Command
+  let engine: WorkflowEngine
+  let rootDir: string
+
+  beforeEach(() => {
+    program = new Command()
+    engine = createEngine()
+    rootDir = mkdtempSync(join(tmpdir(), "octopus-cli-omniplan-"))
+    buildProjectCommands(program, engine)
+  })
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true })
+  })
+
+  it("omniplan-export / omniplan-import 往返应成功", () => {
+    const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    // 创建项目和需求
+    const project = engine.createProject("CLI OmniPlan 项目")
+    const req = engine.initRequirement(project.projectId, "CLI 需求")
+    engine.updateRequirementSchedule(req.requirementId, { plannedStart: "2026-05-01", plannedEnd: "2026-05-10" })
+    engine.updateNodeSchedule(req.requirementId, req.steps[0]!.id, { plannedStart: "2026-05-01", plannedEnd: "2026-05-03" })
+
+    // 导出
+    program.parse([
+      "node", "octopus", "project", "omniplan-export", project.projectId,
+      "--file", "test-export",
+      "--json",
+    ])
+    const exportResult = JSON.parse(String(consoleLogSpy.mock.calls.at(-1)?.[0])) as { path: string; taskCount: number; folder: string }
+    expect(exportResult.path).toContain(".oplx")
+    expect(exportResult.taskCount).toBeGreaterThan(0)
+    expect(existsSync(exportResult.path)).toBe(true)
+
+    // 导入同文件
+    program.parse([
+      "node", "octopus", "project", "omniplan-import", project.projectId,
+      "--file", exportResult.path,
+      "--json",
+    ])
+    const importResult = JSON.parse(String(consoleLogSpy.mock.calls.at(-1)?.[0])) as { path: string; updatedRequirements: number }
+    expect(importResult.path).toBeTruthy()
+    expect(importResult.updatedRequirements).toBeGreaterThanOrEqual(1)
 
     consoleLogSpy.mockRestore()
     consoleErrorSpy.mockRestore()

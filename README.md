@@ -25,7 +25,7 @@ Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，�
 - 以 `workflow.yaml` 定义节点、依赖、角色和执行动作。
 - 支持手动、命令、AI、外部集成和 Heinrich 标记五类动作。
 - 按依赖调度可运行节点，支持并行执行、手动暂停、取消和重试。
-- 内置 12 类 AI 辅助能力，通过 Claude CLI 执行。
+- 内置 AI 辅助能力（含 BRD 生成/检查）通过 Claude CLI 执行；BRD 源路径与提示词可按项目配置。
 - 项目可绑定 Teambition 项目，需求可绑定任务卡片并读写状态。
 - 提供 CLI、本地 Web 界面和 macOS Electron 客户端。
 
@@ -53,6 +53,7 @@ node packages/cli/dist/index.js node list
 | `octopus project bind-tb` / `tb-statuses` | 绑定 Teambition 项目、列出卡片状态 |
 | `octopus requirement init/list/delete` | 管理需求（工作流实例） |
 | `octopus requirement bind-task` / `tb-status` / `tb-update` | 绑定任务、拉取/更新 Teambition 状态 |
+| `octopus milestone list/add/update/reach/delete` | 管理需求级单日里程碑 |
 | `octopus init` | `requirement init` 的别名（需 `--project`） |
 | `octopus status` | 查看需求与阶段摘要 |
 | `octopus phase/task/checklist/heinrich` | 管理阶段、任务、清单与风险记录 |
@@ -61,6 +62,7 @@ node packages/cli/dist/index.js node list
 | `octopus workflow validate/sync/run/status` | 校验工作流、同步目录并调度 DAG |
 | `octopus stage` / `octopus step` | 管理阶段步骤并执行步骤能力 |
 | `octopus ai` | 独立调用 AI 助手 |
+| `octopus brd config/prompts/generate/check` | 按项目配置源与提示词，生成或检查 BRD |
 | `octopus monitor` | 查看运行事件与集成健康度 |
 
 ## 工作流与数据
@@ -115,7 +117,7 @@ Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
 pnpm web
 ```
 
-访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心 → 项目（需求列表 / Teambition 项目绑定）→ 需求工作区（泳道图与任务绑定）。
+访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心 → 项目（看板 / 列表 / 甘特 / 设置，可绑定 Teambition）→ 需求工作区（泳道图与任务绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/plans/teambition-kanban-gantt-omniplan.md`、`docs/plans/requirement-milestones.md`。工作台收口（表格 / 概览 / Hub 我的工作）见 `docs/plans/workbench-table-mywork-overview.md`。
 
 启动 macOS Electron 客户端：
 

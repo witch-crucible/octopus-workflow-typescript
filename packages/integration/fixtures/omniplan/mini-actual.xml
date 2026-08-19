@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" xmlns:opns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="pP142EqPm9V">
+  <start-date>2024-05-29T02:00:00.000Z</start-date>
+  <granularity>days</granularity>
+  <prototype-task>
+    <task id="t-2">
+      <title>任务 1</title>
+      <effort>28800</effort>
+      <recalculate>duration</recalculate>
+      <static-cost>0</static-cost>
+    </task>
+  </prototype-task>
+  <prototype-task>
+    <task id="t-3">
+      <title>里程碑 1</title>
+      <type>milestone</type>
+      <recalculate>duration</recalculate>
+      <static-cost>0</static-cost>
+    </task>
+  </prototype-task>
+  <prototype-task>
+    <task id="t-4">
+      <title>群组 1</title>
+      <type>group</type>
+      <recalculate>duration</recalculate>
+      <static-cost>0</static-cost>
+    </task>
+  </prototype-task>
+  <prototype-resource>
+    <resource id="r-2"/>
+  </prototype-resource>
+  <top-resource idref="r-1"/>
+  <resource id="r-1">
+    <name>项目</name>
+    <type>Project</type>
+    <schedule>
+      <schedule-day day-of-week="sunday"/>
+      <schedule-day day-of-week="monday">
+        <time-span start-time="36000" end-time="43200"/>
+        <time-span start-time="46800" end-time="68400"/>
+      </schedule-day>
+      <schedule-day day-of-week="tuesday">
+        <time-span start-time="36000" end-time="43200"/>
+        <time-span start-time="46800" end-time="68400"/>
+      </schedule-day>
+      <schedule-day day-of-week="wednesday">
+        <time-span start-time="36000" end-time="43200"/>
+        <time-span start-time="46800" end-time="68400"/>
+      </schedule-day>
+      <schedule-day day-of-week="thursday">
+        <time-span start-time="36000" end-time="43200"/>
+        <time-span start-time="46800" end-time="68400"/>
+      </schedule-day>
+      <schedule-day day-of-week="friday">
+        <time-span start-time="36000" end-time="43200"/>
+        <time-span start-time="46800" end-time="68400"/>
+      </schedule-day>
+      <schedule-day day-of-week="saturday"/>
+      <calendar name="Overtime" editable="yes" overtime="yes"/>
+      <calendar name="Time Off" editable="yes" overtime="no"/>
+    </schedule>
+    <child-resource idref="r5"/>
+  </resource>
+  <resource id="r5">
+    <name>Dongbao</name>
+    <type>Staff</type>
+  </resource>
+  <top-task idref="t-1"/>
+  <task id="t-1">
+    <type>group</type>
+    <recalculate>duration</recalculate>
+    <static-cost>0</static-cost>
+    <child-task idref="t197"/>
+  </task>
+  <task id="t197">
+    <title>MiniTemplate</title>
+    <type>group</type>
+    <recalculate>duration</recalculate>
+    <static-cost>0</static-cost>
+    <child-task idref="t198"/>
+    <child-task idref="t220"/>
+    <child-task idref="t221"/>
+  </task>
+  <task id="t198">
+    <title>Requirements realization</title>
+    <effort>57600</effort>
+    <locked-start-date>2024-05-29T02:00:00.000Z</locked-start-date>
+    <recalculate>duration</recalculate>
+    <static-cost>0</static-cost>
+    <assignment idref="r5"/>
+  </task>
+  <task id="t220">
+    <title>Test</title>
+    <effort>25920</effort>
+    <locked-start-date>2024-06-03T02:00:00.000Z</locked-start-date>
+    <recalculate>duration</recalculate>
+    <static-cost>0</static-cost>
+    <prerequisite-task idref="t198"/>
+    <assignment idref="r5" units="0.300000011920929"/>
+  </task>
+  <task id="t221">
+    <title>Publish</title>
+    <effort>8640</effort>
+    <locked-start-date>2024-06-13T02:00:00.000Z</locked-start-date>
+    <recalculate>duration</recalculate>
+    <static-cost>0</static-cost>
+    <prerequisite-task idref="t220"/>
+    <assignment idref="r5" units="0.300000011920929"/>
+  </task>
+  <critical-path root="-1" enabled="false" resources="false">
+    <color space="srgb" r="1" g="0.5" b="0.5"/>
+  </critical-path>
+</scenario>

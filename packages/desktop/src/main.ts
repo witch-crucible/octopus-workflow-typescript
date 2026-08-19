@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join, dirname, basename } from "node:path"
 import { fileURLToPath } from "node:url"
 import { app, BrowserWindow, dialog, ipcMain, shell, Notification } from "electron"
-import { loadConfig } from "@octopus/context/config.js"
+import { getIdentity, loadConfig, saveIdentity } from "@octopus/context/config.js"
 import { getWorkflowWorkspace } from "@octopus/context/workflow.js"
 import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
@@ -82,7 +82,7 @@ function registerIpc(): void {
   )
   ipcMain.handle(
     "octopus:updateRequirement",
-    (_e, requirementId: string, patch: { name?: string; description?: string }) => {
+    (_e, requirementId: string, patch: { name?: string; description?: string; owner?: string | null }) => {
       const state = engine.updateRequirement(requirementId, patch ?? {})
       return {
         projectId: state.projectId,
@@ -114,6 +114,53 @@ function registerIpc(): void {
       }
     },
   )
+  ipcMain.handle(
+    "octopus:updateRequirementSchedule",
+    (_e, requirementId: string, schedule: { plannedStart?: string | null; plannedEnd?: string | null }) => {
+      const state = engine.updateRequirementSchedule(requirementId, schedule ?? {})
+      return {
+        requirementId: state.requirementId,
+        plannedStart: state.plannedStart ?? null,
+        plannedEnd: state.plannedEnd ?? null,
+      }
+    },
+  )
+  ipcMain.handle(
+    "octopus:moveRequirementPhase",
+    (_e, requirementId: string, toPhase: string) => {
+      const state = engine.moveRequirementPhase(requirementId, toPhase as never)
+      return {
+        requirementId: state.requirementId,
+        currentPhase: state.currentPhase,
+      }
+    },
+  )
+  ipcMain.handle("octopus:listMilestones", (_e, requirementId: string) =>
+    engine.listMilestones(requirementId))
+  ipcMain.handle("octopus:listProjectMilestones", (_e, projectId: string) =>
+    engine.listProjectMilestones(projectId))
+  ipcMain.handle(
+    "octopus:addMilestone",
+    (_e, requirementId: string, input: { name: string; date: string; phase?: string; nodeId?: string; note?: string }) =>
+      engine.addMilestone(requirementId, input as never),
+  )
+  ipcMain.handle(
+    "octopus:updateMilestone",
+    (
+      _e,
+      requirementId: string,
+      milestoneId: string,
+      patch: { name?: string; date?: string | null; phase?: string | null; nodeId?: string | null; note?: string | null },
+    ) => engine.updateMilestone(requirementId, milestoneId, patch as never),
+  )
+  ipcMain.handle("octopus:reachMilestone", (_e, requirementId: string, milestoneId: string) =>
+    engine.reachMilestone(requirementId, milestoneId))
+  ipcMain.handle("octopus:unreachMilestone", (_e, requirementId: string, milestoneId: string) =>
+    engine.unreachMilestone(requirementId, milestoneId))
+  ipcMain.handle("octopus:deleteMilestone", (_e, requirementId: string, milestoneId: string) => {
+    engine.deleteMilestone(requirementId, milestoneId)
+    return { deleted: true, milestoneId }
+  })
   ipcMain.handle("octopus:runNode", (_e, requirementId: string, nodeId: string, force?: boolean) =>
     engine.execution.runNode(requirementId, nodeId, force === undefined ? {} : { force }))
   ipcMain.handle("octopus:runWorkflow", (_e, requirementId: string, force?: boolean, maxParallel?: number) =>
@@ -211,6 +258,48 @@ function registerIpc(): void {
       inputPath,
       ...engine.importTasks(requirementId, document),
     }
+  })
+
+  // ── OmniPlan IPC ──
+
+  ipcMain.handle("octopus:exportProjectOmniPlan", (_e, projectId: string, opts?: { fileName?: string; rootDir?: string }) => {
+    return engine.exportProjectOmniPlan(projectId, opts ?? {})
+  })
+
+  ipcMain.handle("octopus:importProjectOmniPlan", (_e, projectId: string, opts?: { fileName?: string; path?: string; rootDir?: string }) => {
+    return engine.importProjectOmniPlan(projectId, opts ?? {})
+  })
+
+  ipcMain.handle("octopus:setProjectOmniPlanMeta", (_e, projectId: string, patch: { omniplanFolder?: string; omniplanIdMap?: string; omniplanFileName?: string }) => {
+    return engine.setProjectOmniPlanMeta(projectId, patch ?? {})
+  })
+
+  ipcMain.handle("octopus:getProjectBrdDesignConfig", (_e, projectId: string) => {
+    return engine.getProjectBrdDesignConfig(projectId)
+  })
+  ipcMain.handle("octopus:setProjectBrdDesignConfig", (_e, projectId: string, patch: Record<string, unknown>) => {
+    return engine.setProjectBrdDesignConfig(projectId, patch as never)
+  })
+  ipcMain.handle(
+    "octopus:previewBrdPrompts",
+    (_e, projectId: string, requirementId: string, opts?: { mode?: "generate" | "check" | "all"; includeSummarize?: boolean }) => {
+      return engine.previewBrdPrompts(projectId, requirementId, opts ?? {})
+    },
+  )
+
+  ipcMain.handle("octopus:assignNode", (_e, requirementId: string, nodeId: string, assignedTo: string | null) => {
+    const state = engine.assignNode(requirementId, nodeId, assignedTo ?? null)
+    const step = state.steps.find((item) => item.id === nodeId)
+    return { requirementId: state.requirementId, nodeId, assignedTo: step?.assignedTo ?? null }
+  })
+  ipcMain.handle("octopus:listMyWork", (_e, identity: string, projectId?: string) => engine.listMyWork(identity, projectId))
+  ipcMain.handle("octopus:getProjectOverview", (_e, projectId: string) => engine.getProjectOverview(projectId))
+  ipcMain.handle("octopus:getIdentity", () => ({ name: getIdentity(join(app.getPath("userData"), "store")) ?? null }))
+  ipcMain.handle("octopus:setIdentity", (_e, name: string | null) => {
+    const storeDir = join(app.getPath("userData"), "store")
+    const normalized = name === null || name === "" ? null : name
+    saveIdentity(storeDir, normalized)
+    return { name: normalized }
   })
 }
 
