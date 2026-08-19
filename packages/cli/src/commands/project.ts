@@ -8,6 +8,8 @@
  *   delete <projectId> --yes
  *   bind-tb <projectId> (--tb-project <id> | --prefix <PREFIX>)
  *   unbind-tb <projectId>
+ *   bind-tb-repo <projectId> --repo <repoId> [--plugin] [--tb-project] [--name] [--json]
+ *   unbind-tb-repo <projectId> [--json]
  *   tb-statuses <projectId> [--json]
  *   omniplan-export <projectId> [--file name] [--yes] [--json]
  *   omniplan-import <projectId> [--file pathOrName] [--json]
@@ -65,6 +67,9 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
           if (item.description) console.log(`   描述: ${item.description}`)
           if (item.teambitionProjectId) {
             console.log(`   Teambition: ${item.teambitionProjectId}`)
+          }
+          if (item.teambitionRepoId) {
+            console.log(`   版本仓库: ${item.teambitionRepoId}`)
           }
           console.log(`   更新: ${item.updatedAt}`)
           console.log()
@@ -175,6 +180,62 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
         console.log(`✅ 已解除 Teambition 绑定: ${projectId}`)
       } catch (err) {
         console.error(`❌ 解除绑定失败: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  project
+    .command("bind-tb-repo")
+    .description("绑定 Teambition 版本仓库")
+    .argument("<projectId>", "项目 ID")
+    .requiredOption("--repo <repoId>", "版本仓库 ID")
+    .option("--plugin <pluginId>", "Teambition 版本插件 ID")
+    .option("--tb-project <tbProjectId>", "Teambition 项目 ID")
+    .option("--name <name>", "版本仓库名称")
+    .option("--json", "以 JSON 格式输出")
+    .action(async (
+      projectId: string,
+      options: { repo: string; plugin?: string; tbProject?: string; name?: string; json?: boolean },
+    ) => {
+      try {
+        const updated = await engine.bindProjectTeambitionRepo(projectId, {
+          repoId: options.repo,
+          ...(options.plugin !== undefined ? { pluginId: options.plugin } : {}),
+          ...(options.tbProject !== undefined ? { tbProjectId: options.tbProject } : {}),
+          ...(options.name !== undefined ? { name: options.name } : {}),
+        })
+        if (options.json) {
+          console.log(JSON.stringify(updated, null, 2))
+          return
+        }
+        console.log(`✅ 已绑定 Teambition 版本仓库: ${updated.teambitionVersion?.repoId}`)
+        if (updated.teambitionVersion?.pluginId) {
+          console.log(`   插件: ${updated.teambitionVersion.pluginId}`)
+        }
+        if (updated.teambitionVersion?.tbProjectId) {
+          console.log(`   TB 项目: ${updated.teambitionVersion.tbProjectId}`)
+        }
+      } catch (err) {
+        console.error(`❌ 绑定版本仓库失败: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
+
+  project
+    .command("unbind-tb-repo")
+    .description("解除 Teambition 版本仓库绑定")
+    .argument("<projectId>", "项目 ID")
+    .option("--json", "以 JSON 格式输出")
+    .action((projectId: string, options: { json?: boolean }) => {
+      try {
+        const updated = engine.unbindProjectTeambitionRepo(projectId)
+        if (options.json) {
+          console.log(JSON.stringify(updated, null, 2))
+          return
+        }
+        console.log(`✅ 已解除 Teambition 版本仓库绑定: ${projectId}`)
+      } catch (err) {
+        console.error(`❌ 解除版本仓库绑定失败: ${(err as Error).message}`)
         process.exit(1)
       }
     })

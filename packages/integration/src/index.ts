@@ -71,6 +71,25 @@ export interface MonitoringIntegration extends IntegrationService {
   registerAlert(serviceName: string, duration: "1d" | "1w" | "1y"): Promise<IntegrationResult>
 }
 
+/** Teambition 版本管理集成接口（version-manage 插件 API，与任务 Open API 分叉） */
+export interface TeambitionVersionIntegration extends IntegrationService {
+  /** 按 TB 项目 / 插件列出版本仓库 */
+  listRepositories(query: { tbProjectId?: string; pluginId?: string }): Promise<IntegrationResult>
+  /** 版本仓库详情 */
+  getRepository(repoId: string): Promise<IntegrationResult>
+  /** 列出版本仓库下的版本 */
+  listVersions(repoId: string): Promise<IntegrationResult>
+  /** 版本详情 */
+  getVersion(repoId: string, versionId: string): Promise<IntegrationResult>
+  /** 更新版本说明（路径/body CONFIRMED；鉴权 UNCONFIRMED） */
+  updateVersionNote(
+    repoId: string,
+    versionId: string,
+    note: string,
+    ids?: { tbProjectId?: string; pluginId?: string },
+  ): Promise<IntegrationResult>
+}
+
 /** Teambition 集成接口 */
 export interface TeambitionIntegration extends IntegrationService {
   /** 任务编号 → 任务详情 */
@@ -147,6 +166,31 @@ export { GitClient, createGitClient } from "./git.js"
 export type { GitIntegrationConfig } from "./git.js"
 export { TeambitionClient, createTeambitionClient } from "./teambition.js"
 export type { TeambitionIntegrationConfig, TbTask, WorkflowStatus, ChildTask, TbMember, TaskUpdate } from "./teambition.js"
+
+// Teambition 版本管理
+export {
+  TeambitionVersionClient,
+  createTeambitionVersionClient,
+  buildVersionUrl,
+  unwrapVersionList,
+  mapVersion,
+  redactSecrets,
+  sanitizeFixture,
+  VERSION_LIST_ENDPOINT,
+  VERSION_LIST_PATH,
+  VERSION_DETAIL_ENDPOINT,
+  VERSION_DETAIL_PATH,
+  VERSION_REPO_ENDPOINT,
+  VERSION_REPO_PATH,
+  VERSION_REPO_LIST_ENDPOINT,
+  VERSION_REPO_LIST_PATH,
+} from "./teambition-version.js"
+export type {
+  TbVersionAuthMode,
+  TeambitionVersionConfig,
+  TbVersion,
+  TbVersionRepository,
+} from "./teambition-version.js"
 export { SecurityWatchClient, createSecurityWatchClient } from "./security-watch.js"
 export type { SecurityWatchConfig } from "./security-watch.js"
 

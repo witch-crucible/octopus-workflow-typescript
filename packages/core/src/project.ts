@@ -15,6 +15,36 @@ export interface ProjectTeambitionBinding {
   uniqueIdPrefix?: string
 }
 
+/** 项目级 Teambition 版本仓库绑定（与 ProjectTeambitionBinding 并列） */
+export interface ProjectTeambitionVersionBinding {
+  /** 版本仓库 ID（必填） */
+  repoId: string
+  /** 版本管理插件 ID（用于拼链接，可选） */
+  pluginId?: string
+  /** TB 项目 ID（用于拼 url；缺省可回退 project.teambition.projectId） */
+  tbProjectId?: string
+  /** 仓库名称（缓存） */
+  name?: string
+  /** 默认版本 ID */
+  defaultVersionId?: string
+  /** 最近一次成功 sync 时间（listSyncStatus === "ok"） */
+  lastSyncedAt?: string
+  /** 版本列表缓存写入时间（仅成功 sync 时写入） */
+  versionsCachedAt?: string
+  /** 列表同步状态 */
+  listSyncStatus?: "ok" | "unconfirmed" | "error"
+  /** 版本列表缓存 */
+  versionsCache?: Array<{
+    versionId: string
+    name: string
+    status?: string
+    startDate?: string
+    endDate?: string
+    note?: string
+    url?: string
+  }>
+}
+
 /** 项目实体 */
 export interface Project {
   projectId: ProjectId
@@ -23,6 +53,7 @@ export interface Project {
   createdAt: string
   updatedAt: string
   teambition?: ProjectTeambitionBinding
+  teambitionVersion?: ProjectTeambitionVersionBinding
   metadata?: Record<string, string>
 }
 
@@ -33,6 +64,7 @@ export interface ProjectSummary {
   description: string
   requirementCount: number
   teambitionProjectId?: string
+  teambitionRepoId?: string
   updatedAt: string
 }
 

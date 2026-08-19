@@ -8,12 +8,28 @@ import { DEFAULT_CONFIG, getIdentity, loadConfig, saveIdentity } from "./config.
 const temporaryDirectories: string[] = []
 const originalStoreDir = process.env["OCTOPUS_STORE_DIR"]
 const originalMe = process.env["OCTOPUS_ME"]
+const originalTbEnv: Record<string, string | undefined> = {
+  OCTOPUS_TB_APP_ID: process.env["OCTOPUS_TB_APP_ID"],
+  OCTOPUS_TB_APP_SECRET: process.env["OCTOPUS_TB_APP_SECRET"],
+  OCTOPUS_TB_ORG_ID: process.env["OCTOPUS_TB_ORG_ID"],
+  OCTOPUS_TB_OPERATOR_ID: process.env["OCTOPUS_TB_OPERATOR_ID"],
+  OCTOPUS_TB_GATEWAY: process.env["OCTOPUS_TB_GATEWAY"],
+  OCTOPUS_TB_REF_STRATEGY: process.env["OCTOPUS_TB_REF_STRATEGY"],
+  OCTOPUS_TB_VERSION_BASE: process.env["OCTOPUS_TB_VERSION_BASE"],
+  OCTOPUS_TB_SESSION_COOKIE: process.env["OCTOPUS_TB_SESSION_COOKIE"],
+  OCTOPUS_TB_USER_TOKEN: process.env["OCTOPUS_TB_USER_TOKEN"],
+  OCTOPUS_TB_VERSION_AUTH: process.env["OCTOPUS_TB_VERSION_AUTH"],
+}
 
 afterEach(() => {
   if (originalStoreDir === undefined) delete process.env["OCTOPUS_STORE_DIR"]
   else process.env["OCTOPUS_STORE_DIR"] = originalStoreDir
   if (originalMe === undefined) delete process.env["OCTOPUS_ME"]
   else process.env["OCTOPUS_ME"] = originalMe
+  for (const [key, value] of Object.entries(originalTbEnv)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -177,6 +193,111 @@ describe("loadConfig", () => {
     temporaryDirectories.push(storeDir)
 
     expect(loadConfig(storeDir).omniplan).toEqual({ rootDir: "/Users/ben/Documents/OmniPlan" })
+  })
+})
+
+describe("teambition 配置", () => {
+  it("文件 teambition.versionManageBase 能读出", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_TB_VERSION_BASE"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      teambition: { versionManageBase: "https://vm.example.test" },
+    }))
+
+    expect(loadConfig(storeDir).teambition?.versionManageBase).toBe("https://vm.example.test")
+  })
+
+  it("文件 app 三件套 + 环境仅 session cookie：三件套仍为文件值且 sessionCookie 有值", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_TB_APP_ID"]
+    delete process.env["OCTOPUS_TB_APP_SECRET"]
+    delete process.env["OCTOPUS_TB_ORG_ID"]
+    delete process.env["OCTOPUS_TB_VERSION_BASE"]
+    delete process.env["OCTOPUS_TB_USER_TOKEN"]
+    delete process.env["OCTOPUS_TB_VERSION_AUTH"]
+    process.env["OCTOPUS_TB_SESSION_COOKIE"] = "session=abc"
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      teambition: { appId: "file-app", appSecret: "file-secret", orgId: "file-org" },
+    }))
+
+    const config = loadConfig(storeDir)
+    expect(config.teambition?.appId).toBe("file-app")
+    expect(config.teambition?.appSecret).toBe("file-secret")
+    expect(config.teambition?.orgId).toBe("file-org")
+    expect(config.teambition?.sessionCookie).toBe("session=abc")
+  })
+
+  it("环境仅 session cookie、文件无 teambition：appId 为 undefined（不是空串）", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_TB_APP_ID"]
+    delete process.env["OCTOPUS_TB_APP_SECRET"]
+    delete process.env["OCTOPUS_TB_ORG_ID"]
+    delete process.env["OCTOPUS_TB_VERSION_BASE"]
+    delete process.env["OCTOPUS_TB_USER_TOKEN"]
+    delete process.env["OCTOPUS_TB_VERSION_AUTH"]
+    process.env["OCTOPUS_TB_SESSION_COOKIE"] = "session=abc"
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+
+    const config = loadConfig(storeDir)
+    expect(config.teambition?.appId).toBeUndefined()
+    expect(config.teambition?.sessionCookie).toBe("session=abc")
+  })
+
+  it("环境 OCTOPUS_TB_VERSION_AUTH=nope 被忽略且不抛", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_TB_SESSION_COOKIE"]
+    process.env["OCTOPUS_TB_VERSION_AUTH"] = "nope"
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+
+    expect(() => loadConfig(storeDir)).not.toThrow()
+    expect(loadConfig(storeDir).teambition?.versionAuth).toBeUndefined()
+  })
+
+  it("文件 versionAuth 非法值抛 ConfigError 且带路径", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      teambition: { versionAuth: "nope" },
+    }))
+
+    expect(() => loadConfig(storeDir)).toThrow(ConfigError)
+    expect(() => loadConfig(storeDir)).toThrow(/teambition\.versionAuth/)
+  })
+
+  it("任务三件套与版本字段合并后任务字段不丢", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_TB_APP_ID"]
+    delete process.env["OCTOPUS_TB_APP_SECRET"]
+    delete process.env["OCTOPUS_TB_ORG_ID"]
+    delete process.env["OCTOPUS_TB_SESSION_COOKIE"]
+    delete process.env["OCTOPUS_TB_USER_TOKEN"]
+    process.env["OCTOPUS_TB_VERSION_BASE"] = "https://vm.example.test"
+    process.env["OCTOPUS_TB_VERSION_AUTH"] = "auto"
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      teambition: {
+        appId: "file-app",
+        appSecret: "file-secret",
+        orgId: "file-org",
+        gatewayBase: "https://open.example.test/api",
+      },
+    }))
+
+    const config = loadConfig(storeDir)
+    expect(config.teambition?.appId).toBe("file-app")
+    expect(config.teambition?.appSecret).toBe("file-secret")
+    expect(config.teambition?.orgId).toBe("file-org")
+    expect(config.teambition?.gatewayBase).toBe("https://open.example.test/api")
+    expect(config.teambition?.versionManageBase).toBe("https://vm.example.test")
+    expect(config.teambition?.versionAuth).toBe("auto")
   })
 })
 

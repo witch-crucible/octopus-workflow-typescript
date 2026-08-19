@@ -110,9 +110,9 @@ describe("runStepCapabilities", () => {
       store: createStateStore({ storeDir: testStoreDir }),
     })
     const state = initNamedRequirement(engine, "cap_none")
-    // 步骤 10.1 无 capabilities
-    const after = await engine.runStepCapabilities(state.requirementId, "10.1")
-    const step = after.steps.find((s) => s.id === "10.1")!
+    // 步骤 10.2 无 capabilities（10.1 已接入 BRD 生成/检查能力）
+    const after = await engine.runStepCapabilities(state.requirementId, "10.2")
+    const step = after.steps.find((s) => s.id === "10.2")!
     expect(step.capabilityRuns).toBeUndefined()
   })
 

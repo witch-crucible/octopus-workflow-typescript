@@ -2011,11 +2011,13 @@
           <div class="hub-toolbar">
             <h2>项目管理中心</h2>
             <input id="hubFilter" type="search" placeholder="按名称或 ID 筛选" />
+            <button id="openMine" class="secondary" type="button">我的工作</button>
           </div>
           <div id="hubEmpty" class="empty-state">
             还没有项目。在右侧填写名称即可创建项目；进入项目后再创建需求并可选绑定 Teambition。
           </div>
           <div id="hubCards" class="hub-cards"></div>
+          <div id="mineView" hidden></div>
         </div>
         <aside id="initPanel" class="panel-card hub-create">
           <h3>创建项目</h3>
@@ -2042,7 +2044,10 @@
           <div class="project-tabs">
             <button type="button" class="project-tab-btn active" data-tab="board" aria-selected="true">看板</button>
             <button type="button" class="project-tab-btn" data-tab="list" aria-selected="false">列表</button>
+            <button type="button" class="project-tab-btn" data-tab="table" aria-selected="false">表格</button>
             <button type="button" class="project-tab-btn" data-tab="gantt" aria-selected="false">甘特</button>
+            <button type="button" class="project-tab-btn" data-tab="versions" aria-selected="false">版本</button>
+            <button type="button" class="project-tab-btn" data-tab="overview" aria-selected="false">概览</button>
             <button type="button" class="project-tab-btn" data-tab="settings" aria-selected="false">设置</button>
           </div>
           <div id="projectEmpty" class="empty-state">
@@ -2053,7 +2058,10 @@
             该项目还没有需求。在右侧创建需求。
           </div>
           <div id="requirementCards" class="hub-cards" hidden></div>
+          <div id="requirementTable" hidden></div>
           <div id="projectGanttHost" class="project-gantt-host" hidden></div>
+          <div id="projectVersions" hidden></div>
+          <div id="projectOverview" hidden></div>
           <div id="projectSettings" hidden></div>
           <div id="hubGanttPark">
             <div id="hubGanttHost" class="hub-gantt-host" hidden></div>
@@ -2119,6 +2127,17 @@
             <option value="">选择状态…</option>
           </select>
           <button id="updateTbStatus" class="secondary" type="button">改状态</button>
+        </div>
+        <div id="requirementVersionBar" class="tb-bar">
+          <span class="tb-label" id="requirementVersionLabel">版本未绑定</span>
+          <select id="requirementVersionSelect" aria-label="需求版本"><option value="">选择版本…</option></select>
+          <button id="bindRequirementVersion" type="button">绑定版本</button>
+          <button id="unbindRequirementVersion" class="secondary" type="button">解绑</button>
+        </div>
+        <div id="requirementOwnerBar" class="tb-bar">
+          <span class="tb-label">需求负责人</span>
+          <input id="requirementOwnerInput" placeholder="未设置" />
+          <button id="saveRequirementOwner" class="secondary" type="button">保存负责人</button>
         </div>
         <div id="requirementMilestoneBar" class="tb-bar">
           <span class="tb-label">里程碑</span>

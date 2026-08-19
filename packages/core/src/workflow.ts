@@ -18,8 +18,11 @@ import type { Artifact, ArtifactType } from "./artifact.js"
 import { Role } from "./role.js"
 import type { MilestoneSummary, RequirementMilestone } from "./milestone.js"
 
-/** 当前状态结构版本（v8 = 需求负责人 owner） */
-export const CURRENT_SCHEMA_VERSION = 8
+/**
+ * 当前状态结构版本。
+ * v8 需求负责人 owner；v9 需求级 teambitionVersion 绑定（缺省保持 undefined）。
+ */
+export const CURRENT_SCHEMA_VERSION = 9
 
 /** 需求级 Teambition 任务绑定 */
 export interface RequirementTeambitionBinding {
@@ -27,6 +30,15 @@ export interface RequirementTeambitionBinding {
   taskRef?: string
   statusId?: string
   statusName?: string
+  url?: string
+  lastSyncedAt?: string
+}
+
+/** 需求级 Teambition 版本绑定（多对一；一条需求同一时刻最多一个版本） */
+export interface RequirementVersionBinding {
+  versionId: string
+  versionName?: string
+  repoId?: string
   url?: string
   lastSyncedAt?: string
 }
@@ -65,6 +77,8 @@ export interface WorkflowState {
   metadata: Record<string, string>
   /** Teambition 任务绑定 */
   teambition?: RequirementTeambitionBinding
+  /** Teambition 版本绑定 */
+  teambitionVersion?: RequirementVersionBinding
   /** 需求级计划开始日期（YYYY-MM-DD） */
   plannedStart?: string
   /** 需求级计划结束日期（YYYY-MM-DD） */
@@ -126,6 +140,10 @@ export interface RequirementSummary {
   updatedAt: string
   teambitionTaskId?: string
   teambitionStatusName?: string
+  teambitionVersionId?: string
+  teambitionVersionName?: string
+  /** 仅 true 时输出。未知（从未 sync / UNCONFIRMED / error）不要给 false */
+  teambitionVersionStale?: boolean
   plannedStart?: string
   plannedEnd?: string
   /** 需求负责人 */
@@ -383,6 +401,7 @@ function remapHeinrichPhases<T extends { triggerCounts?: Partial<Record<string, 
  * v4 将旧六段 Phase 映射为九段生命周期。
  * v5 将旧「项目」字段下沉为「需求」，并要求所属 projectId。
  * v7 补齐 milestones[]。
+ * v9 需求级 teambitionVersion 绑定；缺字段保持 undefined。
  */
 export function migrateWorkflowState(raw: unknown, options?: { projectId?: ProjectId }): WorkflowState {
   const state = raw as WorkflowState & {

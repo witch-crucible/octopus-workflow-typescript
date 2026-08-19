@@ -445,6 +445,46 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
           ...(typeof opts["omniplanFileName"] === "string" ? { omniplanFileName: opts["omniplanFileName"] } : {}),
         })
       }
+      case "setProjectDefaultColor": {
+        const color = args[1] === null || typeof args[1] === "string" ? (args[1] as string | null) : null
+        return engine.setProjectDefaultColor(projectId(), color)
+      }
+      case "bindProjectTeambitionRepo": {
+        const opts = asObject(args[1])
+        return engine.bindProjectTeambitionRepo(projectId(), {
+          repoId: requiredString(opts["repoId"], "repoId"),
+          ...(typeof opts["pluginId"] === "string" ? { pluginId: opts["pluginId"] } : {}),
+          ...(typeof opts["tbProjectId"] === "string" ? { tbProjectId: opts["tbProjectId"] } : {}),
+          ...(typeof opts["name"] === "string" ? { name: opts["name"] } : {}),
+        })
+      }
+      case "unbindProjectTeambitionRepo":
+        return engine.unbindProjectTeambitionRepo(projectId())
+      case "listProjectVersions": {
+        const opts = asObject(args[1])
+        return engine.listProjectVersions(projectId(), opts["refresh"] === true ? { refresh: true } : undefined)
+      }
+      case "syncProjectVersions":
+        return engine.syncProjectVersions(projectId())
+      case "getProjectVersion":
+        return engine.getProjectVersion(projectId(), requiredString(args[1], "versionId"))
+      case "setProjectDefaultVersion": {
+        const versionId = args[1] === null || typeof args[1] === "string" ? (args[1] as string | null) : null
+        return engine.setProjectDefaultVersion(projectId(), versionId)
+      }
+      case "bindRequirementVersion":
+        return engine.bindRequirementVersion(requirementId(), requiredString(args[1], "versionId"))
+      case "unbindRequirementVersion":
+        return engine.unbindRequirementVersion(requirementId())
+      case "getRequirementVersionBinding":
+        return engine.getRequirementVersionBinding(requirementId())
+      case "listVersionRequirements":
+        return engine.listVersionRequirements(projectId(), optionalString(args[1]))
+      case "updateVersionNote": {
+        const versionId = requiredString(args[1], "versionId")
+        const note = typeof args[2] === "string" ? args[2] : ""
+        return engine.updateVersionNote(projectId(), versionId, note)
+      }
       case "getProjectBrdDesignConfig":
         return engine.getProjectBrdDesignConfig(projectId())
       case "setProjectBrdDesignConfig": {

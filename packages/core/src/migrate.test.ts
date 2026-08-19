@@ -215,4 +215,50 @@ describe("migrateWorkflowState", () => {
     expect(migrated.milestones).toHaveLength(1)
     expect(migrated.owner).toBeUndefined()
   })
+
+  it("v8→v9 迁移后 schemaVersion=9 且 teambitionVersion 为 undefined", () => {
+    const v8State = {
+      schemaVersion: 8,
+      projectId: "proj_v8",
+      requirementId: "req_v8",
+      requirementName: "v8 需求",
+      description: "",
+      createdAt: "2025-01-01T00:00:00.000Z",
+      updatedAt: "2025-01-01T00:00:00.000Z",
+      currentPhase: Phase.INTENTION,
+      phaseStatus: { [Phase.INTENTION]: PhaseLock.ACTIVE },
+      steps: [],
+      checklists: {},
+      heinrich: { majorDefects: 0, minorDefects: 0, trivialDefects: 0, observations: [], triggerCounts: {} },
+      artifacts: [],
+      metadata: {},
+      plannedStart: "2026-05-01",
+      plannedEnd: "2026-05-15",
+      owner: "张工",
+      milestones: [{
+        id: "ms_v8",
+        name: "里程碑",
+        date: "2026-05-10",
+        status: "planned",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      teambition: {
+        taskId: "task_v8",
+        statusName: "进行中",
+        lastSyncedAt: "2026-01-01T00:00:00.000Z",
+      },
+      aiGatingEnabled: false,
+      aiGateResults: [],
+    }
+    const migrated = migrateWorkflowState(v8State)
+    expect(migrated.schemaVersion).toBe(CURRENT_SCHEMA_VERSION)
+    expect(migrated.plannedStart).toBe("2026-05-01")
+    expect(migrated.plannedEnd).toBe("2026-05-15")
+    expect(migrated.owner).toBe("张工")
+    expect(migrated.milestones).toHaveLength(1)
+    expect(migrated.milestones?.[0]?.id).toBe("ms_v8")
+    expect(migrated.teambition?.taskId).toBe("task_v8")
+    expect(migrated.teambitionVersion).toBeUndefined()
+  })
 })

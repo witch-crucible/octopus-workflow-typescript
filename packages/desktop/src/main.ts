@@ -274,6 +274,28 @@ function registerIpc(): void {
     return engine.setProjectOmniPlanMeta(projectId, patch ?? {})
   })
 
+  ipcMain.handle("octopus:setProjectDefaultColor", (_e, projectId: string, color: string | null) => {
+    return engine.setProjectDefaultColor(projectId, color ?? null)
+  })
+
+  ipcMain.handle("octopus:bindProjectTeambitionRepo", (_e, projectId: string, opts: { repoId: string; pluginId?: string; tbProjectId?: string; name?: string }) =>
+    engine.bindProjectTeambitionRepo(projectId, opts))
+  ipcMain.handle("octopus:unbindProjectTeambitionRepo", (_e, projectId: string) => engine.unbindProjectTeambitionRepo(projectId))
+  ipcMain.handle("octopus:listProjectVersions", (_e, projectId: string, opts?: { refresh?: boolean }) =>
+    engine.listProjectVersions(projectId, opts))
+  ipcMain.handle("octopus:syncProjectVersions", (_e, projectId: string) => engine.syncProjectVersions(projectId))
+  ipcMain.handle("octopus:getProjectVersion", (_e, projectId: string, versionId: string) => engine.getProjectVersion(projectId, versionId))
+  ipcMain.handle("octopus:setProjectDefaultVersion", (_e, projectId: string, versionId: string | null) =>
+    engine.setProjectDefaultVersion(projectId, versionId ?? null))
+  ipcMain.handle("octopus:bindRequirementVersion", (_e, requirementId: string, versionId: string) =>
+    engine.bindRequirementVersion(requirementId, versionId))
+  ipcMain.handle("octopus:unbindRequirementVersion", (_e, requirementId: string) => engine.unbindRequirementVersion(requirementId))
+  ipcMain.handle("octopus:getRequirementVersionBinding", (_e, requirementId: string) => engine.getRequirementVersionBinding(requirementId))
+  ipcMain.handle("octopus:listVersionRequirements", (_e, projectId: string, versionId?: string) =>
+    engine.listVersionRequirements(projectId, versionId))
+  ipcMain.handle("octopus:updateVersionNote", (_e, projectId: string, versionId: string, note: string) =>
+    engine.updateVersionNote(projectId, versionId, note))
+
   ipcMain.handle("octopus:getProjectBrdDesignConfig", (_e, projectId: string) => {
     return engine.getProjectBrdDesignConfig(projectId)
   })

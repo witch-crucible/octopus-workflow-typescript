@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { Phase, PhaseLock } from "@octopus/core/phase.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { Role } from "@octopus/core/role.js"
@@ -10,6 +10,7 @@ import { TaskId } from "@octopus/core/branded-ids.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
 import { InvalidPhaseTransitionError } from "@octopus/core/errors.js"
 import { createStateStore } from "@octopus/context/index.js"
+import { TeambitionVersionClient } from "@octopus/integration/index.js"
 import { WorkflowEngine } from "./index.js"
 
 let testStoreDir: string
@@ -1230,5 +1231,338 @@ describe("OmniPlan 导入导出", () => {
       const overview = engine.getProjectOverview(state.projectId)
       expect(overview.heinrich.major).toBeGreaterThanOrEqual(2)
     })
+  })
+})
+
+describe("setProjectDefaultColor", () => {
+  it("设置合法色值写入 metadata.defaultColor", () => {
+    const engine = createEngine()
+    const project = engine.createProject("颜色项目")
+    const updated = engine.setProjectDefaultColor(project.projectId, "#ff8800")
+    expect(updated.metadata?.["defaultColor"]).toBe("#ff8800")
+  })
+
+  it("null / 空串清除（删除键）", () => {
+    const engine = createEngine()
+    const project = engine.createProject("颜色项目")
+    engine.setProjectDefaultColor(project.projectId, "#ff8800")
+    const cleared = engine.setProjectDefaultColor(project.projectId, null)
+    expect(cleared.metadata?.["defaultColor"]).toBeUndefined()
+    engine.setProjectDefaultColor(project.projectId, "#112233")
+    const cleared2 = engine.setProjectDefaultColor(project.projectId, "")
+    expect(cleared2.metadata?.["defaultColor"]).toBeUndefined()
+  })
+
+  it("非法色值抛错且 metadata 不变", () => {
+    const engine = createEngine()
+    const project = engine.createProject("颜色项目")
+    expect(() => engine.setProjectDefaultColor(project.projectId, "red")).toThrow("默认颜色必须是 #rrggbb 格式")
+    expect(() => engine.setProjectDefaultColor(project.projectId, "#fff")).toThrow()
+    expect(() => engine.setProjectDefaultColor(project.projectId, "#12345g")).toThrow()
+    expect(engine.getProject(project.projectId).metadata?.["defaultColor"]).toBeUndefined()
+  })
+})
+
+describe("Teambition 版本计划编排", () => {
+  function makeEngine() {
+    const store = createStateStore({ storeDir: testStoreDir })
+    const client = new TeambitionVersionClient({ appId: "a", appSecret: "s", orgId: "o" })
+    const engine = new WorkflowEngine({
+      store,
+      integrations: { "teambition-version": client },
+    })
+    return { engine, store, client }
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("无版本客户端时抛未配置", async () => {
+    const engine = createEngine()
+    const project = engine.createProject("P")
+    await expect(engine.bindProjectTeambitionRepo(project.projectId, { repoId: "repo1" }))
+      .rejects.toThrow("未配置 Teambition 版本管理")
+  })
+
+  it("绑仓库不改 project.teambition", async () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambition = { projectId: "tb-proj", name: "TB" }
+      return cur
+    })
+    await engine.bindProjectTeambitionRepo(project.projectId, { repoId: "repo1" })
+    const loaded = store.loadProject(project.projectId)
+    expect(loaded.teambition).toEqual({ projectId: "tb-proj", name: "TB" })
+    expect(loaded.teambitionVersion?.repoId).toBe("repo1")
+  })
+
+  it("unbindProjectTeambition 不删 teambitionVersion", () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambition = { projectId: "tb" }
+      cur.teambitionVersion = { repoId: "repo1" }
+      return cur
+    })
+    engine.unbindProjectTeambition(project.projectId)
+    const loaded = store.loadProject(project.projectId)
+    expect(loaded.teambition).toBeUndefined()
+    expect(loaded.teambitionVersion?.repoId).toBe("repo1")
+  })
+
+  it("unbindRequirementTask 不删 state.teambitionVersion", () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    const req = store.createRequirement(project.projectId, "R")
+    store.update(req.requirementId, (cur) => {
+      cur.teambition = { taskId: "t1" }
+      cur.teambitionVersion = { versionId: "v1", repoId: "repo1" }
+      return cur
+    })
+    engine.unbindRequirementTask(req.requirementId)
+    const state = store.load(req.requirementId)
+    expect(state.teambition).toBeUndefined()
+    expect(state.teambitionVersion?.versionId).toBe("v1")
+  })
+
+  it("UNCONFIRMED 绑仓库成功后 listProjectVersions 抛中文、不返回 []", async () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    await engine.bindProjectTeambitionRepo(project.projectId, { repoId: "repo1" })
+    const loaded = store.loadProject(project.projectId)
+    expect(loaded.teambitionVersion?.listSyncStatus).toBe("unconfirmed")
+    await expect(engine.listProjectVersions(project.projectId)).rejects.toThrow("尚未确认")
+  })
+
+  it("TTL 内且 listSyncStatus=ok 时 listProjectVersions 不打客户端", async () => {
+    const { engine, store, client } = makeEngine()
+    const project = store.createProject("P")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = {
+        repoId: "repo1",
+        listSyncStatus: "ok",
+        versionsCachedAt: new Date().toISOString(),
+        versionsCache: [{ versionId: "v1", name: "版本1" }],
+      }
+      return cur
+    })
+    const spy = vi.spyOn(client, "listVersions")
+    const versions = await engine.listProjectVersions(project.projectId)
+    expect(versions).toEqual([{ versionId: "v1", name: "版本1", repoId: "repo1" }])
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it("refresh:true 时 listProjectVersions 打客户端并回写缓存", async () => {
+    const { engine, store, client } = makeEngine()
+    const project = store.createProject("P")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = {
+        repoId: "repo1",
+        listSyncStatus: "ok",
+        versionsCachedAt: new Date().toISOString(),
+        versionsCache: [{ versionId: "v1", name: "旧" }],
+      }
+      return cur
+    })
+    vi.spyOn(client, "listVersions").mockResolvedValue({
+      success: true,
+      message: "ok",
+      data: [{ versionId: "v2", name: "新" }],
+    })
+    const versions = await engine.listProjectVersions(project.projectId, { refresh: true })
+    expect(versions[0]!.versionId).toBe("v2")
+    expect(store.loadProject(project.projectId).teambitionVersion?.listSyncStatus).toBe("ok")
+  })
+
+  it("从未 sync 时 bindRequirementVersion 裸 id 成功、零网络", async () => {
+    const { engine, store, client } = makeEngine()
+    const project = store.createProject("P")
+    const req = store.createRequirement(project.projectId, "R")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = { repoId: "repo1" }
+      return cur
+    })
+    const spy = vi.spyOn(client, "listVersions")
+    const state = await engine.bindRequirementVersion(req.requirementId, "ver_x")
+    expect(state.teambitionVersion?.versionId).toBe("ver_x")
+    expect(state.teambitionVersion?.versionName).toBeUndefined()
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it("listVersions 401 导致 error 后 bindRequirementVersion 裸 id 成功且 0 额外 fetch", async () => {
+    const { engine, store, client } = makeEngine()
+    const project = store.createProject("P")
+    const req = store.createRequirement(project.projectId, "R")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = { repoId: "repo1" }
+      return cur
+    })
+    const spy = vi.spyOn(client, "listVersions").mockResolvedValue({
+      success: false,
+      message: "Teambition 版本管理鉴权失败",
+      error: "401",
+    })
+    await expect(engine.syncProjectVersions(project.projectId)).rejects.toThrow("鉴权失败")
+    expect(spy).toHaveBeenCalledTimes(1)
+    const state = await engine.bindRequirementVersion(req.requirementId, "ver_x")
+    expect(state.teambitionVersion?.versionId).toBe("ver_x")
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it("成功空列表后裸未知 id 抛版本不存在", async () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    const req = store.createRequirement(project.projectId, "R")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = {
+        repoId: "repo1",
+        listSyncStatus: "ok",
+        versionsCachedAt: new Date().toISOString(),
+        versionsCache: [],
+      }
+      return cur
+    })
+    await expect(engine.bindRequirementVersion(req.requirementId, "unknown_id"))
+      .rejects.toThrow("版本不存在: unknown_id")
+  })
+
+  it("同一需求重复绑定覆盖旧版本", async () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    const req = store.createRequirement(project.projectId, "R")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = { repoId: "repo1" }
+      return cur
+    })
+    await engine.bindRequirementVersion(req.requirementId, "v1")
+    const state2 = await engine.bindRequirementVersion(req.requirementId, "v2")
+    expect(state2.teambitionVersion?.versionId).toBe("v2")
+    expect(store.load(req.requirementId).teambitionVersion?.versionId).toBe("v2")
+  })
+
+  it("updateVersionNote 允许空串", async () => {
+    const { engine, store, client } = makeEngine()
+    const project = store.createProject("P")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = { repoId: "repo1" }
+      return cur
+    })
+    vi.spyOn(client, "updateVersionNote").mockResolvedValue({
+      success: true,
+      message: "ok",
+      data: { repoId: "repo1", versionId: "v1", note: "" },
+    })
+    const result = await engine.updateVersionNote(project.projectId, "v1", "")
+    expect(result).toEqual({ versionId: "v1", note: "" })
+  })
+
+  it("listVersionRequirements 按 requirementName 排序并可按版本过滤", () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    const alpha = store.createRequirement(project.projectId, "Alpha")
+    const zulu = store.createRequirement(project.projectId, "Zulu")
+    const mike = store.createRequirement(project.projectId, "Mike")
+    store.update(alpha.requirementId, (cur) => { cur.teambitionVersion = { versionId: "v1", repoId: "repo1", versionName: "版本1" }; return cur })
+    store.update(zulu.requirementId, (cur) => { cur.teambitionVersion = { versionId: "v1", repoId: "repo1", versionName: "版本1" }; return cur })
+    store.update(mike.requirementId, (cur) => { cur.teambitionVersion = { versionId: "v2", repoId: "repo1", versionName: "版本2" }; return cur })
+    const all = engine.listVersionRequirements(project.projectId)
+    expect(all.map((m) => m.requirementName)).toEqual(["Alpha", "Mike", "Zulu"])
+    const filtered = engine.listVersionRequirements(project.projectId, "v1")
+    expect(filtered.map((m) => m.requirementName)).toEqual(["Alpha", "Zulu"])
+  })
+
+  it("setProjectDefaultVersion 在 cache 空时不拦非空字符串", () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = {
+        repoId: "repo1",
+        listSyncStatus: "ok",
+        versionsCachedAt: new Date().toISOString(),
+        versionsCache: [],
+      }
+      return cur
+    })
+    const updated = engine.setProjectDefaultVersion(project.projectId, "v1")
+    expect(updated.teambitionVersion?.defaultVersionId).toBe("v1")
+  })
+
+  it("listProjectSummaries 含 teambitionRepoId", () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = { repoId: "repo1" }
+      return cur
+    })
+    const summary = engine.listProjectSummaries().find((s) => s.projectId === project.projectId)
+    expect(summary?.teambitionRepoId).toBe("repo1")
+  })
+
+  it("listRequirementSummaries：ok 且 cache 命中时无 stale 键", () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    const req = store.createRequirement(project.projectId, "R")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = {
+        repoId: "repo1",
+        listSyncStatus: "ok",
+        versionsCache: [{ versionId: "v1", name: "版本1" }],
+      }
+      return cur
+    })
+    store.update(req.requirementId, (cur) => {
+      cur.teambitionVersion = { versionId: "v1", repoId: "repo1", versionName: "版本1" }
+      return cur
+    })
+    const summary = engine.listRequirementSummaries(project.projectId).find((s) => s.requirementId === req.requirementId)!
+    expect(summary.teambitionVersionId).toBe("v1")
+    expect(summary.teambitionVersionName).toBe("版本1")
+    expect(summary.teambitionVersionStale).toBeUndefined()
+  })
+
+  it("listRequirementSummaries：解绑仓库后 stale true；未绑版本三键都不出现", () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    const req = store.createRequirement(project.projectId, "R")
+    const req2 = store.createRequirement(project.projectId, "R2")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = {
+        repoId: "repo1",
+        listSyncStatus: "ok",
+        versionsCache: [{ versionId: "v1", name: "版本1" }],
+      }
+      return cur
+    })
+    store.update(req.requirementId, (cur) => {
+      cur.teambitionVersion = { versionId: "v1", repoId: "repo1", versionName: "版本1" }
+      return cur
+    })
+    engine.unbindProjectTeambitionRepo(project.projectId)
+    const summaries = engine.listRequirementSummaries(project.projectId)
+    const bound = summaries.find((s) => s.requirementId === req.requirementId)!
+    expect(bound.teambitionVersionStale).toBe(true)
+    const unbound = summaries.find((s) => s.requirementId === req2.requirementId)!
+    expect(unbound.teambitionVersionId).toBeUndefined()
+    expect(unbound.teambitionVersionName).toBeUndefined()
+    expect(unbound.teambitionVersionStale).toBeUndefined()
+  })
+
+  it("listRequirementSummaries：unconfirmed 状态有 id 无 stale", () => {
+    const { engine, store } = makeEngine()
+    const project = store.createProject("P")
+    const req = store.createRequirement(project.projectId, "R")
+    store.updateProject(project.projectId, (cur) => {
+      cur.teambitionVersion = { repoId: "repo1", listSyncStatus: "unconfirmed" }
+      return cur
+    })
+    store.update(req.requirementId, (cur) => {
+      cur.teambitionVersion = { versionId: "v1", repoId: "repo1" }
+      return cur
+    })
+    const summary = engine.listRequirementSummaries(project.projectId).find((s) => s.requirementId === req.requirementId)!
+    expect(summary.teambitionVersionId).toBe("v1")
+    expect(summary.teambitionVersionStale).toBeUndefined()
   })
 })

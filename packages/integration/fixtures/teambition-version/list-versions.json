@@ -1,0 +1,12 @@
+{
+  "result": [
+    {
+      "id": "id_ver",
+      "name": "2026.08.19",
+      "status": "规划中",
+      "startDate": "2026-08-01",
+      "endDate": "2026-08-31",
+      "note": "https://example.test/note"
+    }
+  ]
+}

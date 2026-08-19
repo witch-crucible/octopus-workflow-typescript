@@ -17,14 +17,18 @@ import type { PluginRef } from "@octopus/plugin/index.js"
 
 /** Teambition 集成配置 */
 export interface TeambitionConfig {
-  appId: string
-  appSecret: string
-  orgId: string
+  appId?: string
+  appSecret?: string
+  orgId?: string
   /** 写操作默认 operator（x-operator-id） */
   operatorId?: string
   gatewayBase?: string
   refStrategy?: "prefix" | "shortid" | "tql"
   timeoutMs?: number
+  versionManageBase?: string
+  sessionCookie?: string
+  userAccessToken?: string
+  versionAuth?: "auto" | "app-jwt" | "session" | "user-token"
 }
 
 /** OmniPlan 集成配置 */
@@ -109,13 +113,17 @@ const configFileSchema = z.object({
   plugins: z.array(pluginRefSchema).optional(),
   teambition: z
     .object({
-      appId: z.string(),
-      appSecret: z.string(),
-      orgId: z.string(),
+      appId: z.string().optional(),
+      appSecret: z.string().optional(),
+      orgId: z.string().optional(),
       operatorId: z.string().optional(),
       gatewayBase: z.string().optional(),
       refStrategy: z.enum(["prefix", "shortid", "tql"]).optional(),
       timeoutMs: z.number().optional(),
+      versionManageBase: z.string().optional(),
+      sessionCookie: z.string().optional(),
+      userAccessToken: z.string().optional(),
+      versionAuth: z.enum(["auto", "app-jwt", "session", "user-token"]).optional(),
     })
     .optional(),
   omniplan: z
@@ -165,23 +173,24 @@ function loadFromEnv(): Partial<OctopusConfig> {
     if (process.env["OCTOPUS_AI_CLAUDE_PATH"]) config.ai.claudePath = process.env["OCTOPUS_AI_CLAUDE_PATH"]
   }
 
-  const tbAppId = process.env["OCTOPUS_TB_APP_ID"]
-  const tbAppSecret = process.env["OCTOPUS_TB_APP_SECRET"]
-  const tbOrgId = process.env["OCTOPUS_TB_ORG_ID"]
-  if (tbAppId || tbAppSecret || tbOrgId || process.env["OCTOPUS_TB_OPERATOR_ID"]) {
-    const teambition: TeambitionConfig = {
-      appId: tbAppId ?? "",
-      appSecret: tbAppSecret ?? "",
-      orgId: tbOrgId ?? "",
-    }
-    if (process.env["OCTOPUS_TB_OPERATOR_ID"]) teambition.operatorId = process.env["OCTOPUS_TB_OPERATOR_ID"]
-    if (process.env["OCTOPUS_TB_GATEWAY"]) teambition.gatewayBase = process.env["OCTOPUS_TB_GATEWAY"]
-    const refStrategy = process.env["OCTOPUS_TB_REF_STRATEGY"]
-    if (refStrategy === "prefix" || refStrategy === "shortid" || refStrategy === "tql") {
-      teambition.refStrategy = refStrategy
-    }
-    config.teambition = teambition
+  const teambition: TeambitionConfig = {}
+  if (process.env["OCTOPUS_TB_APP_ID"]) teambition.appId = process.env["OCTOPUS_TB_APP_ID"]
+  if (process.env["OCTOPUS_TB_APP_SECRET"]) teambition.appSecret = process.env["OCTOPUS_TB_APP_SECRET"]
+  if (process.env["OCTOPUS_TB_ORG_ID"]) teambition.orgId = process.env["OCTOPUS_TB_ORG_ID"]
+  if (process.env["OCTOPUS_TB_OPERATOR_ID"]) teambition.operatorId = process.env["OCTOPUS_TB_OPERATOR_ID"]
+  if (process.env["OCTOPUS_TB_GATEWAY"]) teambition.gatewayBase = process.env["OCTOPUS_TB_GATEWAY"]
+  const refStrategy = process.env["OCTOPUS_TB_REF_STRATEGY"]
+  if (refStrategy === "prefix" || refStrategy === "shortid" || refStrategy === "tql") {
+    teambition.refStrategy = refStrategy
   }
+  if (process.env["OCTOPUS_TB_VERSION_BASE"]) teambition.versionManageBase = process.env["OCTOPUS_TB_VERSION_BASE"]
+  if (process.env["OCTOPUS_TB_SESSION_COOKIE"]) teambition.sessionCookie = process.env["OCTOPUS_TB_SESSION_COOKIE"]
+  if (process.env["OCTOPUS_TB_USER_TOKEN"]) teambition.userAccessToken = process.env["OCTOPUS_TB_USER_TOKEN"]
+  const versionAuth = process.env["OCTOPUS_TB_VERSION_AUTH"]
+  if (versionAuth === "auto" || versionAuth === "app-jwt" || versionAuth === "session" || versionAuth === "user-token") {
+    teambition.versionAuth = versionAuth
+  }
+  if (Object.keys(teambition).length > 0) config.teambition = teambition
 
   if (process.env["OCTOPUS_OMNIPLAN_ROOT"]) {
     config.omniplan = { rootDir: process.env["OCTOPUS_OMNIPLAN_ROOT"] }

@@ -16,8 +16,14 @@ import type {
   RequirementStatusSummary,
   RequirementSummary,
   RequirementTeambitionBinding,
+  RequirementVersionBinding,
 } from "@octopus/core/workflow.js"
-import type { Project, ProjectSummary, ProjectTeambitionBinding } from "@octopus/core/project.js"
+import type {
+  Project,
+  ProjectSummary,
+  ProjectTeambitionBinding,
+  ProjectTeambitionVersionBinding,
+} from "@octopus/core/project.js"
 import {
   BRD_DESIGN_METADATA_KEY,
   mergeBrdDesignConfig,
@@ -98,8 +104,13 @@ import type { IntegrationService } from "@octopus/integration/index.js"
 import {
   TeambitionClient,
   createTeambitionClient,
+  TeambitionVersionClient,
+  createTeambitionVersionClient,
+  buildVersionUrl,
   type WorkflowStatus,
   type TbTask,
+  type TbVersion,
+  type TbVersionRepository,
 } from "@octopus/integration/index.js"
 import {
   parseOmniPlanActual,
@@ -181,6 +192,31 @@ function isDateOnly(value: string): boolean {
   const day = Number(dayText)
   const date = new Date(year, month - 1, day)
   return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
+}
+
+/** Teambition 版本列表缓存新鲜度窗口（5 分钟）。 */
+const VERSION_CACHE_TTL_MS = 5 * 60 * 1000
+
+/** 版本缓存是否新鲜：仅当 listSyncStatus === "ok" 且有缓存时间且未过期。 */
+function isVersionCacheFresh(binding: ProjectTeambitionVersionBinding | undefined): boolean {
+  if (!binding || binding.listSyncStatus !== "ok") return false
+  if (!Array.isArray(binding.versionsCache)) return false
+  if (!binding.versionsCachedAt) return false
+  const t = Date.parse(binding.versionsCachedAt)
+  if (Number.isNaN(t)) return false
+  return Date.now() - t < VERSION_CACHE_TTL_MS
+}
+
+/** 需求版本绑定是否失效（仅确定失效时返回 true）。 */
+function isRequirementVersionStale(
+  binding: RequirementVersionBinding | undefined,
+  project: Project,
+): boolean {
+  if (!binding?.versionId) return false
+  const repo = project.teambitionVersion
+  if (!repo?.repoId) return true
+  if (repo.listSyncStatus !== "ok") return false
+  return !(repo.versionsCache ?? []).some((item) => item.versionId === binding.versionId)
 }
 
 function identityMatches(value: string | undefined, identity: string): boolean {
@@ -421,6 +457,9 @@ export class WorkflowEngine {
         ...(project.teambition?.projectId !== undefined
           ? { teambitionProjectId: project.teambition.projectId }
           : {}),
+        ...(project.teambitionVersion?.repoId !== undefined
+          ? { teambitionRepoId: project.teambitionVersion.repoId }
+          : {}),
         updatedAt: project.updatedAt,
       }
     })
@@ -513,8 +552,18 @@ export class WorkflowEngine {
 
   /** 列出需求摘要。 */
   listRequirementSummaries(projectId?: string): RequirementSummary[] {
+    const projectCache = new Map<string, Project>()
+    const loadProjectCached = (pid: string): Project => {
+      let project = projectCache.get(pid)
+      if (!project) {
+        project = this.store.loadProject(pid)
+        projectCache.set(pid, project)
+      }
+      return project
+    }
     return this.listRequirements(projectId).map((requirementId) => {
       const state = this.getState(requirementId)
+      const project = loadProjectCached(state.projectId)
       return {
         projectId: state.projectId,
         requirementId: state.requirementId,
@@ -528,6 +577,15 @@ export class WorkflowEngine {
         ...(state.teambition?.taskId !== undefined ? { teambitionTaskId: state.teambition.taskId } : {}),
         ...(state.teambition?.statusName !== undefined
           ? { teambitionStatusName: state.teambition.statusName }
+          : {}),
+        ...(state.teambitionVersion?.versionId !== undefined
+          ? { teambitionVersionId: state.teambitionVersion.versionId }
+          : {}),
+        ...(state.teambitionVersion?.versionName !== undefined
+          ? { teambitionVersionName: state.teambitionVersion.versionName }
+          : {}),
+        ...(isRequirementVersionStale(state.teambitionVersion, project)
+          ? { teambitionVersionStale: true }
           : {}),
         ...(state.plannedStart !== undefined ? { plannedStart: state.plannedStart } : {}),
         ...(state.plannedEnd !== undefined ? { plannedEnd: state.plannedEnd } : {}),
@@ -2023,6 +2081,14 @@ export class WorkflowEngine {
     return client
   }
 
+  private requireTeambitionVersion(): TeambitionVersionClient {
+    const client = this.integrations["teambition-version"]
+    if (!client || !(client instanceof TeambitionVersionClient)) {
+      throw new Error("未配置 Teambition 版本管理（需要 integrations.teambition-version）")
+    }
+    return client
+  }
+
   /** 绑定项目到 Teambition 项目（直接传 projectId，或用 prefix 解析）。 */
   async bindProjectTeambition(
     projectId: string,
@@ -2223,6 +2289,327 @@ export class WorkflowEngine {
         current.metadata["omniplanFileName"] = patch.omniplanFileName
       }
       return current
+    })
+  }
+
+  /**
+   * 设置项目默认颜色（`#rrggbb`）。传入空字符串/null 表示清除。
+   */
+  setProjectDefaultColor(projectId: string, color: string | null): Project {
+    const normalized = color === null || color === "" ? "" : color
+    if (normalized !== "" && !/^#[0-9a-fA-F]{6}$/.test(normalized)) {
+      throw new Error(`默认颜色必须是 #rrggbb 格式，收到：${color}`)
+    }
+    return this.store.updateProject(projectId, (current) => {
+      if (!current.metadata) current.metadata = {}
+      if (normalized === "") {
+        delete current.metadata["defaultColor"]
+      } else {
+        current.metadata["defaultColor"] = normalized
+      }
+      return current
+    })
+  }
+
+  // ── Teambition 版本计划编排 ──
+
+  /** 绑定项目到 Teambition 版本仓库。 */
+  async bindProjectTeambitionRepo(
+    projectId: string,
+    opts: { repoId: string; pluginId?: string; tbProjectId?: string; name?: string },
+  ): Promise<Project> {
+    this.store.loadProject(projectId)
+    const client = this.requireTeambitionVersion()
+    const repoId = opts.repoId.trim()
+    if (repoId === "") throw new Error("版本仓库 ID 不能为空")
+    if (/[/\s]/.test(repoId)) throw new Error("版本仓库 ID 含非法字符")
+    if (repoId.length > 80) throw new Error("版本仓库 ID 过长")
+
+    let repoName = opts.name
+    const getRepo = await client.getRepository(repoId)
+    if (getRepo.error !== "UNCONFIRMED_ENDPOINT") {
+      if (getRepo.success) {
+        const data = getRepo.data as TbVersionRepository | null | undefined
+        if (data?.name) repoName = data.name
+      } else {
+        throw new Error(getRepo.message)
+      }
+    }
+
+    const project = this.store.loadProject(projectId)
+    const current = project.teambitionVersion
+    const tbProjectId = opts.tbProjectId ?? project.teambition?.projectId
+    const repoChanged = current?.repoId !== repoId
+
+    this.store.updateProject(projectId, (cur) => {
+      const next: ProjectTeambitionVersionBinding = {
+        repoId,
+        ...(opts.pluginId !== undefined ? { pluginId: opts.pluginId } : {}),
+        ...(tbProjectId !== undefined ? { tbProjectId } : {}),
+        ...(repoName !== undefined ? { name: repoName } : {}),
+        ...(!repoChanged && current?.defaultVersionId ? { defaultVersionId: current.defaultVersionId } : {}),
+      }
+      if (!repoChanged && current) {
+        if (current.versionsCache) next.versionsCache = current.versionsCache
+        if (current.versionsCachedAt) next.versionsCachedAt = current.versionsCachedAt
+        if (current.listSyncStatus) next.listSyncStatus = current.listSyncStatus
+        if (current.lastSyncedAt) next.lastSyncedAt = current.lastSyncedAt
+      }
+      cur.teambitionVersion = next
+      return cur
+    })
+
+    if (repoChanged || !current) {
+      await this.refreshVersionCache(projectId)
+    }
+
+    return this.store.loadProject(projectId)
+  }
+
+  /** 解除项目的 Teambition 版本仓库绑定。 */
+  unbindProjectTeambitionRepo(projectId: string): Project {
+    return this.store.updateProject(projectId, (current) => {
+      delete current.teambitionVersion
+      return current
+    })
+  }
+
+  /** 列出项目版本；refresh 或缓存不新鲜时同步。 */
+  async listProjectVersions(projectId: string, opts?: { refresh?: boolean }): Promise<TbVersion[]> {
+    const project = this.store.loadProject(projectId)
+    const binding = project.teambitionVersion
+    if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
+    if (opts?.refresh !== true && isVersionCacheFresh(binding)) {
+      return (binding.versionsCache ?? []).map((v) => ({ ...v, repoId: binding.repoId }))
+    }
+    return this.syncProjectVersions(projectId)
+  }
+
+  /** 强制同步项目版本列表并写回缓存。 */
+  async syncProjectVersions(projectId: string): Promise<TbVersion[]> {
+    const project = this.store.loadProject(projectId)
+    const binding = project.teambitionVersion
+    if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
+    const result = await this.requireTeambitionVersion().listVersions(binding.repoId)
+    if (result.error === "UNCONFIRMED_ENDPOINT") {
+      this.store.updateProject(projectId, (cur) => {
+        if (cur.teambitionVersion) cur.teambitionVersion.listSyncStatus = "unconfirmed"
+        return cur
+      })
+      throw new Error(result.message)
+    }
+    if (!result.success) {
+      this.store.updateProject(projectId, (cur) => {
+        if (cur.teambitionVersion) cur.teambitionVersion.listSyncStatus = "error"
+        return cur
+      })
+      throw new Error(result.message)
+    }
+    const versions = ((result.data as TbVersion[] | undefined) ?? []).map((v) => {
+      const urlIds: { tbProjectId?: string; pluginId?: string; repoId: string; versionId: string } = {
+        repoId: binding.repoId,
+        versionId: v.versionId,
+      }
+      const tbProjectId = binding.tbProjectId ?? project.teambition?.projectId
+      if (tbProjectId) urlIds.tbProjectId = tbProjectId
+      if (binding.pluginId) urlIds.pluginId = binding.pluginId
+      const url = buildVersionUrl(urlIds)
+      return { ...v, ...(url !== undefined ? { url } : {}) }
+    })
+    const now = new Date().toISOString()
+    this.store.updateProject(projectId, (cur) => {
+      if (!cur.teambitionVersion) return cur
+      cur.teambitionVersion.versionsCache = versions
+      cur.teambitionVersion.versionsCachedAt = now
+      cur.teambitionVersion.lastSyncedAt = now
+      cur.teambitionVersion.listSyncStatus = "ok"
+      return cur
+    })
+    return versions
+  }
+
+  /** 获取单个版本；缓存不新鲜时同步，未确认时抛中文，找不到抛「版本不存在」。 */
+  async getProjectVersion(projectId: string, versionId: string): Promise<TbVersion> {
+    const project = this.store.loadProject(projectId)
+    const binding = project.teambitionVersion
+    if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
+    if (isVersionCacheFresh(binding)) {
+      const hit = (binding.versionsCache ?? []).find((v) => v.versionId === versionId)
+      if (hit) return { ...hit, repoId: binding.repoId }
+      throw new Error(`版本不存在: ${versionId}`)
+    }
+    const client = this.requireTeambitionVersion()
+    const listResult = await client.listVersions(binding.repoId)
+    if (listResult.error === "UNCONFIRMED_ENDPOINT") throw new Error(listResult.message)
+    const detailResult = await client.getVersion(binding.repoId, versionId)
+    if (detailResult.error === "UNCONFIRMED_ENDPOINT") throw new Error(detailResult.message)
+    if (detailResult.success && detailResult.data) return detailResult.data as TbVersion
+    throw new Error(`版本不存在: ${versionId}`)
+  }
+
+  /** 设置项目默认版本；null/"" 清除；非空须在版本缓存中（缓存空只校验非空字符串）。 */
+  setProjectDefaultVersion(projectId: string, versionId: string | null): Project {
+    const project = this.store.loadProject(projectId)
+    if (versionId === null || versionId === "") {
+      return this.store.updateProject(projectId, (cur) => {
+        if (cur.teambitionVersion) delete cur.teambitionVersion.defaultVersionId
+        return cur
+      })
+    }
+    const trimmed = versionId.trim()
+    if (trimmed === "") throw new Error("默认版本 ID 不能为空")
+    const binding = project.teambitionVersion
+    if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
+    const cache = binding.versionsCache ?? []
+    if (cache.length > 0 && !cache.some((v) => v.versionId === versionId)) {
+      throw new Error(`版本不存在: ${versionId}`)
+    }
+    return this.store.updateProject(projectId, (cur) => {
+      if (!cur.teambitionVersion) return cur
+      cur.teambitionVersion.defaultVersionId = versionId
+      return cur
+    })
+  }
+
+  /** 绑定需求到版本。顺序严格按 §7.4：仅 listSyncStatus==="ok" 才校验 ID 存在。 */
+  async bindRequirementVersion(requirementId: string, versionId: string): Promise<WorkflowState> {
+    const state = this.getState(requirementId)
+    const project = this.store.loadProject(state.projectId)
+    const binding = project.teambitionVersion
+    if (!binding?.repoId) throw new Error(`项目 ${state.projectId} 未绑定 Teambition 版本仓库`)
+    const vId = versionId.trim()
+    if (vId === "") throw new Error("版本 ID 不能为空")
+
+    let hit: { name?: string; url?: string } | undefined
+    const status = binding.listSyncStatus
+    if (status === "ok" && isVersionCacheFresh(binding)) {
+      const found = (binding.versionsCache ?? []).find((v) => v.versionId === vId)
+      if (!found) throw new Error(`版本不存在: ${vId}`)
+      hit = { ...(found.name ? { name: found.name } : {}), ...(found.url ? { url: found.url } : {}) }
+    } else if (status === "ok") {
+      let versions: TbVersion[] | undefined
+      try {
+        versions = await this.syncProjectVersions(state.projectId)
+      } catch {
+        versions = undefined
+      }
+      if (versions) {
+        const found = versions.find((v) => v.versionId === vId)
+        if (!found) throw new Error(`版本不存在: ${vId}`)
+        hit = { ...(found.name ? { name: found.name } : {}), ...(found.url ? { url: found.url } : {}) }
+      }
+    }
+
+    return this.transactionalUpdate(requirementId, (current) => {
+      current.teambitionVersion = {
+        versionId: vId,
+        ...(hit?.name ? { versionName: hit.name } : {}),
+        repoId: binding.repoId,
+        ...(hit?.url ? { url: hit.url } : {}),
+        lastSyncedAt: new Date().toISOString(),
+      }
+      return current
+    })
+  }
+
+  /** 解除需求的版本绑定。 */
+  unbindRequirementVersion(requirementId: string): WorkflowState {
+    return this.transactionalUpdate(requirementId, (current) => {
+      delete current.teambitionVersion
+      return current
+    })
+  }
+
+  /** 读取需求版本绑定；未绑定返回 undefined，不打远端。 */
+  getRequirementVersionBinding(requirementId: string): RequirementVersionBinding | undefined {
+    return this.getState(requirementId).teambitionVersion
+  }
+
+  /** 列出挂到版本上的需求；可按 versionId 过滤，按 requirementName 排序。 */
+  listVersionRequirements(
+    projectId: string,
+    versionId?: string,
+  ): Array<{
+    requirementId: string
+    requirementName: string
+    versionId: string
+    versionName?: string
+  }> {
+    return this.listRequirementSummaries(projectId)
+      .filter((s) => s.teambitionVersionId)
+      .filter((s) => !versionId || s.teambitionVersionId === versionId)
+      .map((s) => ({
+        requirementId: s.requirementId,
+        requirementName: s.requirementName,
+        versionId: s.teambitionVersionId!,
+        ...(s.teambitionVersionName ? { versionName: s.teambitionVersionName } : {}),
+      }))
+      .sort((a, b) => a.requirementName.localeCompare(b.requirementName))
+  }
+
+  /** 更新版本说明；note 允许空串；成功后在缓存补丁 note。 */
+  async updateVersionNote(
+    projectId: string,
+    versionId: string,
+    note: string,
+  ): Promise<{ versionId: string; note: string }> {
+    if (typeof note !== "string") throw new Error("note 必须是字符串")
+    const project = this.store.loadProject(projectId)
+    const binding = project.teambitionVersion
+    if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
+    const ids: { tbProjectId?: string; pluginId?: string } = {}
+    if (binding.pluginId) ids.pluginId = binding.pluginId
+    const tbProjectId = binding.tbProjectId ?? project.teambition?.projectId
+    if (tbProjectId) ids.tbProjectId = tbProjectId
+    const result = await this.requireTeambitionVersion().updateVersionNote(
+      binding.repoId,
+      versionId,
+      note,
+      ids,
+    )
+    if (!result.success) throw new Error(result.message)
+    this.store.updateProject(projectId, (cur) => {
+      if (!cur.teambitionVersion) return cur
+      const cache = cur.teambitionVersion.versionsCache
+      if (cache && cache.some((v) => v.versionId === versionId)) {
+        cur.teambitionVersion.versionsCache = cache.map((v) =>
+          v.versionId === versionId ? { ...v, note } : v,
+        )
+      }
+      return cur
+    })
+    return { versionId, note }
+  }
+
+  /** 内部刷新版本缓存（绑仓库后用；UNCONFIRMED/401 不失败、不写 cachedAt）。 */
+  private async refreshVersionCache(projectId: string): Promise<void> {
+    const project = this.store.loadProject(projectId)
+    const binding = project.teambitionVersion
+    if (!binding?.repoId) return
+    const result = await this.requireTeambitionVersion().listVersions(binding.repoId)
+    if (result.error === "UNCONFIRMED_ENDPOINT") {
+      this.store.updateProject(projectId, (cur) => {
+        if (cur.teambitionVersion) cur.teambitionVersion.listSyncStatus = "unconfirmed"
+        return cur
+      })
+      return
+    }
+    if (!result.success) {
+      this.store.updateProject(projectId, (cur) => {
+        if (cur.teambitionVersion) cur.teambitionVersion.listSyncStatus = "error"
+        return cur
+      })
+      return
+    }
+    const versions = (result.data as TbVersion[] | undefined) ?? []
+    const now = new Date().toISOString()
+    this.store.updateProject(projectId, (cur) => {
+      if (!cur.teambitionVersion) return cur
+      cur.teambitionVersion.versionsCache = versions
+      cur.teambitionVersion.versionsCachedAt = now
+      cur.teambitionVersion.lastSyncedAt = now
+      cur.teambitionVersion.listSyncStatus = "ok"
+      return cur
     })
   }
 
@@ -2829,6 +3216,21 @@ export async function createWorkflowEngineFromConfig(
       ...(teambition.gatewayBase !== undefined ? { gatewayBase: teambition.gatewayBase } : {}),
       ...(teambition.refStrategy !== undefined ? { refStrategy: teambition.refStrategy } : {}),
       ...(teambition.timeoutMs !== undefined ? { timeoutMs: teambition.timeoutMs } : {}),
+    })
+  }
+  const hasAppJwt = !!(teambition?.appId && teambition.appSecret && teambition.orgId)
+  const hasVersionSession = !!(teambition?.sessionCookie || teambition?.userAccessToken)
+  if (hasAppJwt || hasVersionSession) {
+    integrations["teambition-version"] = createTeambitionVersionClient({
+      ...(hasAppJwt
+        ? { appId: teambition.appId, appSecret: teambition.appSecret, orgId: teambition.orgId }
+        : {}),
+      ...(teambition?.orgId && !hasAppJwt ? { orgId: teambition.orgId } : {}),
+      ...(teambition?.versionManageBase !== undefined ? { versionManageBase: teambition.versionManageBase } : {}),
+      ...(teambition?.sessionCookie !== undefined ? { sessionCookie: teambition.sessionCookie } : {}),
+      ...(teambition?.userAccessToken !== undefined ? { userAccessToken: teambition.userAccessToken } : {}),
+      ...(teambition?.versionAuth !== undefined ? { versionAuth: teambition.versionAuth } : {}),
+      ...(teambition?.timeoutMs !== undefined ? { timeoutMs: teambition.timeoutMs } : {}),
     })
   }
   return new WorkflowEngine({
