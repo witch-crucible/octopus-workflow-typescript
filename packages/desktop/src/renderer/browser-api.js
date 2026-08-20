@@ -98,7 +98,11 @@ if (!window.octopus) {
     importTasks: async (requirementId) => {
       const document = await chooseJsonFile()
       if (!document) return { canceled: true }
-      if (!window.confirm(`将所选任务进度合并到需求 ${requirementId}？`)) return { canceled: true }
+      const message = `将所选任务进度合并到需求 ${requirementId}？`
+      const confirmed = window.OctopusElementPlus?.confirm
+        ? await window.OctopusElementPlus.confirm(message, "导入任务")
+        : window.confirm(message)
+      if (!confirmed) return { canceled: true }
       return { canceled: false, ...await invoke("importTasks", requirementId, document) }
     },
 

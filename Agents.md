@@ -19,7 +19,7 @@ Octopus Workflow 是一个基于 TypeScript 的 AI 辅助软件交付工作流�
 - `packages/cli`：命令行入口。
 - `packages/desktop`：Web 界面和 macOS Electron 外壳。
 - `workflow.yaml`：默认的、可版本化的工作流 DAG。
-- `workflow/nodes/<nodeKey>/`：节点独立目录；`workflow/shared/`：节点共享目录。
+- `workflow/nodes/<nodeKey>/`：节点业务目录，标准结构为 `README.md`、`src/` 和 `test/`；`workflow/shared/`：节点共享目录。
 - `docs/`：设计文档、计划和归档资料。
 - `.octo/`：本地运行时状态，通常包含 SQLite 数据库和配置，不应提交凭据或运行时数据。
 
@@ -33,7 +33,7 @@ pnpm build                     # 全 workspace TypeScript 类型检查
 pnpm -r build                  # 编译各包并生成 dist
 pnpm test                      # 运行 Vitest 测试
 pnpm test:watch                # 监听模式运行测试
-pnpm lint                      # Biome 检查 packages/
+pnpm lint                      # Biome 检查 packages/ 和节点 src/test
 pnpm lint:fix                  # 自动修复可修复的 lint 问题
 pnpm verify                    # build + test + lint
 pnpm clean                     # 清理各包 dist 和 tsbuildinfo
@@ -46,11 +46,21 @@ pnpm web                       # 构建并启动本地 Web 界面
 
 - 使用 TypeScript ESM；遵循现有 `tsconfig` 的严格模式、`noUncheckedIndexedAccess` 和 `exactOptionalPropertyTypes` 约束。
 - 优先复用现有领域类型、错误类型和包边界，不在 CLI、UI 中重复实现领域规则。
-- 新增行为应同时补充同目录测试；测试文件使用 `*.test.ts`，测试框架为 Vitest。
+- Desktop/Web UI 统一以 Vue 3 与 Element Plus 为组件库标准。现有命令式 renderer 通过 `element-plus-adapter.js` 保持 DOM/事件兼容；新增或修改基础控件、反馈、确认框和主题能力时优先复用 Element Plus 官方组件/API，不再新增仿制控件或仅复制其视觉样式；保留 SVG 工作流图、甘特图等专用可视化实现。
+- 新增行为应同时补充测试；包内测试沿用现有同目录结构，工作流节点测试统一放在节点的 `test/` 中；测试文件使用 `*.test.ts`，测试框架为 Vitest。
 - 保持导入路径和文件名大小写与现有代码一致。不要通过放宽 TypeScript 配置来规避类型错误。
 - 使用 Biome 格式和 lint 规则；修改后运行 `pnpm lint`。
 - 对外部集成、AI 调用和文件/数据库操作保留清晰的失败信息，避免吞掉异常。
 - 不要提交 `dist/`、`node_modules/`、`.octo/`、本地凭据或生成的发布产物。
+
+## 节点目录规范
+
+- `workflow/nodes/<nodeKey>/src/` 只放该节点拥有的业务逻辑；可跨节点复用的领域类型和公共逻辑放在 `packages/` 的合适包或 `workflow/shared/`，不要复制到 CLI、Desktop 或多个节点中。
+- `workflow/nodes/<nodeKey>/test/` 放该节点的 `*.test.ts`，测试通过 `../src/` 导入业务实现；不要把测试文件放入 `src/`，避免被生产构建输出。
+- 节点目录不是独立 npm/pnpm 项目或 workspace，不得放置节点级 `package.json`、`tsconfig.json`、`node_modules`、`dist` 或 `tsconfig.tsbuildinfo`。
+- 节点源码由外层 `packages/workflow-engine` 统一类型检查、编译和运行，依赖使用外层 workspace 的 `node_modules`；节点测试和 lint 分别由根目录 Vitest、Biome 配置统一发现。
+- `packages/workflow-engine` 负责向节点注入项目状态、AIClient、Artifact 持久化等运行时能力；节点目录负责提示词选择、业务分支和节点产出约定等节点业务规则。
+- 新增节点运行逻辑时，除创建节点目录外，还要在外层引擎完成显式装配或注册；目录存在本身不代表代码会被自动执行。
 
 ## 工作流配置
 

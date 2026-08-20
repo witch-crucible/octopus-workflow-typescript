@@ -7,8 +7,8 @@
   "scripts": {
     "build": "pnpm -r exec tsc --noEmit",
     "web": "pnpm --filter @octopus/desktop web",
-    "lint": "biome lint --diagnostic-level=error packages/",
-    "lint:fix": "biome lint --write --diagnostic-level=error packages/",
+    "lint": "biome lint --diagnostic-level=error packages/ workflow/nodes/*/src/ workflow/nodes/*/test/",
+    "lint:fix": "biome lint --write --diagnostic-level=error packages/ workflow/nodes/*/src/ workflow/nodes/*/test/",
     "test": "node scripts/ensure-sqlite.mjs node && vitest run",
     "test:watch": "node scripts/ensure-sqlite.mjs node && vitest",
     "verify": "bash scripts/verify.sh",

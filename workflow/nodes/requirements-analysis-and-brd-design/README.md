@@ -9,6 +9,16 @@ PM analyzes requirements and completes the BRD. Octopus can **generate** or **ch
 | Depends On | None |
 | Actions | Manual（完成前用 CLI/Web 配置并跑 `brd generate` / `brd check`） |
 
+## 实现位置
+
+- `src/index.ts`：本节点拥有的 BRD 生成/检查业务编排、提示词选择和产出约定。
+- `src/context.ts`：本节点拥有的源上下文采集与提示词渲染。
+- `test/`：本节点业务逻辑的 Vitest 测试，与生产源码分离。
+- 节点目录不是独立 npm/pnpm 项目，不放置 `package.json`、`tsconfig.json`、`node_modules` 或 `dist`。
+- `packages/core`：复用的配置、领域枚举和 Artifact 类型。
+- `packages/workflow-engine`：统一编译并调用 `workflow/nodes/*/src`，提供项目状态、AIClient 与 Artifact 持久化，并保留公开 API 兼容入口；节点依赖使用其外层 `node_modules`。
+- `packages/cli`、`packages/desktop`：CLI/Web 入口与展示层，不重复节点业务规则。
+
 ## 能力
 
 结合小程序、官网、前端代码、后端代码（及展示信息）生成 BRD，或检查已有 BRD 的完善性。

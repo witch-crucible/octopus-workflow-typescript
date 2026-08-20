@@ -13,6 +13,7 @@ const projectLabelEl = document.getElementById("projectLabel")
 const flowHintEl = document.getElementById("flowHint")
 const zoomLabelEl = document.getElementById("zoomLabel")
 const roleLegendEl = document.getElementById("roleLegend")
+const nodeLocatorEl = document.getElementById("nodeLocator")
 const themeToggleEl = document.getElementById("themeToggle")
 const fullscreenGraphEl = document.getElementById("fullscreenGraph")
 const hubViewEl = document.getElementById("hubView")
@@ -84,6 +85,8 @@ let lastScrolledCurrentKey = ""
 let projectTab = "board"
 let projectTableSort = { key: "phase", dir: "asc" }
 let brdPromptConfig = {}
+let brdPromptDrafts = {}
+let brdPromptClearIds = new Set()
 let expandedScheduleId = ""
 let hubGanttSelectedNode = ""
 let hubGanttState
@@ -101,6 +104,30 @@ let inspectorCollapsed = false
 const THEME_STORAGE_KEY = "octopus.ui.theme"
 const PANEL_STORAGE_KEY = "octopus.ui.workspacePanels"
 const ACCENT = "#6d28d9"
+
+const BRD_PROMPT_IDS = ["generate", "check", "summarize-sources"]
+const BRD_PROMPT_META = {
+  generate: { name: "生成 BRD", description: "根据需求、规范与项目源摘要生成完整 BRD。" },
+  check: { name: "检查 BRD", description: "检查已有 BRD 的完整性、可验收性与项目一致性。" },
+  "summarize-sources": { name: "归纳项目源", description: "在生成 BRD 前提炼代码、产物与展示信息。" },
+}
+
+function collectBrdPromptPatch(drafts, clearedIds) {
+  const prompts = {}
+  for (const id of BRD_PROMPT_IDS) {
+    if (clearedIds.includes(id)) {
+      prompts[id] = null
+      continue
+    }
+    const draft = drafts[id]
+    if (!draft) continue
+    const hasSystem = draft.system.trim() !== ""
+    const hasUser = draft.user.trim() !== ""
+    if (!hasSystem || !hasUser) return { prompts, invalid: { id, hasSystem, hasUser } }
+    prompts[id] = draft
+  }
+  return { prompts }
+}
 
 /** 阶段顺序 */
 const PHASE_ORDER = [
@@ -844,9 +871,9 @@ function ensureProjectGanttMounted() {
         })
         .catch(showError)
     },
-    onImportOmniPlan: () => {
+    onImportOmniPlan: async () => {
       if (!selectedProjectId) return
-      if (!window.confirm("导入 OmniPlan 将合并日期到当前项目的需求和节点。\n继续？")) return
+      if (!await confirmAction("导入 OmniPlan 将合并日期到当前项目的需求和节点。\n继续？", "导入 OmniPlan")) return
       window.octopus.importProjectOmniPlan(selectedProjectId)
         .then(async (result) => {
           const parts = []
@@ -1256,7 +1283,7 @@ function renderHub() {
     card.querySelector("[data-delete]").onclick = async () => {
       const item = projectSummaries.find((entry) => entry.projectId === projectId)
       const label = item?.name || projectId
-      if (!window.confirm(`删除项目「${label}」及其下全部需求状态？\n只删除状态库记录，不会删除源码目录或 workflow.yaml。此操作不可恢复。`)) {
+      if (!await confirmAction(`删除项目「${label}」及其下全部需求状态？\n只删除状态库记录，不会删除源码目录或 workflow.yaml。此操作不可恢复。`, "删除项目", "error")) {
         return
       }
       try {
@@ -1329,7 +1356,7 @@ function renderRequirementTable() {
       try { await window.octopus.updateRequirement(id, { name: name.trim(), description }); await loadRequirementSummaries(selectedProjectId); renderRequirementTable() } catch (error) { showError(error) }
     }
     row.querySelector("[data-delete]").onclick = async () => {
-      if (!window.confirm("确认删除该需求？此操作不可恢复。")) return
+      if (!await confirmAction("确认删除该需求？此操作不可恢复。", "删除需求", "error")) return
       try { await window.octopus.deleteRequirement(id); await loadRequirementSummaries(selectedProjectId); renderRequirementTable() } catch (error) { showError(error) }
     }
   }
@@ -1395,7 +1422,7 @@ function renderKanbanBoard() {
       e.stopPropagation()
       const item = requirementSummaries.find((entry) => entry.requirementId === requirementId)
       const label = item?.requirementName || requirementId
-      if (!window.confirm(`删除需求「${label}」的状态？\n只删除状态库记录，不会删除源码目录。此操作不可恢复。`)) return
+      if (!await confirmAction(`删除需求「${label}」的状态？\n只删除状态库记录，不会删除源码目录。此操作不可恢复。`, "删除需求", "error")) return
       try {
         await window.octopus.deleteRequirement(requirementId)
         if (lastCreatedRequirementId === requirementId) lastCreatedRequirementId = ""
@@ -1500,48 +1527,126 @@ function renderProjectSettings() {
       <div class="field"><label for="brdWebsiteUrl">官网展示域名</label><input id="brdWebsiteUrl" placeholder="https://..." /></div>
       <div class="field"><label for="brdSpecPath">BRD 规范路径</label><input id="brdSpecPath" /></div>
       <div class="field"><label for="brdOutputPath">BRD 产出路径</label><input id="brdOutputPath" placeholder="默认节点目录 brd.md" /></div>
-      <details class="brd-prompts-editor"><summary>提示词编辑</summary>
-        <p class="help">留空不会覆盖默认提示词；模板支持 {{requirementName}}、{{sourcesSummary}} 等变量。</p>
-        <label for="brdPromptId">提示词类型</label>
-        <select id="brdPromptId"><option value="generate">generate</option><option value="check">check</option><option value="summarize-sources">summarize-sources</option></select>
-        <div class="field"><label for="brdPromptSystem">system</label><textarea id="brdPromptSystem" rows="4"></textarea></div>
-        <div class="field"><label for="brdPromptUser">user</label><textarea id="brdPromptUser" rows="8"></textarea></div>
-        <div class="tb-actions"><button id="brdPromptLoadDefault" class="secondary" type="button">载入默认</button><button id="brdPromptClear" class="secondary" type="button">清除覆盖</button></div>
+      <details class="brd-prompts-editor" open><summary><span>提示词编辑</span><span class="muted">3 类模板</span></summary>
+        <div class="brd-prompt-editor-body">
+          <p class="help">项目只保存自定义内容；未自定义的类型继续使用内置默认提示词。模板支持 <code>{{requirementName}}</code>、<code>{{sourcesSummary}}</code> 等变量。</p>
+          <div class="brd-prompt-tabs" role="tablist" aria-label="BRD 提示词类型">
+            ${BRD_PROMPT_IDS.map((id, index) => `<button type="button" class="brd-prompt-tab${index === 0 ? " active" : ""}" role="tab" aria-selected="${index === 0 ? "true" : "false"}" data-prompt-id="${id}">${escapeHtml(BRD_PROMPT_META[id].name)} <code>${id}</code></button>`).join("")}
+          </div>
+          <div class="brd-prompt-editor-heading">
+            <div><h4 id="brdPromptTitle">生成 BRD</h4><p id="brdPromptDescription" class="muted"></p></div>
+            <span id="brdPromptState" class="badge">使用内置默认</span>
+          </div>
+          <div class="brd-prompt-fields">
+            <div class="field brd-prompt-field">
+              <label for="brdPromptSystem"><span class="brd-prompt-field-label">系统提示词 <code>system</code></span><span id="brdPromptSystemCount" class="brd-prompt-count">0 字</span></label>
+              <textarea id="brdPromptSystem" class="brd-prompt-textarea" rows="7" spellcheck="false" placeholder="未自定义，运行时使用内置 system 提示词"></textarea>
+            </div>
+            <div class="field brd-prompt-field">
+              <label for="brdPromptUser"><span class="brd-prompt-field-label">用户提示词 <code>user</code></span><span id="brdPromptUserCount" class="brd-prompt-count">0 字</span></label>
+              <textarea id="brdPromptUser" class="brd-prompt-textarea" rows="7" spellcheck="false" placeholder="未自定义，运行时使用内置 user 提示词"></textarea>
+            </div>
+          </div>
+          <div class="brd-prompt-actions">
+            <span class="muted">system 与 user 需同时填写；切换类型不会丢失未保存内容。</span>
+            <button id="brdPromptUseDefault" class="secondary" type="button">恢复内置默认</button>
+          </div>
+        </div>
       </details>
-      <div class="tb-actions">
-        <button id="settingsSaveBrd" type="button">保存 BRD 设置</button>
-        <button id="settingsPreviewBrdPrompts" class="secondary" type="button">预览提示词</button>
+      <div class="tb-actions brd-prompt-actions">
+        <label class="brd-preview-context" for="settingsBrdPreviewRequirement">预览需求
+          <select id="settingsBrdPreviewRequirement">
+            ${requirementSummaries.length
+              ? requirementSummaries.map((item) => `<option value="${escapeHtml(item.requirementId)}">${escapeHtml(item.requirementName || item.requirementId)}</option>`).join("")
+              : `<option value="">暂无需求</option>`}
+          </select>
+        </label>
+        <div class="brd-prompt-button-group">
+          <button id="settingsSaveBrd" type="button">保存 BRD 设置</button>
+          <button id="settingsPreviewBrdPrompts" class="secondary" type="button"${requirementSummaries.length ? "" : " disabled"}>预览已保存提示词</button>
+        </div>
       </div>
-      <pre id="settingsBrdPromptPreview" class="muted" style="margin-top:8px;white-space:pre-wrap;max-height:240px;overflow:auto" hidden></pre>
+      <section id="settingsBrdPromptPreview" class="brd-prompt-preview" aria-live="polite" hidden></section>
     </div>
   `
-  void loadBrdSettingsForm()
-  const promptDefaults = {
-    generate: { system: "", user: "" },
-    check: { system: "", user: "" },
-    "summarize-sources": { system: "", user: "" },
+  brdPromptConfig = {}
+  brdPromptDrafts = {}
+  brdPromptClearIds = new Set()
+  let activePromptId = "generate"
+  const promptValue = (id) => brdPromptClearIds.has(id)
+    ? { system: "", user: "" }
+    : (brdPromptDrafts[id] || brdPromptConfig[id] || { system: "", user: "" })
+  const updatePromptEditorState = () => {
+    const item = promptValue(activePromptId)
+    const meta = BRD_PROMPT_META[activePromptId]
+    const state = document.getElementById("brdPromptState")
+    const title = document.getElementById("brdPromptTitle")
+    const description = document.getElementById("brdPromptDescription")
+    const systemCount = document.getElementById("brdPromptSystemCount")
+    const userCount = document.getElementById("brdPromptUserCount")
+    if (title) title.textContent = meta.name
+    if (description) description.textContent = meta.description
+    if (systemCount) systemCount.textContent = `${item.system.length} 字`
+    if (userCount) userCount.textContent = `${item.user.length} 字`
+    if (state) {
+      state.className = "badge"
+      if (brdPromptClearIds.has(activePromptId)) {
+        state.textContent = "保存后使用默认"
+        state.classList.add("warn")
+      } else if (brdPromptDrafts[activePromptId]) {
+        state.textContent = "有未保存修改"
+        state.classList.add("warn")
+      } else if (brdPromptConfig[activePromptId]) {
+        state.textContent = "已自定义"
+        state.classList.add("info")
+      } else {
+        state.textContent = "使用内置默认"
+      }
+    }
+    for (const tab of document.querySelectorAll(".brd-prompt-tab")) {
+      const id = tab.dataset.promptId
+      const selected = id === activePromptId
+      tab.classList.toggle("active", selected)
+      tab.classList.toggle("is-custom", Boolean(brdPromptConfig[id]) && !brdPromptClearIds.has(id))
+      tab.classList.toggle("has-pending", Boolean(brdPromptDrafts[id]) || brdPromptClearIds.has(id))
+      tab.setAttribute("aria-selected", String(selected))
+    }
   }
   const loadPromptEditor = () => {
-    const id = document.getElementById("brdPromptId")?.value || "generate"
-    const item = brdPromptConfig[id] || promptDefaults[id]
+    const item = promptValue(activePromptId)
     const system = document.getElementById("brdPromptSystem")
     const user = document.getElementById("brdPromptUser")
     if (system) system.value = item?.system || ""
     if (user) user.value = item?.user || ""
+    updatePromptEditorState()
   }
-  document.getElementById("brdPromptId")?.addEventListener("change", loadPromptEditor)
-  document.getElementById("brdPromptLoadDefault")?.addEventListener("click", () => {
-    const id = document.getElementById("brdPromptId")?.value || "generate"
-    delete brdPromptConfig[id]
-    loadPromptEditor()
-  })
-  document.getElementById("brdPromptClear")?.addEventListener("click", () => {
-    const id = document.getElementById("brdPromptId")?.value || "generate"
-    delete brdPromptConfig[id]
+  const syncPromptEditor = (markEdited = false) => {
     const system = document.getElementById("brdPromptSystem")
     const user = document.getElementById("brdPromptUser")
-    if (system) system.dataset.cleared = "true"
-    if (user) user.dataset.cleared = "true"
+    if (!system || !user) return
+    if (markEdited) brdPromptClearIds.delete(activePromptId)
+    if (brdPromptClearIds.has(activePromptId)) return
+    const base = brdPromptConfig[activePromptId] || { system: "", user: "" }
+    if (system.value === base.system && user.value === base.user) {
+      delete brdPromptDrafts[activePromptId]
+    } else {
+      brdPromptDrafts[activePromptId] = { system: system.value, user: user.value }
+    }
+    updatePromptEditorState()
+  }
+  for (const tab of document.querySelectorAll(".brd-prompt-tab")) {
+    tab.addEventListener("click", () => {
+      syncPromptEditor()
+      activePromptId = tab.dataset.promptId || "generate"
+      loadPromptEditor()
+    })
+  }
+  document.getElementById("brdPromptSystem")?.addEventListener("input", () => syncPromptEditor(true))
+  document.getElementById("brdPromptUser")?.addEventListener("input", () => syncPromptEditor(true))
+  document.getElementById("brdPromptUseDefault")?.addEventListener("click", () => {
+    delete brdPromptDrafts[activePromptId]
+    if (brdPromptConfig[activePromptId]) brdPromptClearIds.add(activePromptId)
+    else brdPromptClearIds.delete(activePromptId)
     loadPromptEditor()
   })
   document.getElementById("settingsBindTb")?.addEventListener("click", async () => {
@@ -1663,16 +1768,18 @@ function renderProjectSettings() {
   document.getElementById("settingsSaveBrd")?.addEventListener("click", async () => {
     if (!selectedProjectId || !window.octopus.setProjectBrdDesignConfig) return
     try {
-      const promptId = document.getElementById("brdPromptId")?.value || "generate"
-      const promptSystemEl = document.getElementById("brdPromptSystem")
-      const promptUserEl = document.getElementById("brdPromptUser")
-      const promptSystem = promptSystemEl?.value || ""
-      const promptUser = promptUserEl?.value || ""
-      const prompts = promptSystem.trim() && promptUser.trim()
-        ? { [promptId]: { system: promptSystem, user: promptUser } }
-        : (promptSystemEl?.dataset.cleared === "true" || promptUserEl?.dataset.cleared === "true" ? { [promptId]: null } : {})
-      if (promptSystemEl) delete promptSystemEl.dataset.cleared
-      if (promptUserEl) delete promptUserEl.dataset.cleared
+      syncPromptEditor()
+      const promptPatch = collectBrdPromptPatch(brdPromptDrafts, [...brdPromptClearIds])
+      if (promptPatch.invalid) {
+        const { id, hasSystem, hasUser } = promptPatch.invalid
+        activePromptId = id
+        loadPromptEditor()
+        statusEl.textContent = hasSystem || hasUser
+          ? `${BRD_PROMPT_META[id].name}的 system 与 user 需同时填写`
+          : `${BRD_PROMPT_META[id].name}如需清空，请使用“恢复内置默认”`
+        statusEl.className = "badge bad"
+        return
+      }
       await window.octopus.setProjectBrdDesignConfig(selectedProjectId, {
         sources: {
           miniprogramCodePath: document.getElementById("brdMiniprogram")?.value ?? "",
@@ -1684,9 +1791,16 @@ function renderProjectSettings() {
         },
         brdSpecPath: document.getElementById("brdSpecPath")?.value ?? "",
         brdOutputPath: document.getElementById("brdOutputPath")?.value ?? "",
-        prompts,
+        prompts: promptPatch.prompts,
       })
       currentProject = await window.octopus.getProject(selectedProjectId)
+      const savedConfig = await window.octopus.getProjectBrdDesignConfig(selectedProjectId)
+      brdPromptConfig = savedConfig.prompts || {}
+      brdPromptDrafts = {}
+      brdPromptClearIds.clear()
+      loadPromptEditor()
+      const previewEl = document.getElementById("settingsBrdPromptPreview")
+      if (previewEl) previewEl.hidden = true
       statusEl.textContent = "BRD 设置已保存"
       statusEl.className = "badge good"
     } catch (error) {
@@ -1695,20 +1809,21 @@ function renderProjectSettings() {
   })
   document.getElementById("settingsPreviewBrdPrompts")?.addEventListener("click", async () => {
     if (!selectedProjectId || !window.octopus.previewBrdPrompts) return
-    const requirementId = requirementSummaries[0]?.requirementId
+    const requirementId = document.getElementById("settingsBrdPreviewRequirement")?.value
     if (!requirementId) {
       statusEl.textContent = "请先在本项目下创建需求后再预览提示词"
       statusEl.className = "badge bad"
       return
     }
     try {
-      const preview = await window.octopus.previewBrdPrompts(selectedProjectId, requirementId, { mode: "all" })
+      const preview = await window.octopus.previewBrdPrompts(selectedProjectId, requirementId, {
+        mode: "all",
+        includeSummarize: true,
+      })
       const previewEl = document.getElementById("settingsBrdPromptPreview")
       if (previewEl) {
         previewEl.hidden = false
-        previewEl.textContent = preview.prompts
-          .map((item) => `── ${item.id} ──\n[system]\n${item.system}\n\n[user]\n${item.prompt}`)
-          .join("\n\n")
+        renderBrdPromptPreview(previewEl, preview)
       }
       statusEl.textContent = `已预览 ${preview.prompts.length} 条提示词`
       statusEl.className = "badge good"
@@ -1716,6 +1831,58 @@ function renderProjectSettings() {
       showError(error)
     }
   })
+  void loadBrdSettingsForm(loadPromptEditor)
+}
+
+function renderBrdPromptPreview(container, preview) {
+  container.replaceChildren()
+  const heading = document.createElement("div")
+  heading.className = "brd-prompt-preview-heading"
+  const headingText = document.createElement("div")
+  const title = document.createElement("h4")
+  title.textContent = "已保存提示词预览"
+  const description = document.createElement("p")
+  description.className = "muted"
+  description.textContent = `已渲染变量 · 产出路径：${preview.outputPath || "未返回"}`
+  headingText.append(title, description)
+  const count = document.createElement("span")
+  count.className = "badge info"
+  count.textContent = `${preview.prompts.length} 条`
+  heading.append(headingText, count)
+  container.append(heading)
+
+  if (preview.warnings?.length) {
+    const warning = document.createElement("p")
+    warning.className = "brd-prompt-warning"
+    warning.textContent = preview.warnings.join("；")
+    container.append(warning)
+  }
+
+  const list = document.createElement("div")
+  list.className = "brd-prompt-preview-list"
+  for (const item of preview.prompts) {
+    const card = document.createElement("article")
+    card.className = "brd-prompt-preview-card"
+    const header = document.createElement("header")
+    const name = document.createElement("strong")
+    name.textContent = BRD_PROMPT_META[item.id]?.name || item.id
+    const id = document.createElement("code")
+    id.textContent = item.id
+    header.append(name, id)
+    card.append(header)
+    for (const [label, value] of [["system", item.system], ["user", item.prompt]]) {
+      const section = document.createElement("div")
+      section.className = "brd-prompt-preview-section"
+      const sectionLabel = document.createElement("span")
+      sectionLabel.textContent = label
+      const content = document.createElement("pre")
+      content.textContent = value
+      section.append(sectionLabel, content)
+      card.append(section)
+    }
+    list.append(card)
+  }
+  container.append(list)
 }
 
 async function renderProjectVersions() {
@@ -1747,11 +1914,13 @@ async function renderProjectVersions() {
   }
 }
 
-async function loadBrdSettingsForm() {
+async function loadBrdSettingsForm(onPromptsLoaded) {
   if (!selectedProjectId || !window.octopus.getProjectBrdDesignConfig) return
   try {
     const config = await window.octopus.getProjectBrdDesignConfig(selectedProjectId)
     brdPromptConfig = config.prompts || {}
+    brdPromptDrafts = {}
+    brdPromptClearIds.clear()
     const setValue = (id, value) => {
       const el = document.getElementById(id)
       if (el) el.value = value || ""
@@ -1764,12 +1933,7 @@ async function loadBrdSettingsForm() {
     setValue("brdWebsiteUrl", config.sources?.websiteUrl)
     setValue("brdSpecPath", config.brdSpecPath)
     setValue("brdOutputPath", config.brdOutputPath)
-    const promptId = document.getElementById("brdPromptId")?.value || "generate"
-    const prompt = config.prompts?.[promptId]
-    const system = document.getElementById("brdPromptSystem")
-    const user = document.getElementById("brdPromptUser")
-    if (system) system.value = prompt?.system || ""
-    if (user) user.value = prompt?.user || ""
+    onPromptsLoaded?.()
   } catch (error) {
     showError(error)
   }
@@ -1842,6 +2006,7 @@ function renderProjectPage() {
   syncProjectTabs()
 
   const kanbanBoardEl = document.getElementById("kanbanBoard")
+  const kanbanEmptyEl = document.getElementById("kanbanEmpty")
   const projectSettingsEl = document.getElementById("projectSettings")
   const projectVersionsEl = document.getElementById("projectVersions")
   const requirementTableEl = document.getElementById("requirementTable")
@@ -1949,7 +2114,7 @@ function renderProjectPage() {
     card.querySelector("[data-delete]").onclick = async () => {
       const item = requirementSummaries.find((entry) => entry.requirementId === requirementId)
       const label = item?.requirementName || requirementId
-      if (!window.confirm(`删除需求「${label}」的状态？\n只删除状态库记录，不会删除源码目录。此操作不可恢复。`)) {
+      if (!await confirmAction(`删除需求「${label}」的状态？\n只删除状态库记录，不会删除源码目录。此操作不可恢复。`, "删除需求", "error")) {
         return
       }
       try {
@@ -2326,6 +2491,26 @@ function setupGraphWheelZoom() {
   }, { passive: false })
 }
 
+function scrollNodeIntoView(nodeId) {
+  if (!graphWrapEl || !graphEl || graphPan) return
+  const nodeGroup = [...graphEl.querySelectorAll(".node")]
+    .find((element) => element.getAttribute("data-node-id") === nodeId)
+  if (!nodeGroup) return
+  const transform = nodeGroup.getAttribute("transform") || ""
+  const match = /translate\(([-\d.]+),\s*([-\d.]+)\)/.exec(transform)
+  if (!match) return
+  const card = nodeGroup.querySelector(".card")
+  const nodeWidth = Number(card?.getAttribute("width") || 0) * graphZoom
+  const nodeHeight = Number(card?.getAttribute("height") || 0) * graphZoom
+  const centerX = Number(match[1]) * graphZoom + nodeWidth / 2
+  const centerY = Number(match[2]) * graphZoom + nodeHeight / 2
+  graphWrapEl.scrollTo({
+    left: Math.max(0, centerX - graphWrapEl.clientWidth / 2),
+    top: Math.max(0, centerY - graphWrapEl.clientHeight / 2),
+    behavior: "smooth",
+  })
+}
+
 function svgEl(name, attrs = {}) {
   const el = document.createElementNS("http://www.w3.org/2000/svg", name)
   for (const [key, value] of Object.entries(attrs)) {
@@ -2373,9 +2558,26 @@ function renderRoleLegend(roles) {
   }).join("")
 }
 
+function renderNodeLocator(nodes) {
+  if (!nodeLocatorEl) return
+  const options = [document.createElement("option")]
+  options[0].value = ""
+  options[0].textContent = nodes.length ? `快速定位节点（${nodes.length}）` : "暂无可定位节点"
+  for (const node of [...nodes].sort((left, right) => String(left.id).localeCompare(String(right.id)))) {
+    const option = document.createElement("option")
+    option.value = node.id
+    option.textContent = `${node.id} · ${nodeNameZh(node)} · ${statusLabel(node.status)}`
+    options.push(option)
+  }
+  nodeLocatorEl.replaceChildren(...options)
+  nodeLocatorEl.disabled = nodes.length === 0
+  nodeLocatorEl.value = nodes.some((node) => node.id === selectedNode) ? selectedNode : ""
+}
+
 function renderGraph() {
   graphEl.replaceChildren()
   const nodes = currentState?.steps || []
+  renderNodeLocator(nodes)
   if (!nodes.length) {
     graphEl.setAttribute("width", "960")
     graphEl.setAttribute("height", "280")
@@ -2635,6 +2837,7 @@ function addNode(node, x, y, width, height, roleColor) {
   const group = svgEl("g", {
     class: `node ${nodeDisplayState(node)}${selectedNode === node.id ? " selected" : ""}`,
     transform: `translate(${x},${y})`,
+    "data-node-id": node.id,
     role: "button",
     tabindex: "0",
     "aria-label": `${zhName}${showEnglish ? `（${node.name}）` : ""}，${roleLabel(node.responsibleRole)}，${statusLabel(node.status)}${current ? "，当前" : ""}`,
@@ -2702,6 +2905,12 @@ function addNode(node, x, y, width, height, roleColor) {
   tip.textContent = "单击查看详情；Ctrl/⌘+单击打开脚本目录"
   group.appendChild(tip)
   graphEl.appendChild(group)
+}
+
+async function focusNodeInGraph(nodeId) {
+  if (!nodeId || !currentState?.steps?.some((node) => node.id === nodeId)) return
+  await showNode(nodeId)
+  requestAnimationFrame(() => scrollNodeIntoView(nodeId))
 }
 
 async function resolveSelectedNodeWorkspace(nodeId) {
@@ -2880,8 +3089,17 @@ async function showNode(nodeId) {
 }
 
 function showError(error) {
-  statusEl.textContent = readableError(error)
+  const message = readableError(error)
+  statusEl.textContent = message
   statusEl.className = "badge bad"
+  window.OctopusElementPlus?.message(message, "error")
+}
+
+async function confirmAction(message, title = "请确认", type = "warning") {
+  if (window.OctopusElementPlus?.confirm) {
+    return window.OctopusElementPlus.confirm(message, title, type)
+  }
+  return window.confirm(message)
 }
 
 async function runSelected(force) {
@@ -3108,7 +3326,7 @@ if (deleteMilestoneEl) {
     const milestoneId = milestoneEditIdEl?.value
     const item = workspaceMilestones.find((entry) => entry.id === milestoneId)
     if (!selectedRequirement || !milestoneId) return
-    if (!window.confirm(`删除里程碑「${item?.name || milestoneId}」？此操作不可恢复。`)) return
+    if (!await confirmAction(`删除里程碑「${item?.name || milestoneId}」？此操作不可恢复。`, "删除里程碑", "error")) return
     try {
       await window.octopus.deleteMilestone(selectedRequirement, milestoneId)
       statusEl.textContent = "里程碑已删除"
@@ -3203,6 +3421,9 @@ function defaultGraphZoom() {
 document.getElementById("zoomIn").onclick = () => setGraphZoom(graphZoom * 1.2)
 document.getElementById("zoomOut").onclick = () => setGraphZoom(graphZoom / 1.2)
 document.getElementById("zoomReset").onclick = () => setGraphZoom(defaultGraphZoom())
+if (nodeLocatorEl) {
+  nodeLocatorEl.onchange = () => focusNodeInGraph(nodeLocatorEl.value).catch(showError)
+}
 
 if (themeToggleEl) themeToggleEl.onclick = () => toggleTheme()
 if (fullscreenGraphEl) fullscreenGraphEl.onclick = () => toggleGraphFullscreen()

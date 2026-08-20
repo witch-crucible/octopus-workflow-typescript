@@ -184,7 +184,7 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
   const host = options.host ?? "127.0.0.1"
   const requestedPort = options.port ?? 4173
   const storeDir = resolve(options.storeDir ?? process.env["OCTOPUS_STORE_DIR"] ?? join(repositoryRoot, ".octo"))
-  const rendererDir = resolve(options.rendererDir ?? join(moduleDirectory, "..", "src", "renderer"))
+  const rendererDir = resolve(options.rendererDir ?? join(moduleDirectory, "renderer"))
   const defaultProjectRoot = resolve(options.projectRoot ?? repositoryRoot)
   const config = { ...loadConfig(storeDir), storeDir }
   const engine = await createWorkflowEngineFromConfig(config, { projectRoot: defaultProjectRoot })
@@ -574,6 +574,9 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
     ["/renderer.js", { file: "renderer.js", type: "text/javascript; charset=utf-8" }],
     ["/gantt.js", { file: "gantt.js", type: "text/javascript; charset=utf-8" }],
     ["/browser-api.js", { file: "browser-api.js", type: "text/javascript; charset=utf-8" }],
+    ["/element-plus.js", { file: "element-plus.js", type: "text/javascript; charset=utf-8" }],
+    ["/element-plus-adapter.js", { file: "element-plus-adapter.js", type: "text/javascript; charset=utf-8" }],
+    ["/element-plus.css", { file: "element-plus.css", type: "text/css; charset=utf-8" }],
     ["/app-icon.png", { file: "app-icon.png", type: "image/png" }],
     ["/logo.png", { file: "logo.png", type: "image/png" }],
     ["/mascot.jpg", { file: "mascot.jpg", type: "image/jpeg" }],

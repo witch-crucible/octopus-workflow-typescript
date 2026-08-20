@@ -12,11 +12,14 @@ export default defineConfig({
   },
   test: {
     globals: true,
-    include: ["packages/*/src/**/*.test.ts"],
+    include: ["packages/*/src/**/*.test.ts", "workflow/nodes/*/test/**/*.test.ts"],
     coverage: {
       provider: "v8",
-      include: ["packages/*/src/**/*.ts"],
-      exclude: ["packages/*/src/**/*.test.ts", "packages/*/src/**/index.ts"],
+      include: ["packages/*/src/**/*.ts", "workflow/nodes/*/src/**/*.ts"],
+      exclude: [
+        "packages/*/src/**/*.test.ts",
+        "packages/*/src/**/index.ts",
+      ],
     },
   },
 })

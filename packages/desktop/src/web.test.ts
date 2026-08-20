@@ -178,6 +178,21 @@ function loadBuildKanbanMarkup(source: string): (
   ) => { kind: string; filtered: unknown[]; html: string }
 }
 
+function loadCollectBrdPromptPatch(source: string): (
+  drafts: Record<string, { system: string; user: string }>,
+  clearedIds: string[],
+) => { prompts: Record<string, { system: string; user: string } | null>; invalid?: { id: string } } {
+  const script = [
+    extractConstArray(source, "BRD_PROMPT_IDS"),
+    extractFunction(source, "collectBrdPromptPatch"),
+    "collectBrdPromptPatch",
+  ].join("\n")
+  return runInNewContext(script, {}) as (
+    drafts: Record<string, { system: string; user: string }>,
+    clearedIds: string[],
+  ) => { prompts: Record<string, { system: string; user: string } | null>; invalid?: { id: string } }
+}
+
 async function rawInvoke(
   url: string,
   headers: Readonly<Record<string, string>>,
@@ -241,6 +256,9 @@ describe("Octopus Web", () => {
       expect(html).toContain("href=\"app-icon.png\"")
       expect(html).toContain("src=\"logo.png\"")
       expect(html).toContain("src=\"mascot.jpg\"")
+      expect(html).toContain("href=\"element-plus.css\"")
+      expect(html).toContain("src=\"element-plus.js\"")
+      expect(html).toContain("src=\"element-plus-adapter.js\"")
       expect(html).toContain("class=\"hub-hero\"")
       expect(html).toContain("一只章鱼，编排整条软件交付流水线")
       expect(html).toContain("class=\"brand-name\"")
@@ -257,6 +275,8 @@ describe("Octopus Web", () => {
       expect(html).toContain("点击泳道图中的节点")
       expect(html).toContain("id=\"toggleSidebar\"")
       expect(html).toContain("id=\"toggleInspector\"")
+      expect(html).toContain("id=\"nodeLocator\"")
+      expect(html).toContain("快速定位工作流节点")
       expect(html).toContain("拖拽空白处平移")
       expect(html).toContain("Ctrl/⌘ + 滚轮缩放")
       expect(html).toContain(".node .name-en")
@@ -290,6 +310,10 @@ describe("Octopus Web", () => {
       expect(renderer).toContain("toggleWorkspacePanel")
       expect(renderer).toContain("setupGraphPan")
       expect(renderer).toContain("setupGraphWheelZoom")
+      expect(renderer).toContain("renderNodeLocator")
+      expect(renderer).toContain("focusNodeInGraph")
+      expect(renderer).toContain('"data-node-id": node.id')
+      expect(renderer).toContain("scrollNodeIntoView")
       expect(renderer).toContain("jumpToNodeWorkspace")
       expect(renderer).toContain("resolveNodeWorkspace")
       expect(renderer).toContain("bindProjectTeambition")
@@ -729,6 +753,46 @@ describe("BRD 设计 RPC 注册", () => {
     expect(api).toContain("setProjectBrdDesignConfig:")
     expect(renderer).toContain("settingsSaveBrd")
     expect(renderer).toContain("BRD 设计")
+    expect(renderer).toContain("BRD_PROMPT_META")
+    expect(renderer).toContain("syncPromptEditor")
+    expect(renderer).toContain("brdPromptDrafts")
+    expect(renderer).toContain("恢复内置默认")
+    expect(renderer).toContain("预览已保存提示词")
+    expect(renderer).toContain("renderBrdPromptPreview")
+  })
+
+  it("提示词编辑器应保留跨类型草稿并分区展示预览", () => {
+    const html = readFileSync(join(process.cwd(), "packages/desktop/src/renderer/index.html"), "utf-8")
+    const renderer = readFileSync(join(process.cwd(), "packages/desktop/src/renderer/renderer.js"), "utf-8")
+    const settingsSource = extractFunction(renderer, "renderProjectSettings")
+    const previewSource = extractFunction(renderer, "renderBrdPromptPreview")
+    expect(html).toContain(".brd-prompt-fields")
+    expect(html).toContain(".brd-prompt-preview-card")
+    expect(settingsSource).toContain("brdPromptDrafts[activePromptId]")
+    expect(settingsSource).toContain("collectBrdPromptPatch(brdPromptDrafts")
+    expect(settingsSource).toContain("settingsBrdPreviewRequirement")
+    expect(settingsSource).toContain("includeSummarize: true")
+    expect(previewSource).toContain('for (const [label, value] of [["system", item.system], ["user", item.prompt]])')
+    expect(previewSource).toContain("content.textContent = value")
+  })
+
+  it("提示词保存应一次提交多类型草稿、恢复默认项并拒绝半条提示词", () => {
+    const source = readFileSync(join(process.cwd(), "packages/desktop/src/renderer/renderer.js"), "utf-8")
+    const collect = loadCollectBrdPromptPatch(source)
+    const valid = collect({
+      generate: { system: "生成系统", user: "生成用户" },
+      check: { system: "检查系统", user: "检查用户" },
+    }, ["summarize-sources"])
+    expect(valid).toEqual({
+      prompts: {
+        generate: { system: "生成系统", user: "生成用户" },
+        check: { system: "检查系统", user: "检查用户" },
+        "summarize-sources": null,
+      },
+    })
+    expect(collect({ generate: { system: "仅 system", user: "" } }, []).invalid).toMatchObject({
+      id: "generate",
+    })
   })
 })
 
@@ -913,12 +977,49 @@ describe("看板 tab HTML 结构", () => {
 
   it("renderer.js 应包含看板渲染和拖拽逻辑", () => {
     const source = readFileSync(join(process.cwd(), "packages/desktop/src/renderer/renderer.js"), "utf-8")
+    const renderProjectPageSource = extractFunction(source, "renderProjectPage")
     expect(source).toContain("function renderKanbanBoard(")
     expect(source).toContain("function renderProjectSettings(")
     expect(source).toContain("function syncProjectTabs(")
     expect(source).toContain("setupKanbanDragDrop")
     expect(source).toContain("kanbanDragData")
     expect(source).toContain("moveRequirementPhase")
+    expect(renderProjectPageSource).toContain('const kanbanEmptyEl = document.getElementById("kanbanEmpty")')
+  })
+})
+
+describe("Element Plus UI", () => {
+  it("应通过官方组件包构建反馈 API，并渐进增强静态和动态控件", () => {
+    const packageJson = JSON.parse(
+      readFileSync(join(process.cwd(), "packages/desktop/package.json"), "utf-8"),
+    ) as {
+      scripts: Record<string, string>
+      dependencies: Record<string, string>
+    }
+    const entry = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/element-plus-entry.js"),
+      "utf-8",
+    )
+    const adapter = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/element-plus-adapter.js"),
+      "utf-8",
+    )
+    const renderer = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
+      "utf-8",
+    )
+
+    expect(packageJson.dependencies["element-plus"]).toBe("2.14.4")
+    expect(packageJson.dependencies.vue).toBe("3.5.41")
+    expect(packageJson.scripts.build).toContain("build:renderer")
+    expect(entry).toContain("ElMessage")
+    expect(entry).toContain("ElMessageBox")
+    expect(entry).toContain('element-plus/dist/index.css')
+    expect(adapter).toContain('query("button").forEach(enhanceButton)')
+    expect(adapter).toContain("MutationObserver")
+    expect(adapter).toContain('className = "el-input el-input--small octopus-el-control"')
+    expect(renderer).toContain("confirmAction(")
+    expect(renderer).not.toContain("window.confirm(`删除")
   })
 })
 

@@ -32,16 +32,16 @@ import {
   type ProjectBrdDesignConfig,
   type ProjectBrdDesignConfigPatch,
 } from "@octopus/core/brd-design.js"
-import { AIAssistantType } from "@octopus/core/agent.js"
-import { dirname } from "node:path"
 import {
-  encodeBrdPromptEnvelope,
-  gatherBrdSourceContext,
-  renderBrdPromptsForContext,
-  resolveBrdCheckReportPath,
-  toProjectRelative,
+  previewBrdNodePrompts,
+  runBrdCheck,
+  runBrdGenerate,
+  type BrdCheckResult,
+  type BrdGenerateResult,
+  type BrdNodeInput,
+  type BrdNodeRuntime,
   type BrdRenderedPrompt,
-} from "./brd-context.js"
+} from "../../../workflow/nodes/requirements-analysis-and-brd-design/src/index.js"
 import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER } from "@octopus/core/phase.js"
 import type {
   Task,
@@ -57,7 +57,7 @@ import type { Checklist } from "@octopus/core/checklist.js"
 import { ChecklistItemStatus } from "@octopus/core/checklist.js"
 import type { HeinrichRecord, HeinrichObservation, QualityAssessment } from "@octopus/core/risk.js"
 import { QualityVerdict, HEINRICH_IDEAL_RATIO, createEmptyHeinrichRecord, HeinrichLevel } from "@octopus/core/risk.js"
-import { ArtifactType, type Artifact } from "@octopus/core/artifact.js"
+import type { ArtifactType, Artifact } from "@octopus/core/artifact.js"
 import { PhaseId, TaskId, ChecklistItemId, ObservationId, ArtifactId, MilestoneId } from "@octopus/core/branded-ids.js"
 import { Role } from "@octopus/core/role.js"
 import { InvalidPhaseTransitionError, PhaseLockedError } from "@octopus/core/errors.js"
@@ -2645,14 +2645,7 @@ export class WorkflowEngine {
     requirementId: string,
     options?: { mode?: "generate" | "check" | "all"; includeSummarize?: boolean },
   ): { prompts: BrdRenderedPrompt[]; warnings: string[]; outputPath: string } {
-    const { config, context } = this.prepareBrdContext(projectId, requirementId)
-    const prompts = renderBrdPromptsForContext(
-      config,
-      context,
-      options?.mode ?? "all",
-      options?.includeSummarize === true ? { includeSummarize: true } : undefined,
-    )
-    return { prompts, warnings: context.warnings, outputPath: context.outputPath }
+    return previewBrdNodePrompts(this.prepareBrdNodeInput(projectId, requirementId), options)
   }
 
   /** AI 生成 BRD；dryRun 只返回提示词不写文件 */
@@ -2660,50 +2653,12 @@ export class WorkflowEngine {
     projectId: string,
     requirementId: string,
     options?: { dryRun?: boolean },
-  ): Promise<{
-    outputPath: string
-    result?: string
-    promptsUsed: BrdRenderedPrompt[]
-    warnings: string[]
-    dryRun: boolean
-  }> {
-    const { config, context, state } = this.prepareBrdContext(projectId, requirementId)
-    const promptsUsed = renderBrdPromptsForContext(config, context, "generate")
-    const generatePrompt = promptsUsed.find((item) => item.id === "generate")
-    if (!generatePrompt) {
-      throw new Error("未找到 generate 提示词")
-    }
-    if (options?.dryRun) {
-      return {
-        outputPath: context.outputPath,
-        promptsUsed,
-        warnings: context.warnings,
-        dryRun: true,
-      }
-    }
-    if (!this.aiClient) {
-      throw new Error("未配置 AI 客户端，无法生成 BRD")
-    }
-    const envelope = encodeBrdPromptEnvelope(generatePrompt.system, generatePrompt.prompt)
-    const response = await this.aiClient.callAssistant(AIAssistantType.BRD_GENERATE, envelope)
-    mkdirSync(dirname(context.absoluteOutputPath), { recursive: true })
-    writeFileSync(context.absoluteOutputPath, response.result, "utf8")
-    this.createArtifact(requirementId, {
-      type: ArtifactType.BRD,
-      title: `${state.requirementName} BRD`,
-      description: "AI 生成的商业需求文档",
-      phase: Phase.INTENTION,
-      createdBy: Role.AI,
-      content: response.result.slice(0, 4_000),
-      filePath: toProjectRelative(state.projectRoot || ".", context.absoluteOutputPath),
-    })
-    return {
-      outputPath: context.outputPath,
-      result: response.result,
-      promptsUsed,
-      warnings: context.warnings,
-      dryRun: false,
-    }
+  ): Promise<BrdGenerateResult> {
+    return runBrdGenerate(
+      this.prepareBrdNodeInput(projectId, requirementId),
+      this.createBrdNodeRuntime(),
+      options,
+    )
   }
 
   /** AI 检查 BRD；dryRun 只返回提示词；缺少已有 BRD 时抛错 */
@@ -2711,55 +2666,15 @@ export class WorkflowEngine {
     projectId: string,
     requirementId: string,
     options?: { dryRun?: boolean },
-  ): Promise<{
-    reportPath: string
-    result?: string
-    promptsUsed: BrdRenderedPrompt[]
-    warnings: string[]
-    dryRun: boolean
-  }> {
-    const { config, context, state } = this.prepareBrdContext(projectId, requirementId)
-    if (!context.existingBrd.trim()) {
-      throw new Error(
-        `未找到已有 BRD（${context.outputPath}）。请先运行 brd generate，或将 BRD 放入该路径后再检查。`,
-      )
-    }
-    const promptsUsed = renderBrdPromptsForContext(config, context, "check")
-    const checkPrompt = promptsUsed.find((item) => item.id === "check")
-    if (!checkPrompt) {
-      throw new Error("未找到 check 提示词")
-    }
-    const reportAbsolute = resolveBrdCheckReportPath(context.absoluteOutputPath)
-    const reportPath = toProjectRelative(state.projectRoot || ".", reportAbsolute)
-    if (options?.dryRun) {
-      return {
-        reportPath,
-        promptsUsed,
-        warnings: context.warnings,
-        dryRun: true,
-      }
-    }
-    if (!this.aiClient) {
-      throw new Error("未配置 AI 客户端，无法检查 BRD")
-    }
-    const envelope = encodeBrdPromptEnvelope(checkPrompt.system, checkPrompt.prompt)
-    const response = await this.aiClient.callAssistant(AIAssistantType.BRD_CHECK, envelope)
-    mkdirSync(dirname(reportAbsolute), { recursive: true })
-    writeFileSync(reportAbsolute, response.result, "utf8")
-    return {
-      reportPath,
-      result: response.result,
-      promptsUsed,
-      warnings: context.warnings,
-      dryRun: false,
-    }
+  ): Promise<BrdCheckResult> {
+    return runBrdCheck(
+      this.prepareBrdNodeInput(projectId, requirementId),
+      this.createBrdNodeRuntime(),
+      options,
+    )
   }
 
-  private prepareBrdContext(projectId: string, requirementId: string): {
-    config: ProjectBrdDesignConfig
-    context: ReturnType<typeof gatherBrdSourceContext>
-    state: WorkflowState
-  } {
+  private prepareBrdNodeInput(projectId: string, requirementId: string): BrdNodeInput {
     const project = this.store.loadProject(projectId)
     const state = this.getState(requirementId)
     if (state.projectId !== project.projectId) {
@@ -2769,12 +2684,25 @@ export class WorkflowEngine {
     if (!projectRoot) {
       throw new Error(`需求 ${requirementId} 未设置 projectRoot，无法采集 BRD 上下文`)
     }
-    const config = parseBrdDesignConfigFromMetadata(project.metadata)
-    const context = gatherBrdSourceContext(config, projectRoot, {
-      name: state.requirementName,
-      description: state.description,
-    })
-    return { config, context, state }
+    return {
+      config: parseBrdDesignConfigFromMetadata(project.metadata),
+      projectRoot,
+      requirementId,
+      requirementName: state.requirementName,
+      requirementDescription: state.description,
+    }
+  }
+
+  private createBrdNodeRuntime(): BrdNodeRuntime {
+    const aiClient = this.aiClient
+    return {
+      ...(aiClient
+        ? { callAssistant: (assistant, input) => aiClient.callAssistant(assistant, input) }
+        : {}),
+      createArtifact: (requirementId, params) => {
+        this.createArtifact(requirementId, params)
+      },
+    }
   }
 
   /**

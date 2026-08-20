@@ -326,18 +326,18 @@ function registerIpc(): void {
 }
 
 function createWindow(): void {
-  const icon = join(__dirname, "..", "src", "renderer", "app-icon.png")
+  const icon = join(__dirname, "renderer", "app-icon.png")
   const win = new BrowserWindow({
     width: 960,
     height: 720,
     icon,
     webPreferences: {
-      preload: join(__dirname, "..", "src", "preload.cjs"),
+      preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
     },
   })
-  void win.loadFile(join(__dirname, "..", "src", "renderer", "index.html"))
+  void win.loadFile(join(__dirname, "renderer", "index.html"))
 }
 
 app.whenReady().then(async () => {
@@ -357,7 +357,7 @@ app.whenReady().then(async () => {
           new Notification({
             title: "Octopus 节点执行失败",
             body: String(event.payload["error"] ?? event.nodeId ?? "未知错误"),
-            icon: join(__dirname, "..", "src", "renderer", "app-icon.png"),
+            icon: join(__dirname, "renderer", "app-icon.png"),
           }).show()
         }
       }

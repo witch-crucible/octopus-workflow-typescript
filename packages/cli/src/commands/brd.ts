@@ -95,15 +95,16 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
       },
     ) => {
       try {
-        const patch: ProjectBrdDesignConfigPatch = { sources: {} }
-        if (options.miniprogram !== undefined) patch.sources!.miniprogramCodePath = options.miniprogram
-        if (options.websiteCode !== undefined) patch.sources!.websiteCodePath = options.websiteCode
-        if (options.frontend !== undefined) patch.sources!.frontendCodePath = options.frontend
-        if (options.backend !== undefined) patch.sources!.backendCodePath = options.backend
+        const sources: NonNullable<ProjectBrdDesignConfigPatch["sources"]> = {}
+        const patch: ProjectBrdDesignConfigPatch = { sources }
+        if (options.miniprogram !== undefined) sources.miniprogramCodePath = options.miniprogram
+        if (options.websiteCode !== undefined) sources.websiteCodePath = options.websiteCode
+        if (options.frontend !== undefined) sources.frontendCodePath = options.frontend
+        if (options.backend !== undefined) sources.backendCodePath = options.backend
         if (options.miniprogramArtifact !== undefined) {
-          patch.sources!.miniprogramBuildArtifact = options.miniprogramArtifact
+          sources.miniprogramBuildArtifact = options.miniprogramArtifact
         }
-        if (options.websiteUrl !== undefined) patch.sources!.websiteUrl = options.websiteUrl
+        if (options.websiteUrl !== undefined) sources.websiteUrl = options.websiteUrl
         if (options.spec !== undefined) patch.brdSpecPath = options.spec
         if (options.output !== undefined) patch.brdOutputPath = options.output
 

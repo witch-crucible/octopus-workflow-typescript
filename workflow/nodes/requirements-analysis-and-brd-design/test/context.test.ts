@@ -1,13 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { createEmptyBrdDesignConfig } from "@octopus/core/brd-design.js"
+import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   encodeBrdPromptEnvelope,
   gatherBrdSourceContext,
   renderBrdPromptsForContext,
-} from "./brd-context.js"
+} from "../src/context.js"
 
 let root: string
 
