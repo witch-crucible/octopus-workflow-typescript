@@ -51,6 +51,7 @@ if (!window.octopus) {
     deleteRequirement: (requirementId) => invoke("deleteRequirement", requirementId),
     getRequirementStatus: (requirementId) => invoke("getRequirementStatus", requirementId),
     getState: (requirementId) => invoke("getState", requirementId),
+    getWorkflowDefinition: (requirementId) => invoke("getWorkflowDefinition", requirementId),
     getExecutionSnapshot: (requirementId) => invoke("getExecutionSnapshot", requirementId),
     updateNodeSchedule: (requirementId, nodeId, schedule) =>
       invoke("updateNodeSchedule", requirementId, nodeId, schedule),

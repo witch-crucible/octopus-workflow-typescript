@@ -23,6 +23,17 @@ export default defineConfig({
             ? "element-plus.css"
             : "assets/[name]-[hash][extname]",
       },
+      onwarn: (warning, warn) => {
+        // @vueuse/core 的发布产物包含 Rolldown 无法识别位置的 PURE 注释，不影响构建结果。
+        if (
+          warning.code === "INVALID_ANNOTATION" &&
+          typeof warning.id === "string" &&
+          warning.id.includes("@vueuse/core")
+        ) {
+          return
+        }
+        warn(warning)
+      },
     },
   },
 })

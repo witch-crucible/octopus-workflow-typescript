@@ -115,6 +115,23 @@ function extractConstArray(source: string, name: string): string {
   throw new Error(`未能从偏移 ${openBracket} 截取数组 ${name}`)
 }
 
+function loadBuildWorkflowGraphNodes(source: string): (
+  state: unknown,
+  definition: unknown,
+) => Array<{ id: string; status: string; activated: boolean; responsibleRoles: string[] }> {
+  const script = [
+    extractFunction(source, "nodeRoles"),
+    extractFunction(source, "buildWorkflowGraphNodes"),
+    "result = buildWorkflowGraphNodes",
+  ].join("\n")
+  const context: { result?: unknown } = {}
+  runInNewContext(script, context)
+  return context.result as (
+    state: unknown,
+    definition: unknown,
+  ) => Array<{ id: string; status: string; activated: boolean; responsibleRoles: string[] }>
+}
+
 type HubCardBuild = {
   readonly kind: "empty" | "nomatch" | "cards"
   readonly filtered: Array<{ projectId: string; name: string }>
@@ -328,6 +345,7 @@ describe("Octopus Web", () => {
       expect(browserApi).toContain("listRequirementSummaries")
       expect(browserApi).toContain("updateRequirementSchedule")
       expect(browserApi).toContain("moveRequirementPhase")
+      expect(browserApi).toContain("getWorkflowDefinition")
       expect(browserApi).toContain("listMilestones")
       expect(browserApi).toContain("addMilestone")
       expect(browserApi).toContain("reachMilestone")
@@ -368,6 +386,18 @@ describe("Octopus Web", () => {
           projectRoot: join(root, "project"),
         },
       })
+      const definition = await invoke(url, "getWorkflowDefinition", initializedBody.result.requirementId)
+      expect(definition.status).toBe(200)
+      const definitionBody = await definition.json() as {
+        result: { nodes: Array<{ key: string; responsibleRoles: string[] }> }
+      }
+      expect(definitionBody.result.nodes.length).toBeGreaterThan(2)
+      expect(definitionBody.result.nodes).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          key: "prd-walkthrough",
+          responsibleRoles: ["BA", "PM", "DEV", "SA"],
+        }),
+      ]))
 
       const secondProject = await invoke(url, "createProject", "Repeated Project")
       expect(secondProject.status).toBe(200)
@@ -1020,6 +1050,9 @@ describe("Element Plus UI", () => {
     expect(adapter).toContain('className = "el-input el-input--small octopus-el-control"')
     expect(renderer).toContain("confirmAction(")
     expect(renderer).not.toContain("window.confirm(`删除")
+    expect(renderer).not.toContain("return window.confirm(message)")
+    expect(entry).toContain('confirmButtonText: type === "error" ? "删除" : "确认"')
+    expect(entry).toContain('closeOnClickModal: type !== "error"')
   })
 })
 
@@ -1078,5 +1111,33 @@ describe("项目甘特模块 (PR4)", () => {
     const source = readFileSync(join(process.cwd(), "packages/desktop/src/renderer/index.html"), "utf-8")
     expect(source).toContain("gantt-row-requirement")
     expect(source).toContain("gantt-chip-req")
+  })
+
+  it("需求节点泳道应合并完整定义、显示多角色并按方向连接依赖", () => {
+    const renderer = readFileSync(join(process.cwd(), "packages/desktop/src/renderer/renderer.js"), "utf-8")
+    const html = readFileSync(join(process.cwd(), "packages/desktop/src/renderer/index.html"), "utf-8")
+
+    const buildNodes = loadBuildWorkflowGraphNodes(renderer)
+    const nodes = buildNodes(
+      { steps: [{ id: "10.1", responsibleRole: "PM", status: "PENDING", dependsOn: [] }] },
+      {
+        nodeIdMapping: { first: "10.1", second: "10.2" },
+        nodes: [
+          { key: "first", phase: "Intention", name: "First", description: "", responsibleRoles: ["PM"], dependsOn: [], actions: [] },
+          { key: "second", phase: "Intention", name: "Second", description: "", responsibleRoles: ["PM", "BA"], dependsOn: ["first"], actions: [] },
+        ],
+      },
+    )
+
+    expect(renderer).toContain("buildWorkflowGraphNodes(currentState, workflowDefinition)")
+    expect(renderer).toContain("responsibleRoles: nodeRoles(node)")
+    expect(renderer).toContain("const rightward = target.x > source.x")
+    expect(renderer).toContain("参与角色：")
+    expect(nodes).toEqual([
+      expect.objectContaining({ id: "10.1", status: "PENDING", activated: true, responsibleRoles: ["PM"] }),
+      expect.objectContaining({ id: "10.2", status: "LOCKED", activated: false, responsibleRoles: ["PM", "BA"] }),
+    ])
+    expect(html).toContain(".node.locked .card")
+    expect(html).toContain("未激活")
   })
 })

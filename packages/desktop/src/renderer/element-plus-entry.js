@@ -10,7 +10,9 @@ window.OctopusElementPlus = {
     try {
       await ElMessageBox.confirm(message, title, {
         type,
-        confirmButtonText: "确认",
+        center: true,
+        closeOnClickModal: type !== "error",
+        confirmButtonText: type === "error" ? "删除" : "确认",
         cancelButtonText: "取消",
         distinguishCancelAndClose: true,
       })

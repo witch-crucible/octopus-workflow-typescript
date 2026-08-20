@@ -294,6 +294,8 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
         return engine.getRequirementStatus(requirementId())
       case "getState":
         return engine.getState(requirementId())
+      case "getWorkflowDefinition":
+        return engine.getWorkflowDefinition(requirementId())
       case "getExecutionSnapshot":
         return engine.getExecutionSnapshot(requirementId())
       case "updateNodeSchedule": {

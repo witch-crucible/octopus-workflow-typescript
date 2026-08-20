@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld("octopus", {
   deleteRequirement: (requirementId) => ipcRenderer.invoke("octopus:deleteRequirement", requirementId),
   getRequirementStatus: (requirementId) => ipcRenderer.invoke("octopus:getRequirementStatus", requirementId),
   getState: (requirementId) => ipcRenderer.invoke("octopus:getState", requirementId),
+  getWorkflowDefinition: (requirementId) => ipcRenderer.invoke("octopus:getWorkflowDefinition", requirementId),
   getExecutionSnapshot: (requirementId) => ipcRenderer.invoke("octopus:getExecutionSnapshot", requirementId),
   updateNodeSchedule: (requirementId, nodeId, schedule) =>
     ipcRenderer.invoke("octopus:updateNodeSchedule", requirementId, nodeId, schedule),

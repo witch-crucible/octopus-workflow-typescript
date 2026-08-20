@@ -12,7 +12,7 @@ window.OctopusGantt = (() => {
 
   const STATUS_BAR = {
     PENDING: "#c0c4cc",
-    IN_PROGRESS: "#6d28d9",
+    IN_PROGRESS: "#4f86c6",
     COMPLETED: "#67c23a",
     BLOCKED: "#f56c6c",
     SKIPPED: "#909399",
@@ -894,8 +894,8 @@ window.OctopusGantt = (() => {
     const r = 7
     const points = `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`
     const isReached = opts.status === "reached"
-    const fillColor = isReached ? "#6d28d9" : opts.overdue ? "#f56c6c" : "none"
-    const strokeColor = opts.overdue ? "#f56c6c" : "#6d28d9"
+    const fillColor = isReached ? "#4f86c6" : opts.overdue ? "#f56c6c" : "none"
+    const strokeColor = opts.overdue ? "#f56c6c" : "#4f86c6"
     const g = svg("g", {
       class: `gantt-diamond gantt-diamond-${isReached ? "reached" : opts.overdue ? "overdue" : "planned"}`,
       "data-bar-id": opts.id,
@@ -1147,7 +1147,7 @@ window.OctopusGantt = (() => {
   }
 
   function barColor(row) {
-    if (row.ready && row.status === "PENDING") return "#6d28d9"
+    if (row.ready && row.status === "PENDING") return "#4f86c6"
     return STATUS_BAR[row.status] || "#909399"
   }
 

@@ -75,6 +75,7 @@ let lastCreatedRequirementId = ""
 let projectSummaries = []
 let requirementSummaries = []
 let currentProject = null
+let currentGraphNodes = []
 let cardStatusesCache = []
 const requirementMeta = new Map()
 /** 流程图缩放比例（宽屏默认放大，避免文字过小发糊；窄屏自动降低） */
@@ -103,7 +104,7 @@ let inspectorCollapsed = false
 
 const THEME_STORAGE_KEY = "octopus.ui.theme"
 const PANEL_STORAGE_KEY = "octopus.ui.workspacePanels"
-const ACCENT = "#6d28d9"
+const ACCENT = "#4f86c6"
 
 const BRD_PROMPT_IDS = ["generate", "check", "summarize-sources"]
 const BRD_PROMPT_META = {
@@ -147,10 +148,10 @@ const ROLE_ORDER = ["PM", "BA", "SA", "AI", "DEV", "QA", "OP", "HEI"]
 
 /** 角色色条（贴近 Element Plus 语义色） */
 const ROLE_COLORS = {
-  PM: "#6d28d9",
+  PM: "#4f86c6",
   BA: "#67c23a",
   SA: "#36cfc9",
-  AI: "#9b59b6",
+  AI: "#7b8fa8",
   DEV: "#e6a23c",
   QA: "#f56c6c",
   OP: "#909399",
@@ -185,6 +186,7 @@ const PHASE_HINTS = {
 
 /** 节点状态中文名 */
 const STATUS_LABELS = {
+  LOCKED: "未激活",
   PENDING: "待处理",
   IN_PROGRESS: "进行中",
   COMPLETED: "已完成",
@@ -395,6 +397,7 @@ function truncate(text, max) {
 }
 
 function nodeDisplayState(node) {
+  if (node.activated === false || node.status === "LOCKED") return "locked"
   const classes = []
   if (currentSnapshot?.currentNodeIds?.includes(node.id)) classes.push("current")
   if (currentSnapshot?.readyNodeIds?.includes(node.id)) classes.push("ready")
@@ -408,8 +411,59 @@ function isCurrentNode(nodeId) {
 }
 
 function findNodeName(nodeId) {
-  const node = currentState?.steps?.find((step) => step.id === nodeId)
+  const node = currentGraphNodes.find((step) => step.id === nodeId)
   return node ? nodeNameZh(node) : nodeId
+}
+
+function nodeRoles(node) {
+  const roles = Array.isArray(node?.responsibleRoles) && node.responsibleRoles.length
+    ? node.responsibleRoles
+    : [node?.responsibleRole || "DEV"]
+  return [...new Set(roles.filter(Boolean))]
+}
+
+function buildWorkflowGraphNodes(state, definition) {
+  const runtimeNodes = state?.steps || []
+  if (!Array.isArray(definition?.nodes) || !definition.nodeIdMapping) {
+    return runtimeNodes.map((node) => ({
+      ...node,
+      responsibleRoles: nodeRoles(node),
+      activated: true,
+    }))
+  }
+
+  const runtimeById = new Map(runtimeNodes.map((node) => [node.id, node]))
+  const nodes = definition.nodes.flatMap((spec) => {
+    const id = definition.nodeIdMapping[spec.key]
+    if (!id) return []
+    const runtime = runtimeById.get(id)
+    const responsibleRoles = nodeRoles(spec)
+    return [{
+      ...runtime,
+      id,
+      key: spec.key,
+      phase: spec.phase,
+      name: spec.name,
+      description: spec.description,
+      responsibleRole: responsibleRoles[0] || runtime?.responsibleRole || "DEV",
+      responsibleRoles,
+      dependsOn: spec.dependsOn.map((key) => definition.nodeIdMapping[key]).filter(Boolean),
+      actions: runtime?.actions || spec.actions || [],
+      status: runtime?.status || "LOCKED",
+      activated: Boolean(runtime),
+    }]
+  })
+
+  const knownIds = new Set(nodes.map((node) => node.id))
+  for (const runtime of runtimeNodes) {
+    if (knownIds.has(runtime.id)) continue
+    nodes.push({
+      ...runtime,
+      responsibleRoles: nodeRoles(runtime),
+      activated: true,
+    })
+  }
+  return nodes
 }
 
 function preferredTheme() {
@@ -1461,7 +1515,7 @@ function renderProjectSettings() {
   const binding = currentProject?.teambition
   const omniplanFolder = currentProject?.metadata?.omniplanFolder || ""
   const omniplanFileName = currentProject?.metadata?.omniplanFileName || ""
-  const defaultColor = currentProject?.metadata?.defaultColor || "#6d28d9"
+  const defaultColor = currentProject?.metadata?.defaultColor || "#4f86c6"
   const versionBinding = currentProject?.teambitionVersion
   projectSettingsEl.innerHTML = `
     <div class="panel-card">
@@ -1757,7 +1811,7 @@ function renderProjectSettings() {
     try {
       currentProject = await window.octopus.setProjectDefaultColor(selectedProjectId, null)
       const input = document.getElementById("settingsDefaultColor")
-      if (input) input.value = "#6d28d9"
+      if (input) input.value = "#4f86c6"
       statusEl.textContent = "已清除默认颜色"
       statusEl.className = "badge good"
     } catch (error) {
@@ -2379,8 +2433,19 @@ async function refreshRequirementMilestoneBar() {
 async function showRequirement(id) {
   if (!id) return
   selectedRequirement = id
-  currentState = await window.octopus.getState(id)
-  currentSnapshot = await window.octopus.getExecutionSnapshot(id)
+  const [state, snapshot] = await Promise.all([
+    window.octopus.getState(id),
+    window.octopus.getExecutionSnapshot(id),
+  ])
+  currentState = state
+  currentSnapshot = snapshot
+  let workflowDefinition
+  try {
+    workflowDefinition = await window.octopus.getWorkflowDefinition?.(id)
+  } catch {
+    workflowDefinition = undefined
+  }
+  currentGraphNodes = buildWorkflowGraphNodes(currentState, workflowDefinition)
   try {
     currentStatus = await window.octopus.getRequirementStatus(id)
     requirementMeta.set(id, {
@@ -2411,14 +2476,14 @@ function renderSummary() {
   const ready = currentSnapshot.readyNodeIds.length
   const waiting = currentSnapshot.waitingNodeIds.length
   const completed = currentState.steps.filter((step) => step.status === "COMPLETED").length
-  const total = currentState.steps.length
+  const total = currentGraphNodes.length || currentState.steps.length
   const blocked = currentState.steps.filter((step) => step.status === "BLOCKED").length
 
   summaryEl.innerHTML = [
     metric(active, "活动运行", "正在执行的节点实例"),
     metric(ready, "可运行节点", "依赖已满足，可立即启动"),
     metric(waiting, "等待处理", "需手动完成或等待依赖"),
-    metric(`${completed}/${total}`, "节点进度", blocked ? `其中 ${blocked} 个已阻塞` : "当前阶段已激活节点"),
+    metric(`${completed}/${total}`, "节点进度", blocked ? `其中 ${blocked} 个已阻塞` : "完整需求流程节点"),
   ].join("")
 
   const scheduler = currentSnapshot.schedulerStatus
@@ -2429,7 +2494,7 @@ function renderSummary() {
   const phase = phaseLabel(currentState.currentPhase)
   const phaseHint = PHASE_HINTS[currentState.currentPhase] || ""
   if (flowHintEl) {
-    flowHintEl.textContent = `当前阶段：${phase}${phaseHint ? `（${phaseHint}）` : ""}（整行高亮）。上方=角色（人），左侧=阶段；拖拽空白处平移，Ctrl/⌘+滚轮缩放，两侧按钮可收起需求栏 / 详情栏。`
+    flowHintEl.textContent = `当前阶段：${phase}${phaseHint ? `（${phaseHint}）` : ""}（整行高亮）。上方=角色（人），左侧=阶段；灰色节点尚未激活，多角色显示在卡片底部；拖拽空白处平移，Ctrl/⌘+滚轮缩放。`
   }
   applyGraphZoom()
 }
@@ -2576,7 +2641,7 @@ function renderNodeLocator(nodes) {
 
 function renderGraph() {
   graphEl.replaceChildren()
-  const nodes = currentState?.steps || []
+  const nodes = currentGraphNodes
   renderNodeLocator(nodes)
   if (!nodes.length) {
     graphEl.setAttribute("width", "960")
@@ -2598,7 +2663,7 @@ function renderGraph() {
   const cellPadY = 18
   const margin = 20
 
-  const presentRoles = new Set(nodes.map((node) => node.responsibleRole || "DEV"))
+  const presentRoles = new Set(nodes.flatMap((node) => nodeRoles(node)))
   const roles = [
     ...ROLE_ORDER.filter((role) => presentRoles.has(role)),
     ...[...presentRoles].filter((role) => !ROLE_ORDER.includes(role)).sort(),
@@ -2669,7 +2734,7 @@ function renderGraph() {
   const currentRoleSet = new Set(
     nodes
       .filter((node) => isCurrentNode(node.id) || currentSnapshot.readyNodeIds.includes(node.id))
-      .map((node) => node.responsibleRole || "DEV"),
+      .flatMap((node) => nodeRoles(node)),
   )
 
   // 左上角说明
@@ -2797,21 +2862,34 @@ function renderGraph() {
       const source = positions.get(dep)
       if (!source) continue
       const active = isCurrentNode(node.id) || currentSnapshot.readyNodeIds.includes(node.id)
-      const x1 = source.x + source.w / 2
-      const y1 = source.y + source.h
-      const x2 = target.x + target.w / 2
-      const y2 = target.y
-      const dy = Math.max(28, Math.abs(y2 - y1) * 0.4)
-      // 同列纵向 或 跨角色：用曲线连接
+      // 同列按上下方向连接；跨角色按实际左右方向选择卡片边缘，避免反向交接穿过卡片。
       const sameCol = Math.abs(source.x - target.x) < 4
-      const d = sameCol
-        ? `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`
-        : `M ${source.x + source.w} ${source.y + source.h / 2} C ${source.x + source.w + 40} ${source.y + source.h / 2}, ${target.x - 40} ${target.y + target.h / 2}, ${target.x} ${target.y + target.h / 2}`
-      edgeLayer.appendChild(svgEl("path", {
+      let d
+      if (sameCol) {
+        const downward = target.y >= source.y
+        const x = source.x + source.w / 2
+        const sourceY = downward ? source.y + source.h : source.y
+        const targetY = downward ? target.y : target.y + target.h
+        const bend = Math.max(28, Math.abs(targetY - sourceY) * 0.4)
+        d = `M ${x} ${sourceY} C ${x} ${sourceY + (downward ? bend : -bend)}, ${x} ${targetY + (downward ? -bend : bend)}, ${x} ${targetY}`
+      } else {
+        const rightward = target.x > source.x
+        const sourceX = rightward ? source.x + source.w : source.x
+        const targetX = rightward ? target.x : target.x + target.w
+        const sourceY = source.y + source.h / 2
+        const targetY = target.y + target.h / 2
+        const bend = Math.max(36, Math.min(96, Math.abs(targetX - sourceX) * 0.35))
+        d = `M ${sourceX} ${sourceY} C ${sourceX + (rightward ? bend : -bend)} ${sourceY}, ${targetX + (rightward ? -bend : bend)} ${targetY}, ${targetX} ${targetY}`
+      }
+      const edge = svgEl("path", {
         d,
         class: `edge${active ? " active" : ""}`,
         "marker-end": active ? "url(#arrow-active)" : "url(#arrow)",
-      }))
+      })
+      const edgeTitle = svgEl("title")
+      edgeTitle.textContent = `${findNodeName(dep)} → ${findNodeName(node.id)}`
+      edge.appendChild(edgeTitle)
+      edgeLayer.appendChild(edge)
     }
   }
 
@@ -2832,6 +2910,8 @@ function renderGraph() {
 function addNode(node, x, y, width, height, roleColor) {
   const current = isCurrentNode(node.id)
   const ready = currentSnapshot.readyNodeIds.includes(node.id)
+  const roles = nodeRoles(node)
+  const roleNames = roles.map((role) => roleLabel(role)).join("、")
   const zhName = nodeNameZh(node)
   const showEnglish = Boolean(node.name && node.name !== zhName)
   const group = svgEl("g", {
@@ -2840,7 +2920,7 @@ function addNode(node, x, y, width, height, roleColor) {
     "data-node-id": node.id,
     role: "button",
     tabindex: "0",
-    "aria-label": `${zhName}${showEnglish ? `（${node.name}）` : ""}，${roleLabel(node.responsibleRole)}，${statusLabel(node.status)}${current ? "，当前" : ""}`,
+    "aria-label": `${zhName}${showEnglish ? `（${node.name}）` : ""}，参与角色：${roleNames}，${statusLabel(node.status)}${current ? "，当前" : ""}`,
   })
 
   const color = roleColor || ROLE_COLORS[node.responsibleRole] || "#909399"
@@ -2884,7 +2964,21 @@ function addNode(node, x, y, width, height, roleColor) {
   if (current && ready) stateText = "当前 · 可运行"
   else if (current) stateText = "当前节点"
   else if (ready) stateText = "可运行"
-  addSvgText(group, 22, Math.min(cursorY + 14, height - 12), `${stateText} · ${roleLabel(node.responsibleRole)}`, "meta")
+  const roleSummary = roles.map((role) => role).join(" / ")
+  addSvgText(group, 22, Math.min(cursorY + 14, height - 12), truncate(`${stateText} · ${roleSummary}`, 30), "meta")
+
+  if (roles.length > 1) {
+    const startX = width - 18 - (roles.length - 1) * 13
+    roles.forEach((role, index) => {
+      group.appendChild(svgEl("circle", {
+        cx: startX + index * 13,
+        cy: height - 12,
+        r: 4,
+        fill: ROLE_COLORS[role] || "#909399",
+        class: "participant-dot",
+      }))
+    })
+  }
 
   group.onclick = (event) => {
     if (event.ctrlKey || event.metaKey) {
@@ -2908,7 +3002,7 @@ function addNode(node, x, y, width, height, roleColor) {
 }
 
 async function focusNodeInGraph(nodeId) {
-  if (!nodeId || !currentState?.steps?.some((node) => node.id === nodeId)) return
+  if (!nodeId || !currentGraphNodes.some((node) => node.id === nodeId)) return
   await showNode(nodeId)
   requestAnimationFrame(() => scrollNodeIntoView(nodeId))
 }
@@ -2965,10 +3059,11 @@ async function copyNodeWorkspacePath(nodeId) {
 
 async function showNode(nodeId) {
   selectedNode = nodeId
-  const node = currentState.steps.find((candidate) => candidate.id === nodeId)
+  const node = currentGraphNodes.find((candidate) => candidate.id === nodeId)
   if (!node) return
 
-  currentRuns = await window.octopus.runs(selectedRequirement, nodeId)
+  const activated = node.activated !== false
+  currentRuns = activated ? await window.octopus.runs(selectedRequirement, nodeId) : []
   let workspace = null
   try {
     workspace = await resolveSelectedNodeWorkspace(nodeId)
@@ -2990,6 +3085,7 @@ async function showNode(nodeId) {
   const englishDesc = node.description && node.description !== zhDesc ? node.description : ""
 
   const current = isCurrentNode(node.id)
+  const roles = nodeRoles(node)
   const zhName = nodeNameZh(node)
   detailsEl.innerHTML = `
     <div class="detail">
@@ -3001,7 +3097,7 @@ async function showNode(nodeId) {
         ${current ? `<span class="badge info">● 当前节点</span>` : ""}
         <span class="badge ${node.status === "COMPLETED" ? "good" : node.status === "BLOCKED" ? "bad" : isReady ? "info" : "warn"}">${escapeHtml(statusLabel(node.status))}${isReady ? " · 可运行" : isWaiting ? " · 等待中" : ""}</span>
         <span class="badge">${escapeHtml(phaseLabel(node.phase))}</span>
-        <span class="badge">${escapeHtml(roleLabel(node.responsibleRole))}</span>
+        ${roles.map((role, index) => `<span class="badge${index === 0 ? "" : " muted-role"}">${index === 0 ? "负责：" : "参与："}${escapeHtml(roleLabel(role))}</span>`).join("")}
       </div>
       <dl>
         <dt>节点 ID</dt>
@@ -3014,8 +3110,8 @@ async function showNode(nodeId) {
         <dd>${deps}</dd>
         <dt>执行动作</dt>
         <dd>${actions}</dd>
-        <dt>节点负责人</dt>
-        <dd><input id="nodeAssignedTo" value="${escapeHtml(node.assignedTo || "")}" placeholder="未设置" /><button id="saveNodeAssignedTo" class="secondary" type="button">保存</button></dd>
+        ${activated ? `<dt>节点负责人</dt>
+        <dd><input id="nodeAssignedTo" value="${escapeHtml(node.assignedTo || "")}" placeholder="未设置" /><button id="saveNodeAssignedTo" class="secondary" type="button">保存</button></dd>` : `<dt>激活条件</dt><dd>推进到「${escapeHtml(phaseLabel(node.phase))}」阶段后进入运行态</dd>`}
         <dt>脚本目录</dt>
         <dd class="path-row">
           <code class="path-value">${escapeHtml(workspace?.path || "未配置源码根目录")}</code>
@@ -3025,14 +3121,14 @@ async function showNode(nodeId) {
         ${node.completedAt ? `<dt>完成时间</dt><dd>${escapeHtml(new Date(node.completedAt).toLocaleString("zh-CN"))}</dd>` : ""}
       </dl>
       <div class="actions">
-        <button id="runNode" title="启动该节点">▶ 运行节点</button>
-        <button id="completeNode" class="secondary" title="将手动节点标记为完成">✓ 手动完成</button>
+        ${activated ? `<button id="runNode" title="启动该节点">▶ 运行节点</button>
+        <button id="completeNode" class="secondary" title="将手动节点标记为完成">✓ 手动完成</button>` : ""}
         <button id="openNode" class="secondary" title="打开节点脚本目录（桌面端打开文件夹；浏览器复制路径并尝试唤起 VS Code）">打开脚本目录</button>
         <button id="copyNodePath" class="secondary" title="复制脚本目录绝对路径">复制路径</button>
       </div>
       <div class="detail-section-title">运行历史</div>
       ${currentRuns.length === 0
-        ? `<p class="muted" style="margin:0">暂无运行记录。点击「运行节点」开始执行。</p>`
+        ? `<p class="muted" style="margin:0">${activated ? "暂无运行记录。点击「运行节点」开始执行。" : "节点尚未激活，暂无运行记录。"}</p>`
         : currentRuns.slice(0, 6).map((run) => `
           <div class="detail run">
             <div class="pill-row">
@@ -3051,10 +3147,12 @@ async function showNode(nodeId) {
     </div>
   `
 
-  document.getElementById("runNode").onclick = () => runSelected(false)
-  document.getElementById("completeNode").onclick = () => completeSelected(false)
-  document.getElementById("saveNodeAssignedTo").onclick = async () => {
-    try { await window.octopus.assignNode(selectedRequirement, node.id, document.getElementById("nodeAssignedTo").value.trim() || null); await showRequirement(selectedRequirement); statusEl.textContent = "节点负责人已保存"; statusEl.className = "badge good" } catch (error) { showError(error) }
+  if (activated) {
+    document.getElementById("runNode").onclick = () => runSelected(false)
+    document.getElementById("completeNode").onclick = () => completeSelected(false)
+    document.getElementById("saveNodeAssignedTo").onclick = async () => {
+      try { await window.octopus.assignNode(selectedRequirement, node.id, document.getElementById("nodeAssignedTo").value.trim() || null); await showRequirement(selectedRequirement); statusEl.textContent = "节点负责人已保存"; statusEl.className = "badge good" } catch (error) { showError(error) }
+    }
   }
   document.getElementById("openNode").onclick = () => jumpToNodeWorkspace(node.id).catch(showError)
   const copyPathButton = document.getElementById("copyNodePath")
@@ -3099,7 +3197,8 @@ async function confirmAction(message, title = "请确认", type = "warning") {
   if (window.OctopusElementPlus?.confirm) {
     return window.OctopusElementPlus.confirm(message, title, type)
   }
-  return window.confirm(message)
+  showError(new Error("确认组件未加载，已阻止本次操作，请刷新页面后重试。"))
+  return false
 }
 
 async function runSelected(force) {

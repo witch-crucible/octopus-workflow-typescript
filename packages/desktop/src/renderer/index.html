@@ -13,13 +13,13 @@
       :root,
       [data-theme="light"] {
         color-scheme: light;
-        --el-color-primary: #6d28d9;
-        --el-color-primary-light-3: #8b5cf6;
-        --el-color-primary-light-5: #a78bfa;
-        --el-color-primary-light-7: #c4b5fd;
-        --el-color-primary-light-8: #ddd6fe;
-        --el-color-primary-light-9: #f5f3ff;
-        --el-color-primary-dark-2: #5b21b6;
+        --el-color-primary: #4f86c6;
+        --el-color-primary-light-3: #78a6d6;
+        --el-color-primary-light-5: #9bbde0;
+        --el-color-primary-light-7: #c9dced;
+        --el-color-primary-light-8: #dce9f5;
+        --el-color-primary-light-9: #eef5fb;
+        --el-color-primary-dark-2: #3f6fa8;
         --el-color-success: #67c23a;
         --el-color-success-light-9: #f0f9eb;
         --el-color-warning: #e6a23c;
@@ -28,8 +28,8 @@
         --el-color-danger-light-9: #fef0f0;
         --el-color-info: #909399;
         --el-color-info-light-9: #f4f4f5;
-        --el-color-purple: #7c3aed;
-        --el-color-purple-light-9: #f5f3ff;
+        --el-color-purple: #6f9bc9;
+        --el-color-purple-light-9: #eef5fb;
 
         --el-bg-color: #ffffff;
         --el-bg-color-page: #f2f3f5;
@@ -93,26 +93,26 @@
         --graph-surface-inner: #fafbfc;
         --lane-a: #fafbfc;
         --lane-b: #f5f7fa;
-        --lane-current: #f5f3ff;
+        --lane-current: #eef5fb;
         --header-fill: #f5f7fa;
-        --header-current: #ddd6fe;
+        --header-current: #dce9f5;
         --node-fill: #ffffff;
         --node-stroke: #dcdfe6;
         --node-id: #909399;
         --node-meta: #606266;
         --edge: #c0c4cc;
-        --current-glow: rgba(109, 40, 217, 0.45);
+        --current-glow: rgba(79, 134, 198, 0.38);
       }
 
       [data-theme="dark"] {
         color-scheme: dark;
-        --el-color-primary: #a78bfa;
-        --el-color-primary-light-3: #8b5cf6;
-        --el-color-primary-light-5: #6d28d9;
-        --el-color-primary-light-7: #4c1d95;
-        --el-color-primary-light-8: #3b0764;
-        --el-color-primary-light-9: #2e1065;
-        --el-color-primary-dark-2: #c4b5fd;
+        --el-color-primary: #8fb7e2;
+        --el-color-primary-light-3: #78a6d6;
+        --el-color-primary-light-5: #5f8fca;
+        --el-color-primary-light-7: #3f6791;
+        --el-color-primary-light-8: #29435f;
+        --el-color-primary-light-9: #203449;
+        --el-color-primary-dark-2: #b4d0ec;
         --el-color-success: #67c23a;
         --el-color-success-light-9: #1c2518;
         --el-color-warning: #e6a23c;
@@ -121,8 +121,8 @@
         --el-color-danger-light-9: #2b1d1d;
         --el-color-info: #909399;
         --el-color-info-light-9: #202121;
-        --el-color-purple: #c4b5fd;
-        --el-color-purple-light-9: #2e1065;
+        --el-color-purple: #a9c7e7;
+        --el-color-purple-light-9: #203449;
 
         --el-bg-color: #141414;
         --el-bg-color-page: #0a0a0a;
@@ -151,15 +151,15 @@
         --graph-surface-inner: #141414;
         --lane-a: rgba(255, 255, 255, 0.02);
         --lane-b: rgba(255, 255, 255, 0.04);
-        --lane-current: rgba(167, 139, 250, 0.16);
+        --lane-current: rgba(143, 183, 226, 0.16);
         --header-fill: #1d1e1f;
-        --header-current: #2e1065;
+        --header-current: #29435f;
         --node-fill: #262727;
         --node-stroke: #4c4d4f;
         --node-id: #a3a6ad;
         --node-meta: #cfd3dc;
         --edge: #606266;
-        --current-glow: rgba(167, 139, 250, 0.55);
+        --current-glow: rgba(143, 183, 226, 0.42);
       }
 
       * { box-sizing: border-box; }
@@ -238,7 +238,7 @@
         height: 56px;
         border-radius: 12px;
         overflow: hidden;
-        background: #f5f3ff;
+        background: #eef5fb;
         flex-shrink: 0;
       }
       .logo-mark img {
@@ -470,6 +470,24 @@
         transition: background .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease;
       }
       input { width: 100%; height: 32px; padding: 0 11px; }
+      textarea {
+        width: 100%;
+        min-height: 96px;
+        padding: 8px 11px;
+        resize: vertical;
+        font: inherit;
+        line-height: 1.5;
+        color: var(--el-text-color-regular);
+        background: var(--el-fill-color-blank);
+        border: 1px solid var(--el-border-color);
+        border-radius: var(--el-border-radius-base);
+      }
+      textarea:focus {
+        outline: none;
+        border-color: var(--el-color-primary);
+        box-shadow: 0 0 0 1px var(--el-color-primary-light-8);
+      }
+      textarea::placeholder { color: var(--el-text-color-placeholder); }
       input:focus {
         outline: none;
         border-color: var(--el-color-primary);
@@ -947,6 +965,7 @@
       .dot.blocked { color: var(--el-color-danger); background: var(--el-color-danger); }
       .dot.waiting { color: var(--el-color-warning); background: var(--el-color-warning); }
       .dot.pending { color: var(--el-color-info); background: var(--el-color-info); }
+      .dot.locked { color: var(--el-text-color-placeholder); background: var(--el-fill-color); }
       .dot.current {
         color: var(--el-color-primary);
         background: #fff;
@@ -1142,6 +1161,18 @@
         stroke: var(--el-color-warning);
         stroke-width: 1.5;
         fill: var(--el-color-warning-light-9);
+      }
+      .node.locked .card {
+        stroke: var(--el-border-color);
+        stroke-width: 1;
+        fill: var(--el-fill-color-light);
+        filter: none;
+      }
+      .node.locked .role-bar { opacity: 0.45; }
+      .node.locked text { opacity: 0.72; }
+      .node .participant-dot {
+        stroke: var(--node-fill);
+        stroke-width: 1.5;
       }
 
       /* 当前节点：强高亮 + 脉冲光晕 */
@@ -1882,7 +1913,7 @@
       .gantt-row-milestones { background: var(--el-fill-color-light); font-weight: 600; }
       .gantt-row-milestone { cursor: pointer; background: var(--el-bg-color); }
       .gantt-row-milestone .gantt-status.is-planned { color: var(--el-color-primary); }
-      .gantt-row-milestone .gantt-status.is-reached { color: #6d28d9; }
+      .gantt-row-milestone .gantt-status.is-reached { color: var(--el-color-primary); }
       .gantt-row-milestone .gantt-status.is-overdue { color: var(--el-color-danger); }
       .gantt-reach-btn {
         margin-left: 6px;
@@ -2302,7 +2333,7 @@
           </div>
           <div class="field">
             <label for="desc">项目描述（可选）</label>
-            <input id="desc" placeholder="简要说明项目目标" />
+            <textarea id="desc" rows="4" placeholder="简要说明项目目标"></textarea>
           </div>
           <button id="create" class="primary-wide">创建项目</button>
         </aside>
@@ -2486,6 +2517,7 @@
             <span class="legend-item"><span class="dot waiting"></span>等待中</span>
             <span class="legend-item"><span class="dot blocked"></span>已阻塞</span>
             <span class="legend-item"><span class="dot pending"></span>待处理</span>
+            <span class="legend-item"><span class="dot locked"></span>未激活</span>
             <span class="legend-split" aria-hidden="true"></span>
             <span id="roleLegend" class="legend-item muted">角色泳道见左侧色条</span>
           </div>

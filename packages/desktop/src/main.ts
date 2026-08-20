@@ -99,6 +99,8 @@ function registerIpc(): void {
   ipcMain.handle("octopus:getRequirementStatus", (_e, requirementId: string) =>
     engine.getRequirementStatus(requirementId))
   ipcMain.handle("octopus:getState", (_e, requirementId: string) => engine.getState(requirementId))
+  ipcMain.handle("octopus:getWorkflowDefinition", (_e, requirementId: string) =>
+    engine.getWorkflowDefinition(requirementId))
   ipcMain.handle("octopus:getExecutionSnapshot", (_e, requirementId: string) =>
     engine.getExecutionSnapshot(requirementId))
   ipcMain.handle(
