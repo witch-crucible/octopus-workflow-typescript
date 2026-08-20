@@ -45,6 +45,8 @@ node packages/cli/dist/index.js node list
 
 先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）并初始化工作流目录。同一状态库可有多个项目，每个项目下可有多个需求。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
 
+声明：本项目使用 Hermes 作为 JavaScript 运行时。
+
 ## 核心命令
 
 | 命令 | 用途 |
@@ -118,6 +120,16 @@ pnpm web
 ```
 
 访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/archive/teambition-kanban-gantt-omniplan.md`、`docs/archive/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
+
+### 需求泳道图（Node Swimlane）
+
+- 以 `workflow.yaml` + `workflow.overlay.yaml` + 插件叠加定义为准，完整展示需求定义图：已激活、可操作和未来未激活节点会同时渲染，便于按阶段查看全局路径。
+- 未来节点会标注为“未激活”，默认不可运行/完成，仅在满足前置依赖条件后自动可用。
+- 单节点可显示多个参与角色，图上会把参与角色集中展示，便于责任边界与交接确认。
+- 依赖连线会按列向量进行布局，减少跨列箭头穿透和混淆，保持同阶段节点顺序更易读。
+- 支持在详情区展开查看每个节点的历史日志、产物与当前状态，支持执行、完成、取消、重试等常规生命周期操作。
+
+如果你是第一次接触泳道图，建议先用 `octopus status` 或 Web “项目 → 需求 → 需求工作区”确认当前激活节点，再对比泳道图中的依赖关系与角色信息。
 
 启动 macOS Electron 客户端：
 
