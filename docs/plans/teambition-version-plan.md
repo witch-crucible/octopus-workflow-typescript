@@ -36,7 +36,7 @@ Octopus 已经能把项目绑到 Teambition **任务项目**、把需求绑到 *
 
 ### 2.1 为什么现在做
 
-需求里程碑方案（`docs/plans/requirement-milestones.md`）明确把「项目级跨需求版本 / 发布里程碑」列为非目标，并写「v1 不同步 Teambition 里程碑」。业务上已经有一份真相源：Teambition 版本管理插件里的仓库 / 版本 / note。继续把发布线塞进需求里程碑会污染两个模型。
+需求里程碑方案（`docs/archive/requirement-milestones.md`）明确把「项目级跨需求版本 / 发布里程碑」列为非目标，并写「v1 不同步 Teambition 里程碑」。业务上已经有一份真相源：Teambition 版本管理插件里的仓库 / 版本 / note。继续把发布线塞进需求里程碑会污染两个模型。
 
 当前痛点：
 
@@ -76,7 +76,7 @@ Octopus 已经能把项目绑到 Teambition **任务项目**、把需求绑到 *
 - `packages/desktop/src/renderer/index.html` — `.project-tabs` 现为 看板 / 列表 / 甘特 / 设置
 - `packages/cli/src/commands/project.ts` / `requirement.ts` / `index.ts`
 - `case/updateNote.md` — **唯一已捕获**的版本 HTTP 样本（浏览器会话，不是 Open API）
-- `docs/plans/requirement-milestones.md`、`docs/plans/teambition-kanban-gantt-omniplan.md`
+- `docs/archive/requirement-milestones.md`、`docs/archive/teambition-kanban-gantt-omniplan.md`
 
 ### 2.3 已确认 vs 未确认的外部 API
 
@@ -1570,8 +1570,8 @@ const versionBadge = item.teambitionVersionId || item.teambitionVersionName
 - `packages/cli/src/commands/project.ts` / `requirement.ts` / `milestone.ts`
 - `case/updateNote.md` — 唯一 CONFIRMED 写契约（只读，勿抄密钥）
 - `case/createBranch.md` — GitLab 网页 POST，v1 忽略
-- `docs/plans/requirement-milestones.md` — 需求里程碑与本方案并存
-- `docs/plans/teambition-kanban-gantt-omniplan.md` — 看板 / 路由 / 不写 TB
+- `docs/archive/requirement-milestones.md` — 需求里程碑与本方案并存
+- `docs/archive/teambition-kanban-gantt-omniplan.md` — 看板 / 路由 / 不写 TB
 - `README.md` Teambition / 图形界面段
 - `packages/integration/src/git.ts` `createReleaseBranch`
 

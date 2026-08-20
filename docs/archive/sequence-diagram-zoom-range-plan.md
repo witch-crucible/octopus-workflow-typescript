@@ -130,7 +130,7 @@ Expected: `tsc -b` 通过，无类型错误。构建产物不含 renderer 变更
 
 ## Self-Review
 
-**1. Spec coverage**（对照 `docs/plans/sequence-diagram-zoom-range.md`）：
+**1. Spec coverage**（对照 `docs/archive/sequence-diagram-zoom-range.md`）：
 - clamp 20%~500% → Step 1 ✅
 - 按钮等比 ×1.2/÷1.2 → Step 2 ✅
 - 滚轮等比（×1+i / ÷1+i）→ Step 3 ✅

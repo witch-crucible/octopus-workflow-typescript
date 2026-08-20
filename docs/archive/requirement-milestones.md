@@ -69,7 +69,7 @@
 - `packages/desktop/src/renderer/renderer.js` — 项目卡片、`#requirementTbBar`
 - `packages/desktop/src/renderer/index.html` — `#projectView`、工作区顶栏
 - `packages/cli/src/commands/requirement.ts` — 风格模板
-- `docs/plans/teambition-kanban-gantt-omniplan.md` §7.3 — OmniPlan 映射（实现时代码可能尚未落地）
+- `docs/archive/teambition-kanban-gantt-omniplan.md` §7.3 — OmniPlan 映射（实现时代码可能尚未落地）
 
 持久化：需求状态整包 JSON 进 `requirements.state_json`，**不必改 SQLite 表**。`migrateWorkflowState` 在 load 时补字段即可。
 
@@ -427,7 +427,7 @@ octopus milestone project <projectId> [--json]
 
 ### PR1 — chore(docs): 写入需求里程碑方案
 
-- 文件：`docs/plans/requirement-milestones.md`；README「图形界面」段加一句入口
+- 文件：`docs/archive/requirement-milestones.md`；README「图形界面」段加一句入口
 - 依赖：无
 - 不改代码
 
@@ -454,7 +454,7 @@ octopus milestone project <projectId> [--json]
 ### PR5 — feat(desktop): 甘特菱形 + 项目汇总泳道
 
 - 文件：`gantt.js`、`renderer.js`、`index.html`（必要的 CSS）
-- 依赖：PR4；若 `docs/plans/teambition-kanban-gantt-omniplan.md` 的项目甘特 tab 已合入则叠在 `mode: "requirements"` 上，否则只做 nodes 模式 + 顶栏泳道可延后
+- 依赖：PR4；若 `docs/archive/teambition-kanban-gantt-omniplan.md` 的项目甘特 tab 已合入则叠在 `mode: "requirements"` 上，否则只做 nodes 模式 + 顶栏泳道可延后
 - 验：列表「排期」旧路径回归；只 mount 一个实例
 
 ### PR6 — feat(integration): OmniPlan milestone 往返

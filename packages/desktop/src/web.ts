@@ -491,6 +491,23 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
         const opts = asObject(args[1])
         const sourcesRaw = opts["sources"]
         const sources = sourcesRaw && typeof sourcesRaw === "object" ? asObject(sourcesRaw) : undefined
+        const promptsRaw = opts["prompts"]
+        const prompts = promptsRaw && typeof promptsRaw === "object" ? asObject(promptsRaw) : undefined
+        const promptPatch = prompts
+          ? Object.fromEntries(
+              (["summarize-sources", "generate", "check"] as const)
+                .filter((id) => prompts[id] !== undefined)
+                .map((id) => {
+                  const value = prompts[id]
+                  if (value === null) return [id, null]
+                  const item = value && typeof value === "object" ? asObject(value) : {}
+                  return [id, {
+                    ...(typeof item["system"] === "string" ? { system: item["system"] } : {}),
+                    ...(typeof item["user"] === "string" ? { user: item["user"] } : {}),
+                  }]
+                }),
+            )
+          : undefined
         return engine.setProjectBrdDesignConfig(projectId(), {
           ...(sources
             ? {
@@ -516,6 +533,7 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
             : {}),
           ...(typeof opts["brdSpecPath"] === "string" ? { brdSpecPath: opts["brdSpecPath"] } : {}),
           ...(typeof opts["brdOutputPath"] === "string" ? { brdOutputPath: opts["brdOutputPath"] } : {}),
+          ...(promptPatch ? { prompts: promptPatch } : {}),
         })
       }
       case "previewBrdPrompts": {

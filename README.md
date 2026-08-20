@@ -117,7 +117,7 @@ Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
 pnpm web
 ```
 
-访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/plans/teambition-kanban-gantt-omniplan.md`、`docs/plans/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
+访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/archive/teambition-kanban-gantt-omniplan.md`、`docs/archive/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
 
 启动 macOS Electron 客户端：
 
@@ -138,3 +138,7 @@ pnpm -r build    # 编译各包并生成 dist
 ```
 
 运行 CLI 或图形界面前需先执行 `pnpm -r build`。SonarQube、Postman、监控等外部集成只有接口定义，默认 CLI 未注入服务实现。
+
+## 开发者指南
+
+参与开发前请阅读 [`Agents.md`](Agents.md)，其中包含仓库结构、包边界、代码约定、工作流配置规则以及提交前验证流程。

@@ -544,7 +544,7 @@ octopus project omniplan-folder <projectId> [--set <folder>] [--file-name <name>
 
 ### 第 0 步 — 落文档
 
-本文即 `docs/plans/teambition-kanban-gantt-omniplan.md`。README「图形界面」段已指向本方案与 OmniPlan 默认目录。实现代理从 PR1 开始写代码。
+本文即 `docs/archive/teambition-kanban-gantt-omniplan.md`。README「图形界面」段已指向本方案与 OmniPlan 默认目录。实现代理从 PR1 开始写代码。
 
 ### PR1 — 数据与引擎（无 UI）
 
@@ -627,7 +627,7 @@ pnpm --filter @octopus/desktop test
 ## 14. PR Plan（汇总）
 
 1. **chore(docs): 写入 Teambition Kanban/Gantt/OmniPlan 方案**  
-   `docs/plans/teambition-kanban-gantt-omniplan.md`、README 一小段。无依赖。
+   `docs/archive/teambition-kanban-gantt-omniplan.md`、README 一小段。无依赖。
 
 2. **feat(core): 需求排期字段、阶段移动 API、OmniPlan 配置**  
    core / engine / context / 薄 RPC。依赖 1。

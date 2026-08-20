@@ -83,6 +83,7 @@ let lastScrolledCurrentKey = ""
 /** 项目页当前展开排期的需求；空字符串表示未展开 */
 let projectTab = "board"
 let projectTableSort = { key: "phase", dir: "asc" }
+let brdPromptConfig = {}
 let expandedScheduleId = ""
 let hubGanttSelectedNode = ""
 let hubGanttState
@@ -619,10 +620,15 @@ function routeFromHash() {
   if (raw === "hub/mine") return { view: "mine" }
   const projectTabMatch = /^project\/([^/]+)\/(board|list|table|gantt|versions|overview|settings)$/.exec(raw)
   if (projectTabMatch) {
+    const requestedTab = projectTabMatch[2] === "list" ? "table" : projectTabMatch[2]
+    if (projectTabMatch[2] === "list") {
+      const canonical = `project/${encodeURIComponent(decodeURIComponent(projectTabMatch[1]))}/table`
+      if (typeof history !== "undefined" && location.hash !== `#${canonical}`) history.replaceState(null, "", `#${canonical}`)
+    }
     return {
       view: "project",
       projectId: decodeURIComponent(projectTabMatch[1]),
-      projectTab: projectTabMatch[2],
+      projectTab: typeof history === "undefined" && projectTabMatch[2] === "list" ? "list" : requestedTab,
     }
   }
   const projectMatch = /^project\/([^/]+)$/.exec(raw)
@@ -1074,7 +1080,18 @@ function milestoneBadgeHtml(item) {
   return `<span class="ms-badge is-done">里程碑已全部达成</span>`
 }
 
+function versionBadgeHtml(item) {
+  if (!item.teambitionVersionId && !item.teambitionVersionName) return ""
+  const stale = item.teambitionVersionStale ? " unbound" : ""
+  return `<span class="tb-badge${stale}">版本 · ${escapeHtml(item.teambitionVersionName || item.teambitionVersionId)}${item.teambitionVersionStale ? "（已失效）" : ""}</span>`
+}
+
 function buildKanbanMarkup(items, options = {}) {
+  const versionBadge = (item) => {
+    if (!item.teambitionVersionId && !item.teambitionVersionName) return ""
+    const stale = item.teambitionVersionStale ? " unbound" : ""
+    return `<span class="tb-badge${stale}">版本 · ${escapeHtml(item.teambitionVersionName || item.teambitionVersionId)}${item.teambitionVersionStale ? "（已失效）" : ""}</span>`
+  }
   const filter = String(options.filter || "")
   const createdId = options.lastCreatedId || ""
   const query = filter.trim().toLowerCase()
@@ -1115,6 +1132,7 @@ function buildKanbanMarkup(items, options = {}) {
         <div class="kanban-card-header">
           <span class="kanban-card-title">${escapeHtml(item.requirementName || item.requirementId)}</span>
           ${tbBadge}
+          ${versionBadge(item)}
         </div>
         <p class="kanban-card-desc">${escapeHtml(item.description || "")}</p>
         <div class="kanban-card-meta">
@@ -1135,6 +1153,11 @@ function buildKanbanMarkup(items, options = {}) {
 }
 
 function buildRequirementCardsMarkup(items, options = {}) {
+  const versionBadge = (item) => {
+    if (!item.teambitionVersionId && !item.teambitionVersionName) return ""
+    const stale = item.teambitionVersionStale ? " unbound" : ""
+    return `<span class="tb-badge${stale}">版本 · ${escapeHtml(item.teambitionVersionName || item.teambitionVersionId)}${item.teambitionVersionStale ? "（已失效）" : ""}</span>`
+  }
   const filter = String(options.filter || "")
   const createdId = options.lastCreatedId || ""
   const scheduleId = options.expandedScheduleId || ""
@@ -1162,6 +1185,7 @@ function buildRequirementCardsMarkup(items, options = {}) {
       ${item.teambitionTaskId || item.teambitionStatusName
         ? `<span class="tb-badge">TB 任务${item.teambitionStatusName ? ` · ${escapeHtml(item.teambitionStatusName)}` : ""}</span>`
         : `<span class="tb-badge unbound">未绑定任务</span>`}
+      ${versionBadge(item)}
       ${milestoneBadgeHtml(item)}
       <div class="meta">${escapeHtml(item.requirementId)}${item.projectRoot ? `<br />${escapeHtml(item.projectRoot)}` : ""}${item.updatedAt ? `<br />更新于 ${escapeHtml(formatUpdatedAt(item.updatedAt))}` : ""}</div>
       <div class="hub-card-edit" hidden>
@@ -1265,8 +1289,9 @@ async function renderMine() {
     return
   }
   const list = await window.octopus.listMyWork(identity)
-  const row = (item) => `<tr><td>${escapeHtml(item.projectName)}</td><td>${escapeHtml(item.requirementName)}</td><td>${escapeHtml(item.nodeName || "需求负责人")}</td><td>${escapeHtml(phaseLabel(item.phase))}</td><td>${escapeHtml(item.plannedEnd || item.nextMilestone?.date || "未排期")}</td><td>${item.overdue ? "逾期" : ""}</td></tr>`
+  const row = (item) => `<tr data-requirement-id="${escapeHtml(item.requirementId)}"><td>${escapeHtml(item.projectName)}</td><td><button class="link-btn" data-open-mine>${escapeHtml(item.requirementName)}</button></td><td>${escapeHtml(item.nodeName || "需求负责人")}</td><td>${escapeHtml(phaseLabel(item.phase))}</td><td>${escapeHtml(item.plannedEnd || item.nextMilestone?.date || "未排期")}</td><td class="${item.overdue ? "is-overdue" : ""}">${item.overdue ? "逾期" : ""}</td></tr>`
   mineEl.innerHTML = `<div class="panel-card"><div class="tb-actions"><h3>我的工作（${escapeHtml(identity)}）</h3><button id="clearMineIdentity" class="secondary" type="button">清除身份</button></div><h4>我负责的需求</h4><div class="table-scroll"><table><thead><tr><th>项目</th><th>需求</th><th>负责人</th><th>阶段</th><th>截止/里程碑</th><th>状态</th></tr></thead><tbody>${list.requirements.map(row).join("") || `<tr><td colspan="6">暂无负责的需求</td></tr>`}</tbody></table></div><h4>指派给我的节点</h4><div class="table-scroll"><table><thead><tr><th>项目</th><th>需求</th><th>节点</th><th>阶段</th><th>截止/里程碑</th><th>状态</th></tr></thead><tbody>${list.nodes.map(row).join("") || `<tr><td colspan="6">暂无指派节点</td></tr>`}</tbody></table></div></div>`
+  for (const button of mineEl.querySelectorAll("[data-open-mine]")) button.onclick = () => goToRequirement(button.closest("tr")?.dataset.requirementId)
   document.getElementById("clearMineIdentity")?.addEventListener("click", async () => { await window.octopus.setIdentity(null); await renderMine() })
 }
 
@@ -1283,7 +1308,7 @@ function renderRequirementTable() {
     return (av < bv ? -1 : av > bv ? 1 : 0) * (projectTableSort.dir === "asc" ? 1 : -1)
   })
   const headers = [["requirementName", "名称"], ["currentPhase", "阶段"], ["owner", "负责人"], ["plannedStart", "开始"], ["plannedEnd", "结束"]]
-  host.innerHTML = `<div class="panel-card"><div class="table-scroll"><table><thead><tr>${headers.map(([key, label]) => `<th><button class="table-sort" data-sort="${key}" type="button">${label}</button></th>`).join("")}<th>里程碑</th><th>进度</th><th>TB</th><th>操作</th></tr></thead><tbody>${items.map((item) => `<tr data-requirement-id="${escapeHtml(item.requirementId)}"><td><button class="link-btn" data-open>${escapeHtml(item.requirementName)}</button><div class="muted">${escapeHtml(item.requirementId)}</div></td><td><select data-phase>${PHASE_ORDER.map((phase) => `<option value="${phase}"${phase === item.currentPhase ? " selected" : ""}>${escapeHtml(phaseLabel(phase))}</option>`).join("")}</select></td><td><input data-owner value="${escapeHtml(item.owner || "")}" placeholder="未设置" /></td><td><input data-start type="date" value="${escapeHtml(item.plannedStart || "")}" /></td><td><input data-end type="date" value="${escapeHtml(item.plannedEnd || "")}" /></td><td>${item.nextMilestone ? `${escapeHtml(item.nextMilestone.name)} · ${escapeHtml(item.nextMilestone.date)}` : "—"}</td><td>${item.totalTasks ? `${item.completedTasks}/${item.totalTasks}` : "—"}</td><td>${escapeHtml(item.teambitionStatusName || "—")}</td><td><button data-save class="secondary" type="button">保存</button></td></tr>`).join("") || `<tr><td colspan="9">暂无需求</td></tr>`}</tbody></table></div></div>`
+  host.innerHTML = `<div class="panel-card"><div class="table-scroll"><table><thead><tr>${headers.map(([key, label]) => `<th><button class="table-sort" data-sort="${key}" type="button">${label}</button></th>`).join("")}<th>里程碑</th><th>进度</th><th>TB</th><th>操作</th></tr></thead><tbody>${items.map((item) => `<tr data-requirement-id="${escapeHtml(item.requirementId)}"><td><button class="link-btn" data-open>${escapeHtml(item.requirementName)}</button><div class="muted">${escapeHtml(item.requirementId)}</div></td><td><select data-phase>${PHASE_ORDER.map((phase) => `<option value="${phase}"${phase === item.currentPhase ? " selected" : ""}>${escapeHtml(phaseLabel(phase))}</option>`).join("")}</select></td><td><input data-owner value="${escapeHtml(item.owner || "")}" placeholder="未设置" /></td><td><input data-start type="date" value="${escapeHtml(item.plannedStart || "")}" /></td><td><input data-end type="date" value="${escapeHtml(item.plannedEnd || "")}" /></td><td>${item.nextMilestone ? `${escapeHtml(item.nextMilestone.name)} · ${escapeHtml(item.nextMilestone.date)}` : "—"}</td><td>${item.totalTasks ? `${item.completedTasks}/${item.totalTasks}` : "—"}</td><td>${escapeHtml(item.teambitionStatusName || "—")}</td><td><button data-save class="secondary" type="button">保存</button><button data-edit class="secondary" type="button">编辑</button><button data-delete class="secondary" type="button">删除</button></td></tr>`).join("") || `<tr><td colspan="9">暂无需求</td></tr>`}</tbody></table></div></div>`
   for (const btn of host.querySelectorAll(".table-sort")) btn.onclick = () => { const key = btn.dataset.sort; projectTableSort = { key, dir: projectTableSort.key === key && projectTableSort.dir === "asc" ? "desc" : "asc" }; renderRequirementTable() }
   for (const row of host.querySelectorAll("tbody tr[data-requirement-id]")) {
     const id = row.dataset.requirementId
@@ -1294,6 +1319,19 @@ function renderRequirementTable() {
       if ((start && !end) || (!start && end)) { statusEl.textContent = "起止日期必须成对"; statusEl.className = "badge warn"; return }
       try { await window.octopus.updateRequirement(id, { owner: row.querySelector("[data-owner]").value.trim() || null }); await window.octopus.updateRequirementSchedule(id, { plannedStart: start, plannedEnd: end }); await loadRequirementSummaries(selectedProjectId); statusEl.textContent = "需求已保存"; statusEl.className = "badge good"; renderRequirementTable() } catch (error) { showError(error) }
     }
+    row.querySelector("[data-edit]").onclick = async () => {
+      const item = requirementSummaries.find((entry) => entry.requirementId === id)
+      if (!item) return
+      const name = window.prompt("需求名称", item.requirementName)
+      if (name === null || !name.trim()) return
+      const description = window.prompt("需求描述", item.description || "")
+      if (description === null) return
+      try { await window.octopus.updateRequirement(id, { name: name.trim(), description }); await loadRequirementSummaries(selectedProjectId); renderRequirementTable() } catch (error) { showError(error) }
+    }
+    row.querySelector("[data-delete]").onclick = async () => {
+      if (!window.confirm("确认删除该需求？此操作不可恢复。")) return
+      try { await window.octopus.deleteRequirement(id); await loadRequirementSummaries(selectedProjectId); renderRequirementTable() } catch (error) { showError(error) }
+    }
   }
 }
 
@@ -1302,7 +1340,7 @@ async function renderProjectOverview() {
   if (!host || !selectedProjectId) return
   try {
     const overview = await window.octopus.getProjectOverview(selectedProjectId)
-    host.innerHTML = `<div class="panel-card"><h3>${escapeHtml(overview.projectName)} · 概览</h3><div class="metrics"><div class="metric"><strong>${overview.requirementCount}</strong><small>需求</small></div><div class="metric"><strong>${overview.unscheduledCount}</strong><small>未排期</small></div><div class="metric"><strong>${overview.unboundTbCount}</strong><small>未绑 TB</small></div><div class="metric"><strong>${overview.ownerlessCount}</strong><small>无负责人</small></div><div class="metric"><strong>${overview.readyNodeCount}</strong><small>可运行节点</small></div><div class="metric"><strong>${overview.waitingNodeCount}</strong><small>等待节点</small></div></div><h4>里程碑</h4><p>计划中 ${overview.milestonePlanned} · 已达成 ${overview.milestoneReached} · 逾期 ${overview.milestoneOverdue}</p><h4>Heinrich</h4><p>Major ${overview.heinrich.major} · Minor ${overview.heinrich.minor} · Trivial ${overview.heinrich.trivial}</p><h4>阶段分布</h4><p>${overview.byPhase.map((item) => `${escapeHtml(phaseLabel(item.phase))} ${item.count}`).join(" · ")}</p></div>`
+    host.innerHTML = `<div class="panel-card"><h3>${escapeHtml(overview.projectName)} · 概览</h3><div class="metrics"><div class="metric"><strong>${overview.requirementCount}</strong><small>需求</small></div><div class="metric"><strong>${overview.unscheduledCount}</strong><small>未排期</small></div><div class="metric"><strong>${overview.unboundTbCount}</strong><small>未绑 TB</small></div><div class="metric"><strong>${overview.ownerlessCount}</strong><small>无负责人</small></div><div class="metric"><strong>${overview.readyNodeCount}</strong><small>可运行节点</small></div><div class="metric"><strong>${overview.waitingNodeCount}</strong><small>等待节点</small></div></div><h4>里程碑</h4><p>计划中 ${overview.milestonePlanned} · 已达成 ${overview.milestoneReached} · 逾期 ${overview.milestoneOverdue}</p><h4>Heinrich</h4><p>Major ${overview.heinrich.major} · Minor ${overview.heinrich.minor} · Trivial ${overview.heinrich.trivial}</p><h4>阶段分布</h4><table><thead><tr><th>阶段</th><th>需求数</th></tr></thead><tbody>${overview.byPhase.map((item) => `<tr><td>${escapeHtml(phaseLabel(item.phase))}</td><td>${item.count}</td></tr>`).join("")}</tbody></table></div>`
   } catch (error) { host.innerHTML = `<div class="panel-card"><p class="bad">${escapeHtml(readableError(error))}</p></div>` }
 }
 
@@ -1333,7 +1371,6 @@ function syncProjectTabs() {
 
 function renderKanbanBoard() {
   const kanbanBoardEl = document.getElementById("kanbanBoard")
-  const kanbanEmptyEl = document.getElementById("kanbanEmpty")
   const kanbanEmptyEl = document.getElementById("kanbanEmpty")
   if (!kanbanBoardEl) return
   const built = buildKanbanMarkup(requirementSummaries, {
@@ -1463,6 +1500,14 @@ function renderProjectSettings() {
       <div class="field"><label for="brdWebsiteUrl">官网展示域名</label><input id="brdWebsiteUrl" placeholder="https://..." /></div>
       <div class="field"><label for="brdSpecPath">BRD 规范路径</label><input id="brdSpecPath" /></div>
       <div class="field"><label for="brdOutputPath">BRD 产出路径</label><input id="brdOutputPath" placeholder="默认节点目录 brd.md" /></div>
+      <details class="brd-prompts-editor"><summary>提示词编辑</summary>
+        <p class="help">留空不会覆盖默认提示词；模板支持 {{requirementName}}、{{sourcesSummary}} 等变量。</p>
+        <label for="brdPromptId">提示词类型</label>
+        <select id="brdPromptId"><option value="generate">generate</option><option value="check">check</option><option value="summarize-sources">summarize-sources</option></select>
+        <div class="field"><label for="brdPromptSystem">system</label><textarea id="brdPromptSystem" rows="4"></textarea></div>
+        <div class="field"><label for="brdPromptUser">user</label><textarea id="brdPromptUser" rows="8"></textarea></div>
+        <div class="tb-actions"><button id="brdPromptLoadDefault" class="secondary" type="button">载入默认</button><button id="brdPromptClear" class="secondary" type="button">清除覆盖</button></div>
+      </details>
       <div class="tb-actions">
         <button id="settingsSaveBrd" type="button">保存 BRD 设置</button>
         <button id="settingsPreviewBrdPrompts" class="secondary" type="button">预览提示词</button>
@@ -1471,6 +1516,34 @@ function renderProjectSettings() {
     </div>
   `
   void loadBrdSettingsForm()
+  const promptDefaults = {
+    generate: { system: "", user: "" },
+    check: { system: "", user: "" },
+    "summarize-sources": { system: "", user: "" },
+  }
+  const loadPromptEditor = () => {
+    const id = document.getElementById("brdPromptId")?.value || "generate"
+    const item = brdPromptConfig[id] || promptDefaults[id]
+    const system = document.getElementById("brdPromptSystem")
+    const user = document.getElementById("brdPromptUser")
+    if (system) system.value = item?.system || ""
+    if (user) user.value = item?.user || ""
+  }
+  document.getElementById("brdPromptId")?.addEventListener("change", loadPromptEditor)
+  document.getElementById("brdPromptLoadDefault")?.addEventListener("click", () => {
+    const id = document.getElementById("brdPromptId")?.value || "generate"
+    delete brdPromptConfig[id]
+    loadPromptEditor()
+  })
+  document.getElementById("brdPromptClear")?.addEventListener("click", () => {
+    const id = document.getElementById("brdPromptId")?.value || "generate"
+    delete brdPromptConfig[id]
+    const system = document.getElementById("brdPromptSystem")
+    const user = document.getElementById("brdPromptUser")
+    if (system) system.dataset.cleared = "true"
+    if (user) user.dataset.cleared = "true"
+    loadPromptEditor()
+  })
   document.getElementById("settingsBindTb")?.addEventListener("click", async () => {
     if (!selectedProjectId) return
     const tbProjectId = document.getElementById("settingsTbProjectId")?.value.trim() || undefined
@@ -1590,6 +1663,16 @@ function renderProjectSettings() {
   document.getElementById("settingsSaveBrd")?.addEventListener("click", async () => {
     if (!selectedProjectId || !window.octopus.setProjectBrdDesignConfig) return
     try {
+      const promptId = document.getElementById("brdPromptId")?.value || "generate"
+      const promptSystemEl = document.getElementById("brdPromptSystem")
+      const promptUserEl = document.getElementById("brdPromptUser")
+      const promptSystem = promptSystemEl?.value || ""
+      const promptUser = promptUserEl?.value || ""
+      const prompts = promptSystem.trim() && promptUser.trim()
+        ? { [promptId]: { system: promptSystem, user: promptUser } }
+        : (promptSystemEl?.dataset.cleared === "true" || promptUserEl?.dataset.cleared === "true" ? { [promptId]: null } : {})
+      if (promptSystemEl) delete promptSystemEl.dataset.cleared
+      if (promptUserEl) delete promptUserEl.dataset.cleared
       await window.octopus.setProjectBrdDesignConfig(selectedProjectId, {
         sources: {
           miniprogramCodePath: document.getElementById("brdMiniprogram")?.value ?? "",
@@ -1601,6 +1684,7 @@ function renderProjectSettings() {
         },
         brdSpecPath: document.getElementById("brdSpecPath")?.value ?? "",
         brdOutputPath: document.getElementById("brdOutputPath")?.value ?? "",
+        prompts,
       })
       currentProject = await window.octopus.getProject(selectedProjectId)
       statusEl.textContent = "BRD 设置已保存"
@@ -1667,6 +1751,7 @@ async function loadBrdSettingsForm() {
   if (!selectedProjectId || !window.octopus.getProjectBrdDesignConfig) return
   try {
     const config = await window.octopus.getProjectBrdDesignConfig(selectedProjectId)
+    brdPromptConfig = config.prompts || {}
     const setValue = (id, value) => {
       const el = document.getElementById(id)
       if (el) el.value = value || ""
@@ -1679,6 +1764,12 @@ async function loadBrdSettingsForm() {
     setValue("brdWebsiteUrl", config.sources?.websiteUrl)
     setValue("brdSpecPath", config.brdSpecPath)
     setValue("brdOutputPath", config.brdOutputPath)
+    const promptId = document.getElementById("brdPromptId")?.value || "generate"
+    const prompt = config.prompts?.[promptId]
+    const system = document.getElementById("brdPromptSystem")
+    const user = document.getElementById("brdPromptUser")
+    if (system) system.value = prompt?.system || ""
+    if (user) user.value = prompt?.user || ""
   } catch (error) {
     showError(error)
   }
@@ -1928,7 +2019,7 @@ async function showMine() {
 async function showProjectPage(projectId, tab) {
   selectedRequirement = undefined
   selectedNode = undefined
-  projectTab = tab || "board"
+  projectTab = tab === "list" ? "table" : tab || "board"
   try {
     currentProject = await window.octopus.getProject(projectId)
   } catch {

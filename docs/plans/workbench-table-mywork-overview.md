@@ -8,8 +8,8 @@
 
 OmniPlan XML / zip / 路径算法见已落地的：
 
-- `docs/plans/teambition-kanban-gantt-omniplan.md` §7
-- `docs/plans/requirement-milestones.md` §7
+- `docs/archive/teambition-kanban-gantt-omniplan.md` §7
+- `docs/archive/requirement-milestones.md` §7
 
 **本文件覆盖的是那两份方案里还没做完的桌面工作台，外加表格、我的工作、概览。不要重做引擎里已经有的排期 / 换列 / 里程碑 / OmniPlan I/O。**
 
