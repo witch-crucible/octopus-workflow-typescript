@@ -5,20 +5,26 @@
  * 命令执行由 @octopus/executor 的 worker 完成。
  */
 
-import { mkdirSync } from "node:fs"
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync } from "node:fs"
 import { join, resolve } from "node:path"
-import type { StateStore } from "@octopus/context/index.js"
 import { createExecutionStore } from "@octopus/context/execution.js"
-import type { WorkflowDefinition } from "@octopus/core/execution.js"
+import type { StateStore } from "@octopus/context/index.js"
 import {
   loadWorkflowDefinition,
   resolveWorkflowNodeKey,
   syncWorkflowWorkspace,
 } from "@octopus/context/workflow.js"
-import { launchWorker, terminateWorker } from "@octopus/executor/index.js"
-import type { IntegrationHealth, NodeRun, WorkflowEvent, WorkflowExecutionSnapshot } from "@octopus/core/execution.js"
+import type {
+  IntegrationHealth,
+  NodeRun,
+  NodeRunStatus,
+  WorkflowDefinition,
+  WorkflowEvent,
+  WorkflowExecutionSnapshot,
+} from "@octopus/core/execution.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import type { WorkflowState } from "@octopus/core/workflow.js"
+import { launchWorker, terminateWorker } from "@octopus/executor/index.js"
 
 export interface RunNodeOptions {
   readonly force?: boolean
@@ -30,7 +36,28 @@ export interface RunWorkflowOptions {
   readonly force?: boolean
 }
 
+export interface ReadRunLogsOptions {
+  readonly stream?: "stdout" | "stderr"
+  readonly offset?: number
+  readonly maxBytes?: number
+}
+
+export interface RunLogSlice {
+  readonly runId: string
+  readonly nodeId: string
+  readonly status: NodeRunStatus
+  readonly stream: "stdout" | "stderr"
+  readonly exists: boolean
+  readonly size: number
+  readonly offset: number
+  readonly nextOffset: number
+  readonly truncated: boolean
+  readonly content: string
+}
+
 const MAX_TIMER_DELAY_MS = 2_147_483_647
+const DEFAULT_LOG_MAX_BYTES = 262_144
+const ABSOLUTE_LOG_MAX_BYTES = 1_048_576
 
 /** 同步阻塞休眠（微秒级退避用；Node 主线程可用） */
 function sleep(ms: number): void {
@@ -43,7 +70,10 @@ function sleep(ms: number): void {
 /** 是否 SQLite 并发写锁冲突（可重试） */
 function isWriteLockError(cause: unknown): boolean {
   const err = cause as { code?: string; message?: string }
-  return err?.code === "SQLITE_BUSY" || (typeof err?.message === "string" && err.message.includes("database is locked"))
+  return (
+    err?.code === "SQLITE_BUSY" ||
+    (typeof err?.message === "string" && err.message.includes("database is locked"))
+  )
 }
 
 export class NodeExecutionService {
@@ -53,11 +83,15 @@ export class NodeExecutionService {
 
   constructor(
     private readonly store: StateStore,
-    private readonly loadDefinition: (projectRoot: string) => WorkflowDefinition = loadWorkflowDefinition,
+    private readonly loadDefinition: (
+      projectRoot: string,
+    ) => WorkflowDefinition = loadWorkflowDefinition,
   ) {
     this.storeDir = resolve(store.getStorePath())
     this.executions = createExecutionStore(this.storeDir)
-    const cutoff = new Date(Date.now() - NodeExecutionService.retentionDays * 24 * 60 * 60 * 1000).toISOString()
+    const cutoff = new Date(
+      Date.now() - NodeExecutionService.retentionDays * 24 * 60 * 60 * 1000,
+    ).toISOString()
     this.executions.purge(cutoff)
   }
 
@@ -77,7 +111,7 @@ export class NodeExecutionService {
         if (!isWriteLockError(cause) || attempt >= 30) throw cause
         attempt++
         // 抖动退避：避免多个进程以相同节奏反复碰撞
-        sleep(1 + Math.floor(Math.random() * (2 ** Math.min(attempt, 7))))
+        sleep(1 + Math.floor(Math.random() * 2 ** Math.min(attempt, 7)))
       }
     }
   }
@@ -96,23 +130,27 @@ export class NodeExecutionService {
         return target?.status === TaskStatus.COMPLETED
       })
       if (!dependenciesReady) continue
-      if ((step.actions ?? []).every((action) => action.type === "manual")) waitingNodeIds.push(step.id)
+      if ((step.actions ?? []).every((action) => action.type === "manual"))
+        waitingNodeIds.push(step.id)
       else readyNodeIds.push(step.id)
     }
     const currentNodeIds = [...new Set([...runningIds, ...readyNodeIds, ...waitingNodeIds])]
     const hasBlocked = state.steps.some((step) => step.status === TaskStatus.BLOCKED)
-    const allDone = state.steps.length > 0 && state.steps.every(
-      (step) => step.status === TaskStatus.COMPLETED || step.status === TaskStatus.SKIPPED,
-    )
-    const schedulerStatus = activeRuns.length > 0
-      ? "RUNNING"
-      : allDone
-        ? "COMPLETED"
-        : waitingNodeIds.length > 0
-          ? "PAUSED"
-          : hasBlocked && readyNodeIds.length === 0
-            ? "BLOCKED"
-            : "IDLE"
+    const allDone =
+      state.steps.length > 0 &&
+      state.steps.every(
+        (step) => step.status === TaskStatus.COMPLETED || step.status === TaskStatus.SKIPPED,
+      )
+    const schedulerStatus =
+      activeRuns.length > 0
+        ? "RUNNING"
+        : allDone
+          ? "COMPLETED"
+          : waitingNodeIds.length > 0
+            ? "PAUSED"
+            : hasBlocked && readyNodeIds.length === 0
+              ? "BLOCKED"
+              : "IDLE"
     return {
       requirementId,
       currentNodeIds,
@@ -128,9 +166,9 @@ export class NodeExecutionService {
     const state = this.store.load(requirementId)
     const step = state.steps.find((candidate) => candidate.id === nodeId)
     if (!step) throw new Error(`节点不存在: ${nodeId}`)
-    const active = this.executions.listRuns(requirementId, nodeId).find(
-      (run) => run.status === "QUEUED" || run.status === "RUNNING",
-    )
+    const active = this.executions
+      .listRuns(requirementId, nodeId)
+      .find((run) => run.status === "QUEUED" || run.status === "RUNNING")
     if (active) throw new Error(`节点 ${nodeId} 已有活动运行: ${active.id}`)
     const unmet = step.dependsOn.filter((dependency) => {
       const target = state.steps.find((candidate) => candidate.id === dependency)
@@ -167,7 +205,10 @@ export class NodeExecutionService {
       }
       return current
     })
-    this.appendEvent(requirementId, run, "RUN_QUEUED", { forced: run.forced, workspace: workspace.nodePath(nodeKey) })
+    this.appendEvent(requirementId, run, "RUN_QUEUED", {
+      forced: run.forced,
+      workspace: workspace.nodePath(nodeKey),
+    })
     const startedAt = new Date().toISOString()
     this.executions.updateRun(run.id, { status: "RUNNING", startedAt, heartbeatAt: startedAt })
     let pid: number
@@ -208,7 +249,8 @@ export class NodeExecutionService {
         const target = current.steps.find((candidate) => candidate.id === dependency)
         return target?.status !== TaskStatus.COMPLETED
       })
-      if (unmet.length > 0 && !force) throw new Error(`节点 ${nodeId} 依赖未满足: ${unmet.join(", ")}`)
+      if (unmet.length > 0 && !force)
+        throw new Error(`节点 ${nodeId} 依赖未满足: ${unmet.join(", ")}`)
       step.status = TaskStatus.COMPLETED
       step.completedAt = new Date().toISOString()
       step.updatedAt = new Date().toISOString()
@@ -270,7 +312,11 @@ export class NodeExecutionService {
       }
       return state
     })
-    return this.runNode(requirementId, run.nodeId, options.force === undefined ? {} : { force: options.force })
+    return this.runNode(
+      requirementId,
+      run.nodeId,
+      options.force === undefined ? {} : { force: options.force },
+    )
   }
 
   listRuns(requirementId: string, nodeId?: string): NodeRun[] {
@@ -279,6 +325,34 @@ export class NodeExecutionService {
 
   eventsAfter(requirementId: string, sequence = 0): WorkflowEvent[] {
     return this.executions.eventsAfter(requirementId, sequence)
+  }
+
+  /**
+   * 读取一次节点运行的 stdout/stderr 片段。
+   * 仅允许通过已持久化的 run 记录定位文件，客户端不能传入任意路径。
+   */
+  readRunLogs(requirementId: string, runId: string, options: ReadRunLogsOptions = {}): RunLogSlice {
+    const run = this.executions.getRun(runId)
+    if (!run || run.requirementId !== requirementId) throw new Error(`运行不存在: ${runId}`)
+
+    const stream = options.stream === "stderr" ? "stderr" : "stdout"
+    const path = stream === "stderr" ? run.stderrPath : run.stdoutPath
+    const offset = normalizeLogOffset(options.offset)
+    const maxBytes = normalizeLogMaxBytes(options.maxBytes)
+    const slice = readLogFileSlice(path, offset, maxBytes)
+
+    return {
+      runId: run.id,
+      nodeId: run.nodeId,
+      status: run.status,
+      stream,
+      exists: slice.exists,
+      size: slice.size,
+      offset: slice.offset,
+      nextOffset: slice.nextOffset,
+      truncated: slice.truncated,
+      content: slice.content,
+    }
   }
 
   /**
@@ -328,13 +402,20 @@ export class NodeExecutionService {
   }
 
   /** 自动并行执行 READY 节点，直到完成、阻塞或遇到手动节点。 */
-  async runWorkflow(requirementId: string, options: RunWorkflowOptions = {}): Promise<WorkflowExecutionSnapshot> {
+  async runWorkflow(
+    requirementId: string,
+    options: RunWorkflowOptions = {},
+  ): Promise<WorkflowExecutionSnapshot> {
     const maxParallel = options.maxParallel ?? 4
     const pollIntervalMs = options.pollIntervalMs ?? 500
     if (!Number.isSafeInteger(maxParallel) || maxParallel < 1) {
       throw new Error("maxParallel 必须是正整数")
     }
-    if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 100 || pollIntervalMs > MAX_TIMER_DELAY_MS) {
+    if (
+      !Number.isSafeInteger(pollIntervalMs) ||
+      pollIntervalMs < 100 ||
+      pollIntervalMs > MAX_TIMER_DELAY_MS
+    ) {
       throw new Error(`pollIntervalMs 必须是 100 至 ${MAX_TIMER_DELAY_MS}ms 的整数`)
     }
     while (true) {
@@ -346,7 +427,11 @@ export class NodeExecutionService {
       if (capacity > 0) {
         for (const nodeId of snapshot.readyNodeIds.slice(0, capacity)) {
           try {
-            this.runNode(requirementId, nodeId, options.force === undefined ? {} : { force: options.force })
+            this.runNode(
+              requirementId,
+              nodeId,
+              options.force === undefined ? {} : { force: options.force },
+            )
           } catch (cause) {
             launchError ??= cause
           }
@@ -359,7 +444,12 @@ export class NodeExecutionService {
     }
   }
 
-  private appendEvent(requirementId: string, run: NodeRun, type: WorkflowEvent["type"], payload: Record<string, unknown>): void {
+  private appendEvent(
+    requirementId: string,
+    run: NodeRun,
+    type: WorkflowEvent["type"],
+    payload: Record<string, unknown>,
+  ): void {
     this.executions.appendEvent({
       requirementId,
       runId: run.id,
@@ -368,5 +458,65 @@ export class NodeExecutionService {
       payload,
       createdAt: new Date().toISOString(),
     })
+  }
+}
+
+function normalizeLogOffset(value: number | undefined): number {
+  if (value === undefined) return 0
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error("offset 必须是大于等于 0 的整数")
+  }
+  return value
+}
+
+function normalizeLogMaxBytes(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_LOG_MAX_BYTES
+  if (!Number.isSafeInteger(value) || value < 1 || value > ABSOLUTE_LOG_MAX_BYTES) {
+    throw new Error(`maxBytes 必须是 1 至 ${ABSOLUTE_LOG_MAX_BYTES} 的整数`)
+  }
+  return value
+}
+
+function readLogFileSlice(
+  path: string,
+  offset: number,
+  maxBytes: number,
+): {
+  exists: boolean
+  size: number
+  offset: number
+  nextOffset: number
+  truncated: boolean
+  content: string
+} {
+  if (!existsSync(path)) {
+    return { exists: false, size: 0, offset: 0, nextOffset: 0, truncated: false, content: "" }
+  }
+
+  const fd = openSync(path, "r")
+  try {
+    const size = fstatSync(fd).size
+    if (size <= 0) {
+      return { exists: true, size: 0, offset: 0, nextOffset: 0, truncated: false, content: "" }
+    }
+    const start = Math.min(offset, size)
+    const length = Math.min(maxBytes, size - start)
+    if (length <= 0) {
+      return { exists: true, size, offset: start, nextOffset: start, truncated: false, content: "" }
+    }
+    const buffer = Buffer.allocUnsafe(length)
+    const bytesRead = readSync(fd, buffer, 0, length, start)
+    const content = buffer.subarray(0, bytesRead).toString("utf8")
+    const nextOffset = start + bytesRead
+    return {
+      exists: true,
+      size,
+      offset: start,
+      nextOffset,
+      truncated: nextOffset < size,
+      content,
+    }
+  } finally {
+    closeSync(fd)
   }
 }

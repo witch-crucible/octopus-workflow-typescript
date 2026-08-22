@@ -89,6 +89,19 @@ let brdPromptConfig = {}
 let brdPromptDrafts = {}
 let brdPromptClearIds = new Set()
 let expandedScheduleId = ""
+/** 日志监控页筛选与选中状态 */
+let logsFilterRequirementId = ""
+let logsFilterNodeId = ""
+let logsFilterStatus = ""
+let logsSelectedRequirementId = ""
+let logsSelectedRunId = ""
+let logsDetailTab = "stdout"
+let logsAutoRefresh = false
+let logsPollTimer = null
+let logsPendingFocus = null
+let logsLoadedEvents = []
+let logsSlice = null
+let logsRenderToken = 0
 let hubGanttSelectedNode = ""
 let hubGanttState
 let hubGanttMounted = false
@@ -699,7 +712,7 @@ function routeFromHash() {
   const raw = location.hash.replace(/^#/, "")
   if (raw === "hub" || raw === "" || raw === "/") return { view: "hub" }
   if (raw === "hub/mine") return { view: "mine" }
-  const projectTabMatch = /^project\/([^/]+)\/(board|list|table|gantt|versions|overview|settings)$/.exec(raw)
+  const projectTabMatch = /^project\/([^/]+)\/(board|list|table|gantt|versions|logs|overview|settings)$/.exec(raw)
   if (projectTabMatch) {
     const requestedTab = projectTabMatch[2] === "list" ? "table" : projectTabMatch[2]
     if (projectTabMatch[2] === "list") {
@@ -1968,6 +1981,324 @@ async function renderProjectVersions() {
   }
 }
 
+function stopLogsPolling() {
+  if (logsPollTimer) {
+    clearInterval(logsPollTimer)
+    logsPollTimer = null
+  }
+}
+
+function ensureLogsPolling() {
+  stopLogsPolling()
+  if (!logsAutoRefresh || projectTab !== "logs" || currentView !== "project") return
+  logsPollTimer = setInterval(() => {
+    if (projectTab !== "logs" || currentView !== "project") {
+      stopLogsPolling()
+      return
+    }
+    void renderProjectLogs({ silent: true })
+  }, 2000)
+}
+
+function logsRunKey(requirementId, runId) {
+  return `${requirementId}::${runId}`
+}
+
+function formatLogsTime(value) {
+  if (!value) return "—"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString("zh-CN")
+}
+
+function openLogsForRun(requirementId, runId) {
+  const projectId = selectedProjectId || currentState?.projectId
+  if (!projectId) {
+    statusEl.textContent = "无法定位项目，无法打开日志监控"
+    statusEl.className = "badge bad"
+    return
+  }
+  logsPendingFocus = { requirementId, runId }
+  logsFilterRequirementId = requirementId
+  logsSelectedRequirementId = requirementId
+  logsSelectedRunId = runId
+  logsDetailTab = "stdout"
+  goToProject(projectId, "logs")
+}
+
+async function collectProjectLogRuns() {
+  const summaries = requirementSummaries || []
+  const nameById = new Map(summaries.map((item) => [item.requirementId, item.name || item.requirementId]))
+  const requirementIds = logsFilterRequirementId
+    ? [logsFilterRequirementId]
+    : summaries.map((item) => item.requirementId)
+  const collected = []
+  for (const requirementId of requirementIds) {
+    try {
+      const runs = await window.octopus.runs(requirementId)
+      for (const run of runs || []) {
+        collected.push({
+          ...run,
+          requirementName: nameById.get(requirementId) || requirementId,
+        })
+      }
+    } catch {
+      // 单个需求失败不阻断整页
+    }
+  }
+  collected.sort((a, b) => {
+    const aTime = Date.parse(a.startedAt || a.finishedAt || a.heartbeatAt || "") || 0
+    const bTime = Date.parse(b.startedAt || b.finishedAt || b.heartbeatAt || "") || 0
+    return bTime - aTime
+  })
+  return collected
+}
+
+function filterLogRuns(runs) {
+  return runs.filter((run) => {
+    if (logsFilterNodeId && run.nodeId !== logsFilterNodeId) return false
+    if (logsFilterStatus && run.status !== logsFilterStatus) return false
+    return true
+  })
+}
+
+async function renderProjectLogs(options = {}) {
+  const host = document.getElementById("projectLogs")
+  if (!host || !selectedProjectId) return
+  const silent = options.silent === true
+  const token = ++logsRenderToken
+
+  if (logsPendingFocus) {
+    logsFilterRequirementId = logsPendingFocus.requirementId
+    logsSelectedRequirementId = logsPendingFocus.requirementId
+    logsSelectedRunId = logsPendingFocus.runId
+    logsPendingFocus = null
+  }
+
+  if (!silent) {
+    host.innerHTML = `<div class="panel-card"><h3>日志监控</h3><p class="muted">加载运行记录…</p></div>`
+  }
+
+  try {
+    const allRuns = await collectProjectLogRuns()
+    if (token !== logsRenderToken) return
+    const filteredRuns = filterLogRuns(allRuns)
+    const nodeIds = [...new Set(allRuns.map((run) => run.nodeId).filter(Boolean))].sort()
+    const statusIds = [...new Set(allRuns.map((run) => run.status).filter(Boolean))]
+
+    if (logsSelectedRunId) {
+      const selected = filteredRuns.find((run) =>
+        run.id === logsSelectedRunId && (!logsSelectedRequirementId || run.requirementId === logsSelectedRequirementId))
+        || allRuns.find((run) => run.id === logsSelectedRunId)
+      if (selected) {
+        logsSelectedRequirementId = selected.requirementId
+        logsSelectedRunId = selected.id
+      } else if (!silent) {
+        logsSelectedRunId = ""
+        logsSelectedRequirementId = logsFilterRequirementId || ""
+      }
+    }
+    if (!logsSelectedRunId && filteredRuns[0]) {
+      logsSelectedRequirementId = filteredRuns[0].requirementId
+      logsSelectedRunId = filteredRuns[0].id
+    }
+
+    const eventsRequirementId = logsSelectedRequirementId || logsFilterRequirementId
+    logsLoadedEvents = eventsRequirementId
+      ? await window.octopus.events(eventsRequirementId, 0)
+      : []
+    if (token !== logsRenderToken) return
+
+    if (logsSelectedRunId && logsSelectedRequirementId && (logsDetailTab === "stdout" || logsDetailTab === "stderr")) {
+      logsSlice = await window.octopus.readRunLogs(logsSelectedRequirementId, logsSelectedRunId, {
+        stream: logsDetailTab,
+        maxBytes: 262144,
+      })
+    } else {
+      logsSlice = null
+    }
+    if (token !== logsRenderToken) return
+
+    const requirementOptions = [`<option value="">全部需求</option>`]
+      .concat((requirementSummaries || []).map((item) =>
+        `<option value="${escapeHtml(item.requirementId)}"${item.requirementId === logsFilterRequirementId ? " selected" : ""}>${escapeHtml(item.name || item.requirementId)}</option>`))
+      .join("")
+    const nodeOptions = [`<option value="">全部节点</option>`]
+      .concat(nodeIds.map((nodeId) =>
+        `<option value="${escapeHtml(nodeId)}"${nodeId === logsFilterNodeId ? " selected" : ""}>${escapeHtml(nodeId)}</option>`))
+      .join("")
+    const statusOptions = [`<option value="">全部状态</option>`]
+      .concat(statusIds.map((status) =>
+        `<option value="${escapeHtml(status)}"${status === logsFilterStatus ? " selected" : ""}>${escapeHtml(runStatusLabel(status))}</option>`))
+      .join("")
+
+    const runListMarkup = filteredRuns.length === 0
+      ? `<div class="empty-state">暂无匹配的运行记录。</div>`
+      : filteredRuns.map((run) => {
+        const selected = run.id === logsSelectedRunId && run.requirementId === logsSelectedRequirementId
+        return `
+          <button type="button" class="logs-run-item${selected ? " is-selected" : ""}" data-logs-run="${escapeHtml(logsRunKey(run.requirementId, run.id))}">
+            <div class="logs-run-meta">
+              <span class="badge ${run.status === "SUCCEEDED" ? "good" : run.status === "FAILED" || run.status === "TIMED_OUT" || run.status === "INTERRUPTED" ? "bad" : "warn"}">${escapeHtml(runStatusLabel(run.status))}</span>
+              ${run.forced ? `<span class="badge warn">强制</span>` : ""}
+              <span class="muted">${escapeHtml(formatLogsTime(run.startedAt || run.finishedAt || run.heartbeatAt))}</span>
+            </div>
+            <div><strong>${escapeHtml(run.requirementName || run.requirementId)}</strong> · ${escapeHtml(run.nodeId)}</div>
+            <div class="logs-run-id muted">${escapeHtml(run.id)}</div>
+            ${run.error ? `<div class="logs-run-error">${escapeHtml(run.error)}</div>` : ""}
+          </button>`
+      }).join("")
+
+    let detailBody = ""
+    if (!logsSelectedRunId) {
+      detailBody = `<p class="muted">选择左侧运行记录以查看日志。</p>`
+    } else if (logsDetailTab === "events") {
+      detailBody = logsLoadedEvents.length === 0
+        ? `<p class="muted">该需求暂无执行事件。</p>`
+        : `<div class="logs-events">${logsLoadedEvents.slice().reverse().map((event) => `
+            <div class="logs-event">
+              <div class="logs-event-head">
+                <span class="badge">${escapeHtml(event.type)}</span>
+                <span class="muted">${escapeHtml(formatLogsTime(event.createdAt))}</span>
+                ${event.nodeId ? `<span class="muted">${escapeHtml(event.nodeId)}</span>` : ""}
+                ${event.runId ? `<span class="muted">${escapeHtml(event.runId)}</span>` : ""}
+              </div>
+              <code>${escapeHtml(JSON.stringify(event.payload || {}))}</code>
+            </div>`).join("")}</div>`
+    } else if (!logsSlice?.exists) {
+      detailBody = `<p class="muted">日志尚未产生。</p>`
+    } else {
+      detailBody = `
+        <p class="logs-hint muted">${escapeHtml(logsDetailTab)} · ${logsSlice.size} 字节${logsSlice.truncated ? " · 已截断，可加载更多" : ""}</p>
+        <pre class="logs-console" id="logsConsole">${escapeHtml(logsSlice.content || "")}</pre>
+        <div class="logs-actions" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+          ${logsSlice.truncated ? `<button type="button" class="secondary" id="logsLoadMore">加载更多</button>` : ""}
+          <button type="button" class="secondary" id="logsJumpEnd">跳到末尾</button>
+        </div>`
+    }
+
+    host.innerHTML = `
+      <div class="panel-card">
+        <h3>日志监控</h3>
+        <p class="help">聚合项目内节点运行记录与 stdout/stderr，支持按需求/节点筛选与自动刷新。</p>
+        <div class="logs-toolbar">
+          <div class="field"><label for="logsFilterRequirement">需求</label><select id="logsFilterRequirement">${requirementOptions}</select></div>
+          <div class="field"><label for="logsFilterNode">节点</label><select id="logsFilterNode">${nodeOptions}</select></div>
+          <div class="field"><label for="logsFilterStatus">状态</label><select id="logsFilterStatus">${statusOptions}</select></div>
+          <div class="logs-actions">
+            <label><input type="checkbox" id="logsAutoRefresh"${logsAutoRefresh ? " checked" : ""} /> 自动刷新</label>
+            <button type="button" id="logsRefresh" class="secondary">刷新</button>
+          </div>
+        </div>
+        <div class="logs-layout">
+          <div>
+            <div class="detail-section-title">运行列表 · ${filteredRuns.length}</div>
+            <div class="logs-run-list">${runListMarkup}</div>
+          </div>
+          <div>
+            <div class="detail-section-title">详情${logsSelectedRunId ? ` · ${escapeHtml(logsSelectedRunId)}` : ""}</div>
+            <div class="logs-detail-tabs">
+              <button type="button" class="secondary${logsDetailTab === "stdout" ? " active" : ""}" data-logs-tab="stdout">stdout</button>
+              <button type="button" class="secondary${logsDetailTab === "stderr" ? " active" : ""}" data-logs-tab="stderr">stderr</button>
+              <button type="button" class="secondary${logsDetailTab === "events" ? " active" : ""}" data-logs-tab="events">事件</button>
+            </div>
+            <div id="logsDetailBody">${detailBody}</div>
+          </div>
+        </div>
+      </div>`
+
+    document.getElementById("logsFilterRequirement")?.addEventListener("change", (event) => {
+      logsFilterRequirementId = event.target.value || ""
+      logsFilterNodeId = ""
+      void renderProjectLogs()
+    })
+    document.getElementById("logsFilterNode")?.addEventListener("change", (event) => {
+      logsFilterNodeId = event.target.value || ""
+      void renderProjectLogs()
+    })
+    document.getElementById("logsFilterStatus")?.addEventListener("change", (event) => {
+      logsFilterStatus = event.target.value || ""
+      void renderProjectLogs()
+    })
+    document.getElementById("logsAutoRefresh")?.addEventListener("change", (event) => {
+      logsAutoRefresh = Boolean(event.target.checked)
+      ensureLogsPolling()
+    })
+    document.getElementById("logsRefresh")?.addEventListener("click", () => {
+      void renderProjectLogs()
+    })
+    for (const button of host.querySelectorAll("[data-logs-run]")) {
+      button.addEventListener("click", () => {
+        const key = button.getAttribute("data-logs-run") || ""
+        const sep = key.indexOf("::")
+        if (sep <= 0) return
+        logsSelectedRequirementId = key.slice(0, sep)
+        logsSelectedRunId = key.slice(sep + 2)
+        void renderProjectLogs()
+      })
+    }
+    for (const button of host.querySelectorAll("[data-logs-tab]")) {
+      button.addEventListener("click", () => {
+        logsDetailTab = button.getAttribute("data-logs-tab") || "stdout"
+        void renderProjectLogs()
+      })
+    }
+    document.getElementById("logsLoadMore")?.addEventListener("click", async () => {
+      if (!logsSelectedRequirementId || !logsSelectedRunId || !logsSlice) return
+      try {
+        const more = await window.octopus.readRunLogs(logsSelectedRequirementId, logsSelectedRunId, {
+          stream: logsDetailTab === "stderr" ? "stderr" : "stdout",
+          offset: logsSlice.nextOffset,
+          maxBytes: 262144,
+        })
+        logsSlice = {
+          ...more,
+          content: `${logsSlice.content || ""}${more.content || ""}`,
+          offset: logsSlice.offset,
+        }
+        const consoleEl = document.getElementById("logsConsole")
+        if (consoleEl) consoleEl.textContent = logsSlice.content || ""
+        const hint = host.querySelector(".logs-hint")
+        if (hint) {
+          hint.textContent = `${logsDetailTab} · ${more.size} 字节${more.truncated ? " · 已截断，可加载更多" : ""}`
+        }
+        if (!more.truncated) document.getElementById("logsLoadMore")?.remove()
+      } catch (error) {
+        showError(error)
+      }
+    })
+    document.getElementById("logsJumpEnd")?.addEventListener("click", async () => {
+      if (!logsSelectedRequirementId || !logsSelectedRunId) return
+      try {
+        const probe = await window.octopus.readRunLogs(logsSelectedRequirementId, logsSelectedRunId, {
+          stream: logsDetailTab === "stderr" ? "stderr" : "stdout",
+          offset: 0,
+          maxBytes: 1,
+        })
+        const start = Math.max(0, probe.size - 262144)
+        logsSlice = await window.octopus.readRunLogs(logsSelectedRequirementId, logsSelectedRunId, {
+          stream: logsDetailTab === "stderr" ? "stderr" : "stdout",
+          offset: start,
+          maxBytes: 262144,
+        })
+        const consoleEl = document.getElementById("logsConsole")
+        if (consoleEl) {
+          consoleEl.textContent = logsSlice.content || ""
+          consoleEl.scrollTop = consoleEl.scrollHeight
+        }
+      } catch (error) {
+        showError(error)
+      }
+    })
+
+    ensureLogsPolling()
+  } catch (error) {
+    if (token !== logsRenderToken) return
+    host.innerHTML = `<div class="panel-card"><h3>日志监控</h3><p class="bad">${escapeHtml(readableError(error))}</p></div>`
+    stopLogsPolling()
+  }
+}
+
 async function loadBrdSettingsForm(onPromptsLoaded) {
   if (!selectedProjectId || !window.octopus.getProjectBrdDesignConfig) return
   try {
@@ -2050,7 +2381,17 @@ function renderProjectPage() {
   if (!requirementCardsEl || !projectEmptyEl) return
   if (window.OctopusGantt?.isDragging?.()) return
   parkHubGantt()
-  const tabTitles = { board: "看板", list: "列表", table: "表格", gantt: "甘特", versions: "版本", overview: "概览", settings: "设置" }
+  if (projectTab !== "logs") stopLogsPolling()
+  const tabTitles = {
+    board: "看板",
+    list: "列表",
+    table: "表格",
+    gantt: "甘特",
+    versions: "版本",
+    logs: "日志",
+    overview: "概览",
+    settings: "设置",
+  }
   if (projectPageTitleEl) {
     projectPageTitleEl.textContent = currentProject
       ? `${currentProject.name || currentProject.projectId} · ${tabTitles[projectTab] || "看板"}`
@@ -2063,6 +2404,7 @@ function renderProjectPage() {
   const kanbanEmptyEl = document.getElementById("kanbanEmpty")
   const projectSettingsEl = document.getElementById("projectSettings")
   const projectVersionsEl = document.getElementById("projectVersions")
+  const projectLogsEl = document.getElementById("projectLogs")
   const requirementTableEl = document.getElementById("requirementTable")
   const projectOverviewEl = document.getElementById("projectOverview")
   const createRequirementPanel = document.getElementById("createRequirementPanel")
@@ -2071,16 +2413,17 @@ function renderProjectPage() {
   if (kanbanBoardEl) kanbanBoardEl.hidden = projectTab !== "board"
   if (kanbanEmptyEl) kanbanEmptyEl.hidden = projectTab !== "board"
   if (requirementCardsEl) requirementCardsEl.hidden = projectTab !== "list"
-  if (projectEmptyEl) projectEmptyEl.hidden = ["settings", "gantt", "versions", "table", "overview"].includes(projectTab)
+  if (projectEmptyEl) projectEmptyEl.hidden = ["settings", "gantt", "versions", "logs", "table", "overview"].includes(projectTab)
   if (projectSettingsEl) projectSettingsEl.hidden = projectTab !== "settings"
   if (projectVersionsEl) projectVersionsEl.hidden = projectTab !== "versions"
+  if (projectLogsEl) projectLogsEl.hidden = projectTab !== "logs"
   if (requirementTableEl) requirementTableEl.hidden = projectTab !== "table"
   if (projectOverviewEl) projectOverviewEl.hidden = projectTab !== "overview"
   if (projectGanttHostEl) {
     projectGanttHostEl.hidden = projectTab !== "gantt"
     if (projectTab !== "gantt" && projectGanttMounted) unmountProjectGantt()
   }
-  if (createRequirementPanel) createRequirementPanel.hidden = ["settings", "versions", "table", "overview"].includes(projectTab)
+  if (createRequirementPanel) createRequirementPanel.hidden = ["settings", "versions", "logs", "table", "overview"].includes(projectTab)
   if (settingsPanel) settingsPanel.hidden = projectTab !== "settings"
 
   if (projectTab === "board") {
@@ -2107,6 +2450,10 @@ function renderProjectPage() {
   }
   if (projectTab === "versions") {
     void renderProjectVersions()
+    return
+  }
+  if (projectTab === "logs") {
+    void renderProjectLogs()
     return
   }
 
@@ -3138,6 +3485,7 @@ async function showNode(nodeId) {
             <div class="run-id">${escapeHtml(run.id)}</div>
             ${run.error ? `<div class="run-error">${escapeHtml(run.error)}</div>` : ""}
             <div class="actions">
+              <button data-view-logs="${escapeHtml(run.id)}" class="secondary">查看日志</button>
               <button data-retry="${escapeHtml(run.id)}" class="secondary">重试</button>
               <button data-cancel="${escapeHtml(run.id)}" class="danger">取消</button>
             </div>
@@ -3162,6 +3510,11 @@ async function showNode(nodeId) {
     copyPathButton.remove()
   }
 
+  detailsEl.querySelectorAll("[data-view-logs]").forEach((button) => {
+    button.onclick = () => {
+      openLogsForRun(selectedRequirement, button.dataset.viewLogs)
+    }
+  })
   detailsEl.querySelectorAll("[data-retry]").forEach((button) => {
     button.onclick = async () => {
       try {

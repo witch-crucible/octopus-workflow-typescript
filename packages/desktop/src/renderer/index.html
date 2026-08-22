@@ -2133,6 +2133,130 @@
         background: transparent;
       }
 
+      /* —— Project logs monitor —— */
+      .logs-layout {
+        display: grid;
+        grid-template-columns: minmax(280px, 1.1fr) minmax(320px, 1.4fr);
+        gap: 12px;
+        align-items: stretch;
+      }
+      .logs-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: end;
+        margin-bottom: 12px;
+      }
+      .logs-toolbar .field {
+        margin: 0;
+        min-width: 140px;
+      }
+      .logs-toolbar label {
+        display: block;
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
+        margin-bottom: 4px;
+      }
+      .logs-toolbar select,
+      .logs-toolbar input[type="search"] {
+        width: 100%;
+      }
+      .logs-toolbar .logs-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .logs-run-list {
+        max-height: min(70vh, 720px);
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .logs-run-item {
+        text-align: left;
+        border: 1px solid var(--el-border-color-lighter);
+        background: var(--el-bg-color);
+        border-radius: 8px;
+        padding: 10px 12px;
+        cursor: pointer;
+      }
+      .logs-run-item:hover {
+        border-color: var(--el-color-primary-light-5);
+      }
+      .logs-run-item.is-selected {
+        border-color: var(--el-color-primary);
+        background: var(--el-color-primary-light-9);
+      }
+      .logs-run-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+      .logs-run-id,
+      .logs-run-error {
+        font-size: 12px;
+        word-break: break-all;
+      }
+      .logs-run-error { color: var(--el-color-danger); margin-top: 4px; }
+      .logs-detail-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+      }
+      .logs-detail-tabs button.active {
+        background: var(--el-color-primary-light-9);
+        color: var(--el-color-primary);
+        border-color: var(--el-color-primary-light-5);
+      }
+      .logs-console {
+        margin: 0;
+        padding: 12px;
+        min-height: 280px;
+        max-height: min(60vh, 640px);
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        background: var(--el-fill-color-darker, #1e1e1e);
+        color: #e8e8e8;
+        border-radius: 8px;
+      }
+      [data-theme="light"] .logs-console {
+        background: #1f2937;
+        color: #f3f4f6;
+      }
+      .logs-events {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: min(60vh, 640px);
+        overflow: auto;
+      }
+      .logs-event {
+        font-size: 12px;
+        padding: 8px 10px;
+        border: 1px solid var(--el-border-color-extra-light);
+        border-radius: 6px;
+        background: var(--el-fill-color-blank, var(--el-bg-color));
+      }
+      .logs-event-head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+      .logs-hint { font-size: 12px; margin: 0 0 8px; }
+      @media (max-width: 960px) {
+        .logs-layout { grid-template-columns: 1fr; }
+      }
+
       /* —— Kanban board —— */
       .kanban-board-container {
         min-height: 200px;
@@ -2352,6 +2476,7 @@
             <button type="button" class="project-tab-btn" data-tab="table" aria-selected="false">表格</button>
             <button type="button" class="project-tab-btn" data-tab="gantt" aria-selected="false">甘特</button>
             <button type="button" class="project-tab-btn" data-tab="versions" aria-selected="false">版本</button>
+            <button type="button" class="project-tab-btn" data-tab="logs" aria-selected="false">日志</button>
             <button type="button" class="project-tab-btn" data-tab="overview" aria-selected="false">概览</button>
             <button type="button" class="project-tab-btn" data-tab="settings" aria-selected="false">设置</button>
           </div>
@@ -2366,6 +2491,7 @@
           <div id="requirementTable" hidden></div>
           <div id="projectGanttHost" class="project-gantt-host" hidden></div>
           <div id="projectVersions" hidden></div>
+          <div id="projectLogs" hidden></div>
           <div id="projectOverview" hidden></div>
           <div id="projectSettings" hidden></div>
           <div id="hubGanttPark">

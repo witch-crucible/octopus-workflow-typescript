@@ -39,7 +39,10 @@ export interface OctopusWebServer {
 }
 
 class WebError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
     super(message)
   }
 }
@@ -65,7 +68,7 @@ function optionalString(value: unknown): string | undefined {
 }
 
 function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {}
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -74,12 +77,11 @@ async function sleep(ms: number): Promise<void> {
 
 async function findListenerPid(host: string, port: number): Promise<number | undefined> {
   try {
-    const { stdout } = await execFileAsync("lsof", [
-      "-nP",
-      `-iTCP@${host}:${port}`,
-      "-sTCP:LISTEN",
-      "-t",
-    ], { encoding: "utf-8" })
+    const { stdout } = await execFileAsync(
+      "lsof",
+      ["-nP", `-iTCP@${host}:${port}`, "-sTCP:LISTEN", "-t"],
+      { encoding: "utf-8" },
+    )
     const pid = Number.parseInt(stdout.trim().split(/\n/, 1)[0] ?? "", 10)
     return Number.isInteger(pid) && pid > 0 ? pid : undefined
   } catch {
@@ -108,7 +110,7 @@ async function isOctopusWebServer(host: string, port: number): Promise<boolean> 
       signal: AbortSignal.timeout(800),
     })
     if (!response.ok) return false
-    const body = await response.json() as { result?: unknown }
+    const body = (await response.json()) as { result?: unknown }
     return Array.isArray(body.result)
   } catch {
     return false
@@ -142,14 +144,16 @@ export async function stopExistingOctopusWeb(host: string, port: number): Promis
   if (pid === undefined || pid === process.pid) return false
 
   const command = await processCommand(pid)
-  const ours = await isOctopusWebServer(host, port) || Boolean(command?.includes("dist/web.js"))
+  const ours = (await isOctopusWebServer(host, port)) || Boolean(command?.includes("dist/web.js"))
   if (!ours) {
     const occupant = command ? `${pid}（${command}）` : String(pid)
-    throw new Error(`${host}:${port} 已被进程 ${occupant} 占用，可设置 OCTOPUS_WEB_PORT 换端口，或结束该进程后重试`)
+    throw new Error(
+      `${host}:${port} 已被进程 ${occupant} 占用，可设置 OCTOPUS_WEB_PORT 换端口，或结束该进程后重试`,
+    )
   }
 
   terminatePid(pid, "SIGTERM")
-  if (!await waitUntilPidGone(pid, 2000)) {
+  if (!(await waitUntilPidGone(pid, 2000))) {
     terminatePid(pid, "SIGKILL")
     await waitUntilPidGone(pid, 1000)
   }
@@ -180,10 +184,14 @@ async function readRequest(request: IncomingMessage): Promise<WebRequest> {
   }
 }
 
-export async function createOctopusWebServer(options: OctopusWebServerOptions = {}): Promise<OctopusWebServer> {
+export async function createOctopusWebServer(
+  options: OctopusWebServerOptions = {},
+): Promise<OctopusWebServer> {
   const host = options.host ?? "127.0.0.1"
   const requestedPort = options.port ?? 4173
-  const storeDir = resolve(options.storeDir ?? process.env["OCTOPUS_STORE_DIR"] ?? join(repositoryRoot, ".octo"))
+  const storeDir = resolve(
+    options.storeDir ?? process.env["OCTOPUS_STORE_DIR"] ?? join(repositoryRoot, ".octo"),
+  )
   const rendererDir = resolve(options.rendererDir ?? join(moduleDirectory, "renderer"))
   const defaultProjectRoot = resolve(options.projectRoot ?? repositoryRoot)
   const config = { ...loadConfig(storeDir), storeDir }
@@ -192,7 +200,9 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
   const invoke = async (method: string, args: unknown[]): Promise<unknown> => {
     const projectId = (): string => requiredString(args[0], "projectId")
     const requirementId = (): string => requiredString(args[0], "requirementId")
-    const schedulePatch = (raw: unknown): { plannedStart?: string | null; plannedEnd?: string | null } => {
+    const schedulePatch = (
+      raw: unknown,
+    ): { plannedStart?: string | null; plannedEnd?: string | null } => {
       const schedule = asObject(raw)
       const patch: { plannedStart?: string | null; plannedEnd?: string | null } = {}
       if (schedule["plannedStart"] === null || typeof schedule["plannedStart"] === "string") {
@@ -214,7 +224,10 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
       case "listProjectSummaries":
         return engine.listProjectSummaries()
       case "createProject": {
-        const project = engine.createProject(requiredString(args[0], "name"), optionalString(args[1]))
+        const project = engine.createProject(
+          requiredString(args[0], "name"),
+          optionalString(args[1]),
+        )
         return {
           projectId: project.projectId,
           name: project.name,
@@ -228,7 +241,9 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
         const patch = asObject(args[1])
         const project = engine.updateProjectMeta(projectId(), {
           ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
-          ...(typeof patch["description"] === "string" ? { description: patch["description"] } : {}),
+          ...(typeof patch["description"] === "string"
+            ? { description: patch["description"] }
+            : {}),
         })
         return {
           projectId: project.projectId,
@@ -275,7 +290,9 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
         const patch = asObject(args[1])
         const state = engine.updateRequirement(requirementId(), {
           ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
-          ...(typeof patch["description"] === "string" ? { description: patch["description"] } : {}),
+          ...(typeof patch["description"] === "string"
+            ? { description: patch["description"] }
+            : {}),
           ...(patch["owner"] === null || typeof patch["owner"] === "string"
             ? { owner: patch["owner"] as string | null }
             : {}),
@@ -344,7 +361,9 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
         const patch = asObject(args[2])
         return engine.updateMilestone(requirementId(), milestoneId, {
           ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
-          ...(patch["date"] === null || typeof patch["date"] === "string" ? { date: patch["date"] as string | null } : {}),
+          ...(patch["date"] === null || typeof patch["date"] === "string"
+            ? { date: patch["date"] as string | null }
+            : {}),
           ...(patch["phase"] === null || typeof patch["phase"] === "string"
             ? { phase: patch["phase"] as never }
             : {}),
@@ -391,7 +410,20 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
       case "runs":
         return engine.execution.listRuns(requirementId(), optionalString(args[1]))
       case "events":
-        return engine.execution.eventsAfter(requirementId(), typeof args[1] === "number" ? args[1] : 0)
+        return engine.execution.eventsAfter(
+          requirementId(),
+          typeof args[1] === "number" ? args[1] : 0,
+        )
+      case "readRunLogs": {
+        const opts = asObject(args[2])
+        return engine.execution.readRunLogs(requirementId(), requiredString(args[1], "runId"), {
+          ...(opts["stream"] === "stdout" || opts["stream"] === "stderr"
+            ? { stream: opts["stream"] }
+            : {}),
+          ...(typeof opts["offset"] === "number" ? { offset: opts["offset"] } : {}),
+          ...(typeof opts["maxBytes"] === "number" ? { maxBytes: opts["maxBytes"] } : {}),
+        })
+      }
       case "bindRequirementTask": {
         const opts = asObject(args[1])
         return engine.bindRequirementTask(requirementId(), {
@@ -442,13 +474,20 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
       case "setProjectOmniPlanMeta": {
         const opts = asObject(args[1])
         return engine.setProjectOmniPlanMeta(projectId(), {
-          ...(typeof opts["omniplanFolder"] === "string" ? { omniplanFolder: opts["omniplanFolder"] } : {}),
-          ...(typeof opts["omniplanIdMap"] === "string" ? { omniplanIdMap: opts["omniplanIdMap"] } : {}),
-          ...(typeof opts["omniplanFileName"] === "string" ? { omniplanFileName: opts["omniplanFileName"] } : {}),
+          ...(typeof opts["omniplanFolder"] === "string"
+            ? { omniplanFolder: opts["omniplanFolder"] }
+            : {}),
+          ...(typeof opts["omniplanIdMap"] === "string"
+            ? { omniplanIdMap: opts["omniplanIdMap"] }
+            : {}),
+          ...(typeof opts["omniplanFileName"] === "string"
+            ? { omniplanFileName: opts["omniplanFileName"] }
+            : {}),
         })
       }
       case "setProjectDefaultColor": {
-        const color = args[1] === null || typeof args[1] === "string" ? (args[1] as string | null) : null
+        const color =
+          args[1] === null || typeof args[1] === "string" ? (args[1] as string | null) : null
         return engine.setProjectDefaultColor(projectId(), color)
       }
       case "bindProjectTeambitionRepo": {
@@ -464,14 +503,18 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
         return engine.unbindProjectTeambitionRepo(projectId())
       case "listProjectVersions": {
         const opts = asObject(args[1])
-        return engine.listProjectVersions(projectId(), opts["refresh"] === true ? { refresh: true } : undefined)
+        return engine.listProjectVersions(
+          projectId(),
+          opts["refresh"] === true ? { refresh: true } : undefined,
+        )
       }
       case "syncProjectVersions":
         return engine.syncProjectVersions(projectId())
       case "getProjectVersion":
         return engine.getProjectVersion(projectId(), requiredString(args[1], "versionId"))
       case "setProjectDefaultVersion": {
-        const versionId = args[1] === null || typeof args[1] === "string" ? (args[1] as string | null) : null
+        const versionId =
+          args[1] === null || typeof args[1] === "string" ? (args[1] as string | null) : null
         return engine.setProjectDefaultVersion(projectId(), versionId)
       }
       case "bindRequirementVersion":
@@ -492,9 +535,11 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
       case "setProjectBrdDesignConfig": {
         const opts = asObject(args[1])
         const sourcesRaw = opts["sources"]
-        const sources = sourcesRaw && typeof sourcesRaw === "object" ? asObject(sourcesRaw) : undefined
+        const sources =
+          sourcesRaw && typeof sourcesRaw === "object" ? asObject(sourcesRaw) : undefined
         const promptsRaw = opts["prompts"]
-        const prompts = promptsRaw && typeof promptsRaw === "object" ? asObject(promptsRaw) : undefined
+        const prompts =
+          promptsRaw && typeof promptsRaw === "object" ? asObject(promptsRaw) : undefined
         const promptPatch = prompts
           ? Object.fromEntries(
               (["summarize-sources", "generate", "check"] as const)
@@ -503,10 +548,13 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
                   const value = prompts[id]
                   if (value === null) return [id, null]
                   const item = value && typeof value === "object" ? asObject(value) : {}
-                  return [id, {
-                    ...(typeof item["system"] === "string" ? { system: item["system"] } : {}),
-                    ...(typeof item["user"] === "string" ? { user: item["user"] } : {}),
-                  }]
+                  return [
+                    id,
+                    {
+                      ...(typeof item["system"] === "string" ? { system: item["system"] } : {}),
+                      ...(typeof item["user"] === "string" ? { user: item["user"] } : {}),
+                    },
+                  ]
                 }),
             )
           : undefined
@@ -529,12 +577,16 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
                   ...(typeof sources["miniprogramBuildArtifact"] === "string"
                     ? { miniprogramBuildArtifact: sources["miniprogramBuildArtifact"] }
                     : {}),
-                  ...(typeof sources["websiteUrl"] === "string" ? { websiteUrl: sources["websiteUrl"] } : {}),
+                  ...(typeof sources["websiteUrl"] === "string"
+                    ? { websiteUrl: sources["websiteUrl"] }
+                    : {}),
                 },
               }
             : {}),
           ...(typeof opts["brdSpecPath"] === "string" ? { brdSpecPath: opts["brdSpecPath"] } : {}),
-          ...(typeof opts["brdOutputPath"] === "string" ? { brdOutputPath: opts["brdOutputPath"] } : {}),
+          ...(typeof opts["brdOutputPath"] === "string"
+            ? { brdOutputPath: opts["brdOutputPath"] }
+            : {}),
           ...(promptPatch ? { prompts: promptPatch } : {}),
         })
       }
@@ -549,7 +601,8 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
       }
       case "assignNode": {
         const nodeId = requiredString(args[1], "nodeId")
-        const assignedTo = args[2] === null || typeof args[2] === "string" ? (args[2] as string | null) : null
+        const assignedTo =
+          args[2] === null || typeof args[2] === "string" ? (args[2] as string | null) : null
         const state = engine.assignNode(requirementId(), nodeId, assignedTo)
         const step = state.steps.find((item) => item.id === nodeId)
         return { requirementId: state.requirementId, nodeId, assignedTo: step?.assignedTo ?? null }
@@ -577,7 +630,10 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
     ["/gantt.js", { file: "gantt.js", type: "text/javascript; charset=utf-8" }],
     ["/browser-api.js", { file: "browser-api.js", type: "text/javascript; charset=utf-8" }],
     ["/element-plus.js", { file: "element-plus.js", type: "text/javascript; charset=utf-8" }],
-    ["/element-plus-adapter.js", { file: "element-plus-adapter.js", type: "text/javascript; charset=utf-8" }],
+    [
+      "/element-plus-adapter.js",
+      { file: "element-plus-adapter.js", type: "text/javascript; charset=utf-8" },
+    ],
     ["/element-plus.css", { file: "element-plus.css", type: "text/css; charset=utf-8" }],
     ["/app-icon.png", { file: "app-icon.png", type: "image/png" }],
     ["/logo.png", { file: "logo.png", type: "image/png" }],
@@ -625,27 +681,29 @@ export async function createOctopusWebServer(options: OctopusWebServerOptions = 
     get url() {
       return currentUrl
     },
-    listen: () => new Promise((resolveListen, reject) => {
-      const onError = (error: Error): void => reject(error)
-      server.once("error", onError)
-      server.listen(requestedPort, host, () => {
-        server.off("error", onError)
-        const address = server.address()
-        if (!address || typeof address === "string") {
-          reject(new Error("无法确定 Web 服务监听地址"))
+    listen: () =>
+      new Promise((resolveListen, reject) => {
+        const onError = (error: Error): void => reject(error)
+        server.once("error", onError)
+        server.listen(requestedPort, host, () => {
+          server.off("error", onError)
+          const address = server.address()
+          if (!address || typeof address === "string") {
+            reject(new Error("无法确定 Web 服务监听地址"))
+            return
+          }
+          currentUrl = `http://${host}:${address.port}`
+          resolveListen(currentUrl)
+        })
+      }),
+    close: () =>
+      new Promise((resolveClose, reject) => {
+        if (!server.listening) {
+          resolveClose()
           return
         }
-        currentUrl = `http://${host}:${address.port}`
-        resolveListen(currentUrl)
-      })
-    }),
-    close: () => new Promise((resolveClose, reject) => {
-      if (!server.listening) {
-        resolveClose()
-        return
-      }
-      server.close((error) => error ? reject(error) : resolveClose())
-    }),
+        server.close((error) => (error ? reject(error) : resolveClose()))
+      }),
   }
 }
 
@@ -661,7 +719,9 @@ if (entryPath === fileURLToPath(import.meta.url)) {
     const url = await server.listen()
     console.log(`🐙 Octopus Web 已启动：${url}`)
   })().catch((error: unknown) => {
-    console.error(`❌ Octopus Web 启动失败：${error instanceof Error ? error.message : String(error)}`)
+    console.error(
+      `❌ Octopus Web 启动失败：${error instanceof Error ? error.message : String(error)}`,
+    )
     process.exit(1)
   })
 }

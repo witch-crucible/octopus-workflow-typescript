@@ -37,7 +37,8 @@ if (!window.octopus) {
     createProject: (name, description) => invoke("createProject", name, description),
     getProject: (projectId) => invoke("getProject", projectId),
     updateProjectMeta: (projectId, patch) => invoke("updateProjectMeta", projectId, patch),
-    setProjectDefaultColor: (projectId, color) => invoke("setProjectDefaultColor", projectId, color),
+    setProjectDefaultColor: (projectId, color) =>
+      invoke("setProjectDefaultColor", projectId, color),
     deleteProject: (projectId) => invoke("deleteProject", projectId),
     bindProjectTeambition: (projectId, opts) => invoke("bindProjectTeambition", projectId, opts),
     unbindProjectTeambition: (projectId) => invoke("unbindProjectTeambition", projectId),
@@ -73,22 +74,29 @@ if (!window.octopus) {
     runNode: (requirementId, nodeId, force) => invoke("runNode", requirementId, nodeId, force),
     runWorkflow: (requirementId, force, maxParallel) =>
       invoke("runWorkflow", requirementId, force, maxParallel),
-    completeNode: (requirementId, nodeId, force) => invoke("completeNode", requirementId, nodeId, force),
+    completeNode: (requirementId, nodeId, force) =>
+      invoke("completeNode", requirementId, nodeId, force),
     cancelRun: (requirementId, runId) => invoke("cancelRun", requirementId, runId),
     retryRun: (requirementId, runId, force) => invoke("retryRun", requirementId, runId, force),
     runs: (requirementId, nodeId) => invoke("runs", requirementId, nodeId),
     events: (requirementId, sequence) => invoke("events", requirementId, sequence),
-    bindRequirementTask: (requirementId, opts) => invoke("bindRequirementTask", requirementId, opts),
+    readRunLogs: (requirementId, runId, opts) => invoke("readRunLogs", requirementId, runId, opts),
+    bindRequirementTask: (requirementId, opts) =>
+      invoke("bindRequirementTask", requirementId, opts),
     unbindRequirementTask: (requirementId) => invoke("unbindRequirementTask", requirementId),
-    getRequirementTeambitionStatus: (requirementId) => invoke("getRequirementTeambitionStatus", requirementId),
+    getRequirementTeambitionStatus: (requirementId) =>
+      invoke("getRequirementTeambitionStatus", requirementId),
     updateRequirementTeambitionStatus: (requirementId, statusId, operatorId) =>
       invoke("updateRequirementTeambitionStatus", requirementId, statusId, operatorId),
 
     health: () => invoke("health"),
-    resolveNodeWorkspace: (requirementId, nodeId) => invoke("resolveNodeWorkspace", requirementId, nodeId),
+    resolveNodeWorkspace: (requirementId, nodeId) =>
+      invoke("resolveNodeWorkspace", requirementId, nodeId),
     exportTasks: async (requirementId) => {
       const result = await invoke("exportTasks", requirementId)
-      const blob = new Blob([`${JSON.stringify(result.document, null, 2)}\n`], { type: "application/json" })
+      const blob = new Blob([`${JSON.stringify(result.document, null, 2)}\n`], {
+        type: "application/json",
+      })
       const link = document.createElement("a")
       link.href = URL.createObjectURL(blob)
       link.download = `${requirementId}-tasks.json`
@@ -104,32 +112,41 @@ if (!window.octopus) {
         ? await window.OctopusElementPlus.confirm(message, "导入任务")
         : window.confirm(message)
       if (!confirmed) return { canceled: true }
-      return { canceled: false, ...await invoke("importTasks", requirementId, document) }
+      return { canceled: false, ...(await invoke("importTasks", requirementId, document)) }
     },
 
     // OmniPlan
     exportProjectOmniPlan: (projectId, opts) => invoke("exportProjectOmniPlan", projectId, opts),
     importProjectOmniPlan: (projectId, opts) => invoke("importProjectOmniPlan", projectId, opts),
-    setProjectOmniPlanMeta: (projectId, patch) => invoke("setProjectOmniPlanMeta", projectId, patch),
-    bindProjectTeambitionRepo: (projectId, opts) => invoke("bindProjectTeambitionRepo", projectId, opts),
+    setProjectOmniPlanMeta: (projectId, patch) =>
+      invoke("setProjectOmniPlanMeta", projectId, patch),
+    bindProjectTeambitionRepo: (projectId, opts) =>
+      invoke("bindProjectTeambitionRepo", projectId, opts),
     unbindProjectTeambitionRepo: (projectId) => invoke("unbindProjectTeambitionRepo", projectId),
     listProjectVersions: (projectId, opts) => invoke("listProjectVersions", projectId, opts),
     syncProjectVersions: (projectId) => invoke("syncProjectVersions", projectId),
     getProjectVersion: (projectId, versionId) => invoke("getProjectVersion", projectId, versionId),
-    setProjectDefaultVersion: (projectId, versionId) => invoke("setProjectDefaultVersion", projectId, versionId),
-    bindRequirementVersion: (requirementId, versionId) => invoke("bindRequirementVersion", requirementId, versionId),
+    setProjectDefaultVersion: (projectId, versionId) =>
+      invoke("setProjectDefaultVersion", projectId, versionId),
+    bindRequirementVersion: (requirementId, versionId) =>
+      invoke("bindRequirementVersion", requirementId, versionId),
     unbindRequirementVersion: (requirementId) => invoke("unbindRequirementVersion", requirementId),
-    getRequirementVersionBinding: (requirementId) => invoke("getRequirementVersionBinding", requirementId),
-    listVersionRequirements: (projectId, versionId) => invoke("listVersionRequirements", projectId, versionId),
-    updateVersionNote: (projectId, versionId, note) => invoke("updateVersionNote", projectId, versionId, note),
+    getRequirementVersionBinding: (requirementId) =>
+      invoke("getRequirementVersionBinding", requirementId),
+    listVersionRequirements: (projectId, versionId) =>
+      invoke("listVersionRequirements", projectId, versionId),
+    updateVersionNote: (projectId, versionId, note) =>
+      invoke("updateVersionNote", projectId, versionId, note),
 
     // BRD 设计
     getProjectBrdDesignConfig: (projectId) => invoke("getProjectBrdDesignConfig", projectId),
-    setProjectBrdDesignConfig: (projectId, patch) => invoke("setProjectBrdDesignConfig", projectId, patch),
+    setProjectBrdDesignConfig: (projectId, patch) =>
+      invoke("setProjectBrdDesignConfig", projectId, patch),
     previewBrdPrompts: (projectId, requirementId, opts) =>
       invoke("previewBrdPrompts", projectId, requirementId, opts),
 
-    assignNode: (requirementId, nodeId, assignedTo) => invoke("assignNode", requirementId, nodeId, assignedTo),
+    assignNode: (requirementId, nodeId, assignedTo) =>
+      invoke("assignNode", requirementId, nodeId, assignedTo),
     listMyWork: (identity, projectId) => invoke("listMyWork", identity, projectId),
     getProjectOverview: (projectId) => invoke("getProjectOverview", projectId),
     getIdentity: () => invoke("getIdentity"),
