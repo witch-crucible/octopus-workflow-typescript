@@ -35,6 +35,41 @@
   },
   "overrides": [
     {
+      "includes": [
+        "packages/desktop/vite.renderer.config.ts",
+        "packages/desktop/src/renderer/main.tsx",
+        "packages/desktop/src/renderer/vite-env.d.ts",
+        "packages/desktop/src/renderer/components/ui/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noDefaultExport": "off",
+            "useImportType": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "packages/desktop/src/renderer/views/**",
+        "packages/desktop/src/renderer/visualizations/**"
+      ],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noStaticElementInteractions": "off",
+            "useKeyWithClickEvents": "off",
+            "useSemanticElements": "off",
+            "noLabelWithoutControl": "off"
+          },
+          "correctness": {
+            "useExhaustiveDependencies": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["**/*.test.ts"],
       "linter": {
         "rules": {

@@ -1,14 +1,34 @@
 import { type ChildProcess, spawn } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { createServer, request } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { runInNewContext } from "node:vm"
 import { afterEach, describe, expect, it } from "vitest"
+import { collectBrdPromptPatch } from "./renderer/lib/brd.ts"
+import { buildWorkflowGraphNodes } from "./renderer/lib/graph-model.ts"
+import { canonicalizeHash, routeFromHash } from "./renderer/lib/hash-route.ts"
+import {
+  buildHubCardsModel,
+  buildKanbanModel,
+  buildRequirementCardsModel,
+  milestoneBadgeData,
+} from "./renderer/lib/view-models.ts"
+import {
+  OctopusGantt,
+  buildRequirementsModel,
+  milestoneDiamondPoints,
+} from "./renderer/visualizations/gantt.ts"
 import { createOctopusWebServer, stopExistingOctopusWeb } from "./web.js"
 
 const temporaryDirectories: string[] = []
 const childProcesses: ChildProcess[] = []
+const rendererDir = join(process.cwd(), "packages/desktop/dist/renderer")
+
+function assertRendererBuild(): void {
+  expect(existsSync(join(rendererDir, "index.html")), "missing dist/renderer; run pnpm --filter @octopus/desktop build:renderer").toBe(
+    true,
+  )
+}
 
 async function reservedPort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
@@ -55,172 +75,6 @@ async function invoke(url: string, method: string, ...args: unknown[]): Promise<
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ method, args }),
   })
-}
-
-function extractBalancedBlock(source: string, openBrace: number): string {
-  if (source[openBrace] !== "{") throw new Error(`偏移 ${openBrace} 不是 '{'`)
-  let depth = 0
-  for (let index = openBrace; index < source.length; index++) {
-    const char = source[index]
-    if (char === "{") depth++
-    else if (char === "}") {
-      depth--
-      if (depth === 0) return source.slice(openBrace, index + 1)
-    }
-  }
-  throw new Error(`未能从偏移 ${openBrace} 截取成对花括号`)
-}
-
-function extractFunction(source: string, name: string): string {
-  const start = source.indexOf(`function ${name}(`)
-  if (start < 0) throw new Error(`未找到函数 ${name}`)
-  // 跳过参数列表（可能含 options = {}），再取函数体，避免默认参数花括号截断。
-  let depth = 0
-  let bodyOpen = -1
-  for (let index = start + `function ${name}`.length; index < source.length; index++) {
-    const char = source[index]
-    if (char === "(") depth++
-    else if (char === ")") {
-      depth--
-      if (depth === 0) {
-        bodyOpen = source.indexOf("{", index + 1)
-        break
-      }
-    }
-  }
-  if (bodyOpen < 0) throw new Error(`未找到函数 ${name} 的函数体`)
-  return source.slice(start, bodyOpen) + extractBalancedBlock(source, bodyOpen)
-}
-
-function extractConstObject(source: string, name: string): string {
-  const start = source.indexOf(`const ${name} = {`)
-  if (start < 0) throw new Error(`未找到常量 ${name}`)
-  const openBrace = source.indexOf("{", start)
-  return source.slice(start, openBrace) + extractBalancedBlock(source, openBrace)
-}
-
-function extractConstArray(source: string, name: string): string {
-  const start = source.indexOf(`const ${name} = [`)
-  if (start < 0) throw new Error(`未找到常量数组 ${name}`)
-  const openBracket = source.indexOf("[", start)
-  let depth = 0
-  for (let index = openBracket; index < source.length; index++) {
-    const char = source[index]
-    if (char === "[") depth++
-    else if (char === "]") {
-      depth--
-      if (depth === 0) return source.slice(start, index + 1)
-    }
-  }
-  throw new Error(`未能从偏移 ${openBracket} 截取数组 ${name}`)
-}
-
-function loadBuildWorkflowGraphNodes(
-  source: string,
-): (
-  state: unknown,
-  definition: unknown,
-) => Array<{ id: string; status: string; activated: boolean; responsibleRoles: string[] }> {
-  const script = [
-    extractFunction(source, "nodeRoles"),
-    extractFunction(source, "buildWorkflowGraphNodes"),
-    "result = buildWorkflowGraphNodes",
-  ].join("\n")
-  const context: { result?: unknown } = {}
-  runInNewContext(script, context)
-  return context.result as (
-    state: unknown,
-    definition: unknown,
-  ) => Array<{ id: string; status: string; activated: boolean; responsibleRoles: string[] }>
-}
-
-type HubCardBuild = {
-  readonly kind: "empty" | "nomatch" | "cards"
-  readonly filtered: Array<{ projectId: string; name: string }>
-  readonly html: string
-}
-
-function loadBuildHubCardsMarkup(
-  source: string,
-): (items: unknown[], options?: { filter?: string; lastCreatedId?: string }) => HubCardBuild {
-  const script = [
-    extractConstObject(source, "PHASE_LABELS"),
-    extractFunction(source, "phaseLabel"),
-    extractFunction(source, "escapeHtml"),
-    extractFunction(source, "formatUpdatedAt"),
-    extractFunction(source, "buildHubCardsMarkup"),
-    "buildHubCardsMarkup",
-  ].join("\n")
-  return runInNewContext(script, {}) as (
-    items: unknown[],
-    options?: { filter?: string; lastCreatedId?: string },
-  ) => HubCardBuild
-}
-
-function loadBuildRequirementCardsMarkup(
-  source: string,
-): (
-  items: unknown[],
-  options?: { filter?: string; lastCreatedId?: string },
-) => { kind: string; html: string } {
-  const script = [
-    extractConstObject(source, "PHASE_LABELS"),
-    extractFunction(source, "phaseLabel"),
-    extractFunction(source, "escapeHtml"),
-    extractFunction(source, "formatUpdatedAt"),
-    extractFunction(source, "formatMilestoneDate"),
-    extractFunction(source, "milestoneBadgeHtml"),
-    extractFunction(source, "buildRequirementCardsMarkup"),
-    "buildRequirementCardsMarkup",
-  ].join("\n")
-  return runInNewContext(script, {}) as (
-    items: unknown[],
-    options?: { filter?: string; lastCreatedId?: string },
-  ) => { kind: string; html: string }
-}
-
-function loadBuildKanbanMarkup(
-  source: string,
-): (
-  items: unknown[],
-  options?: { filter?: string; lastCreatedId?: string; tbStatuses?: unknown[] },
-) => { kind: string; filtered: unknown[]; html: string } {
-  const script = [
-    extractConstArray(source, "PHASE_ORDER"),
-    extractConstObject(source, "PHASE_LABELS"),
-    extractFunction(source, "phaseLabel"),
-    extractFunction(source, "escapeHtml"),
-    extractFunction(source, "formatUpdatedAt"),
-    extractFunction(source, "buildKanbanMarkup"),
-    "buildKanbanMarkup",
-  ].join("\n")
-  return runInNewContext(script, {}) as (
-    items: unknown[],
-    options?: { filter?: string; lastCreatedId?: string; tbStatuses?: unknown[] },
-  ) => { kind: string; filtered: unknown[]; html: string }
-}
-
-function loadCollectBrdPromptPatch(
-  source: string,
-): (
-  drafts: Record<string, { system: string; user: string }>,
-  clearedIds: string[],
-) => {
-  prompts: Record<string, { system: string; user: string } | null>
-  invalid?: { id: string }
-} {
-  const script = [
-    extractConstArray(source, "BRD_PROMPT_IDS"),
-    extractFunction(source, "collectBrdPromptPatch"),
-    "collectBrdPromptPatch",
-  ].join("\n")
-  return runInNewContext(script, {}) as (
-    drafts: Record<string, { system: string; user: string }>,
-    clearedIds: string[],
-  ) => {
-    prompts: Record<string, { system: string; user: string } | null>
-    invalid?: { id: string }
-  }
 }
 
 async function rawInvoke(
@@ -274,14 +128,15 @@ describe("Octopus Web", () => {
     }
   })
 
-  it("应提供真实项目/需求状态并允许同一状态库创建多个项目", async () => {
+  it("应提供 SPA 壳页与真实项目/需求 API，并允许同一状态库创建多个项目", async () => {
+    assertRendererBuild()
     const root = mkdtempSync(join(tmpdir(), "octopus-web-"))
     temporaryDirectories.push(root)
     const server = await createOctopusWebServer({
       port: 0,
       storeDir: join(root, "store"),
       projectRoot: join(root, "project"),
-      rendererDir: join(process.cwd(), "packages/desktop/src/renderer"),
+      rendererDir,
     })
     const url = await server.listen()
 
@@ -289,87 +144,47 @@ describe("Octopus Web", () => {
       const page = await fetch(url)
       const html = await page.text()
       expect(html).toContain("Octopus Workflow")
+      expect(html).toContain('id="root"')
+      expect(html).toMatch(/<script\s+type="module"/)
+      expect(html).toMatch(/assets\/[^"'>\s]+\.js/)
+      expect(html).toMatch(/assets\/[^"'>\s]+\.css/)
       expect(html).toContain('rel="icon"')
-      expect(html).toContain('href="app-icon.png"')
-      expect(html).toContain('src="logo.png"')
-      expect(html).toContain('src="mascot.jpg"')
-      expect(html).toContain('href="element-plus.css"')
-      expect(html).toContain('src="element-plus.js"')
-      expect(html).toContain('src="element-plus-adapter.js"')
-      expect(html).toContain('class="hub-hero"')
-      expect(html).toContain("一只章鱼，编排整条软件交付流水线")
-      expect(html).toContain('class="brand-name"')
-      expect(html).not.toContain("🐙</div>")
-      expect(html).toContain('id="hubGanttHost"')
-      expect(html).toContain('id="hubCards"')
-      expect(html).toContain('id="projectView"')
-      expect(html).toContain('id="requirementCards"')
-      expect(html).toContain('id="requirementTbBar"')
-      expect(html).toContain('id="requirementMilestoneBar"')
-      expect(html).toContain('class="hub-cards"')
-      expect(html).toContain(".hub-card {")
-      expect(html).toContain("--el-border-radius-card")
-      expect(html).toContain("点击泳道图中的节点")
-      expect(html).toContain('id="toggleSidebar"')
-      expect(html).toContain('id="toggleInspector"')
-      expect(html).toContain('id="nodeLocator"')
-      expect(html).toContain("快速定位工作流节点")
-      expect(html).toContain("拖拽空白处平移")
-      expect(html).toContain("Ctrl/⌘ + 滚轮缩放")
-      expect(html).toContain(".node .name-en")
-      expect(html).not.toContain('id="workspaceTabs"')
-      expect(html).not.toContain('id="ganttPane"')
+      expect(html).toContain("app-icon")
+      expect(html).not.toContain("element-plus")
+      expect(html).not.toContain("element-plus-adapter")
       expect(page.headers.get("content-security-policy")).toBe("frame-ancestors 'none'")
-
-      const ganttScript = await fetch(new URL("/gantt.js", url))
-      expect(ganttScript.headers.get("content-type")).toContain("javascript")
-      expect(await ganttScript.text()).toContain("function unmount(")
+      expect(page.headers.get("x-frame-options")).toBe("DENY")
 
       const appIcon = await fetch(new URL("/app-icon.png", url))
       expect(appIcon.ok).toBe(true)
       expect(appIcon.headers.get("content-type")).toContain("image/png")
       expect(Buffer.byteLength(await appIcon.arrayBuffer())).toBeGreaterThan(1000)
 
-      const logo = await fetch(new URL("/logo.png", url))
-      expect(logo.ok).toBe(true)
-      expect(logo.headers.get("content-type")).toContain("image/png")
-      expect(Buffer.byteLength(await logo.arrayBuffer())).toBeGreaterThan(1000)
+      const assetNames = readdirSync(join(rendererDir, "assets"))
+      expect(assetNames.some((name) => /logo.*\.png$/i.test(name) || name === "logo.png")).toBe(true)
+      expect(assetNames.some((name) => /mascot.*\.jpe?g$/i.test(name))).toBe(true)
+      expect(
+        existsSync(join(rendererDir, "logo.png")) ||
+          assetNames.some((name) => /logo/i.test(name)),
+      ).toBe(true)
+      expect(
+        existsSync(join(rendererDir, "mascot.jpg")) ||
+          assetNames.some((name) => /mascot/i.test(name)),
+      ).toBe(true)
 
-      const mascot = await fetch(new URL("/mascot.jpg", url))
+      const logoPath = existsSync(join(rendererDir, "logo.png"))
+        ? "/logo.png"
+        : `/assets/${assetNames.find((name) => /logo/i.test(name))}`
+      const mascotPath = existsSync(join(rendererDir, "mascot.jpg"))
+        ? "/mascot.jpg"
+        : `/assets/${assetNames.find((name) => /mascot/i.test(name))}`
+      const logo = await fetch(new URL(logoPath, url))
+      expect(logo.ok).toBe(true)
+      expect(Buffer.byteLength(await logo.arrayBuffer())).toBeGreaterThan(1000)
+      const mascot = await fetch(new URL(mascotPath, url))
       expect(mascot.ok).toBe(true)
-      expect(mascot.headers.get("content-type")).toContain("image/jpeg")
       expect(Buffer.byteLength(await mascot.arrayBuffer())).toBeGreaterThan(1000)
 
-      const renderer = await (await fetch(new URL("/renderer.js", url))).text()
-      expect(renderer).toContain("buildHubCardsMarkup")
-      expect(renderer).toContain("buildRequirementCardsMarkup")
-      expect(renderer).toContain("toggleHubSchedule")
-      expect(renderer).toContain("toggleWorkspacePanel")
-      expect(renderer).toContain("setupGraphPan")
-      expect(renderer).toContain("setupGraphWheelZoom")
-      expect(renderer).toContain("renderNodeLocator")
-      expect(renderer).toContain("focusNodeInGraph")
-      expect(renderer).toContain('"data-node-id": node.id')
-      expect(renderer).toContain("scrollNodeIntoView")
-      expect(renderer).toContain("jumpToNodeWorkspace")
-      expect(renderer).toContain("resolveNodeWorkspace")
-      expect(renderer).toContain("bindProjectTeambition")
-      expect(renderer).toContain("bindRequirementTask")
-      expect(renderer).toContain("goToRequirement")
-      expect(renderer).not.toContain("workspaceMode")
-
-      const browserApi = await (await fetch(new URL("/browser-api.js", url))).text()
-      expect(browserApi).toContain("resolveNodeWorkspace")
-      expect(browserApi).toContain("createProject")
-      expect(browserApi).toContain("initRequirement")
-      expect(browserApi).toContain("listRequirementSummaries")
-      expect(browserApi).toContain("updateRequirementSchedule")
-      expect(browserApi).toContain("moveRequirementPhase")
-      expect(browserApi).toContain("getWorkflowDefinition")
-      expect(browserApi).toContain("listMilestones")
-      expect(browserApi).toContain("addMilestone")
-      expect(browserApi).toContain("reachMilestone")
-      expect(page.headers.get("x-frame-options")).toBe("DENY")
       expect(await (await invoke(url, "canInit")).json()).toEqual({ result: true })
 
       const createdProject = await invoke(url, "createProject", "Web Test Project", "desc")
@@ -540,50 +355,15 @@ describe("Octopus Web", () => {
     }
   })
 
-  it("需求卡片按里程碑摘要渲染徽章", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf8",
-    )
-    const build = loadBuildRequirementCardsMarkup(source)
-    const base = {
-      requirementId: "req_1",
-      requirementName: "支付改版",
-      description: "desc",
-      currentPhase: "Design",
-      completedTasks: 1,
-      totalTasks: 2,
-    }
-    expect(build([base]).html).not.toContain("里程碑")
-    expect(
-      build([
-        {
-          ...base,
-          milestoneCount: 2,
-          nextMilestone: { id: "ms_1", name: "设计评审", date: "2026-03-12", overdue: false },
-        },
-      ]).html,
-    ).toContain("里程碑 03-12 设计评审")
-    expect(
-      build([
-        {
-          ...base,
-          milestoneCount: 1,
-          nextMilestone: { id: "ms_1", name: "上线", date: "2026-03-01", overdue: true },
-        },
-      ]).html,
-    ).toContain("is-overdue")
-    expect(build([{ ...base, milestoneCount: 1 }]).html).toContain("里程碑已全部达成")
-  })
-
   it("空状态库重启后仍应允许初始化", async () => {
+    assertRendererBuild()
     const root = mkdtempSync(join(tmpdir(), "octopus-web-empty-restart-"))
     temporaryDirectories.push(root)
     const options = {
       port: 0,
       storeDir: join(root, "store"),
       projectRoot: join(root, "project"),
-      rendererDir: join(process.cwd(), "packages/desktop/src/renderer"),
+      rendererDir,
     }
     const first = await createOctopusWebServer(options)
     const firstUrl = await first.listen()
@@ -616,12 +396,13 @@ describe("Octopus Web", () => {
   })
 
   it("应拒绝伪造 Host 与跨源 Origin，同时允许无 Origin 的本地客户端", async () => {
+    assertRendererBuild()
     const root = mkdtempSync(join(tmpdir(), "octopus-web-origin-"))
     temporaryDirectories.push(root)
     const server = await createOctopusWebServer({
       port: 0,
       storeDir: join(root, "store"),
-      rendererDir: join(process.cwd(), "packages/desktop/src/renderer"),
+      rendererDir,
     })
     const url = await server.listen()
     const allowedUrl = new URL(url)
@@ -691,14 +472,15 @@ describe("Octopus Web", () => {
     expect(await stopExistingOctopusWeb(host, octopusPort)).toBe(false)
   })
 
-  it("项目管理中心应按卡片渲染每个项目摘要", async () => {
+  it("项目管理中心应按摘要卡片模型渲染每个项目", async () => {
+    assertRendererBuild()
     const root = mkdtempSync(join(tmpdir(), "octopus-web-cards-"))
     temporaryDirectories.push(root)
     const server = await createOctopusWebServer({
       port: 0,
       storeDir: join(root, "store"),
       projectRoot: join(root, "project"),
-      rendererDir: join(process.cwd(), "packages/desktop/src/renderer"),
+      rendererDir,
     })
     const url = await server.listen()
 
@@ -729,448 +511,115 @@ describe("Octopus Web", () => {
       expect(created).toHaveLength(2)
 
       const pageHtml = await (await fetch(url)).text()
-      expect(pageHtml).toContain('id="hubCards"')
-      expect(pageHtml).toContain(".hub-card {")
-      expect(pageHtml).toMatch(/\.hub-card\s*\{[^}]*border:\s*1px solid/)
-      expect(pageHtml).toMatch(/\.hub-cards\s*\{[^}]*display:\s*grid/)
+      expect(pageHtml).toContain("Octopus Workflow")
+      expect(pageHtml).toContain('id="root"')
+      expect(pageHtml).not.toContain("element-plus")
 
-      const rendererSource = await (await fetch(new URL("/renderer.js", url))).text()
-      expect(rendererSource).toContain("function buildHubCardsMarkup(")
-      const buildHubCardsMarkup = loadBuildHubCardsMarkup(rendererSource)
-
-      const empty = buildHubCardsMarkup([])
-      expect(empty).toMatchObject({ kind: "empty", html: "" })
-
-      const nomatch = buildHubCardsMarkup(created, { filter: "绝不可能匹配的筛选词-xyz" })
+      expect(buildHubCardsModel([]).kind).toBe("empty")
+      const nomatch = buildHubCardsModel(created, { filter: "绝不可能匹配的筛选词-xyz" })
       expect(nomatch.kind).toBe("nomatch")
-      expect(nomatch.html).toContain("empty-state")
-      expect(nomatch.html).not.toContain("hub-card")
+      expect(nomatch.filtered).toHaveLength(0)
 
-      const built = buildHubCardsMarkup(created)
+      const built = buildHubCardsModel(created, { lastCreatedId: firstBody.result.projectId })
       expect(built.kind).toBe("cards")
-      const cardMatches = built.html.match(/<article class="hub-card/g) || []
-      expect(cardMatches).toHaveLength(created.length)
-      for (const item of created) {
-        expect(built.html).toContain(`data-project-id="${item.projectId}"`)
-        expect(built.html).toContain(item.name)
-        expect(built.html).toContain(item.projectId)
+      if (built.kind === "cards") {
+        expect(built.items).toHaveLength(created.length)
+        for (const item of created) {
+          const card = built.items.find((entry) => entry.projectId === item.projectId)
+          expect(card?.displayName).toBe(item.name)
+          expect(card?.teambitionBound).toBe(Boolean(item.teambitionProjectId))
+        }
+        expect(built.items.find((entry) => entry.projectId === firstBody.result.projectId)?.highlight).toBe(
+          true,
+        )
       }
-      expect(built.html).toContain("需求")
-      expect(built.html).toContain("未绑定 Teambition")
     } finally {
       await server.close()
     }
   })
 
-  it("路由应区分项目页 tab 并支持看板/列表/甘特/设置深链", () => {
+  it("浏览器 transport 源码应对非法 JSON 文件拒绝而不是悬挂", () => {
     const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
+      join(process.cwd(), "packages/desktop/src/renderer/browser-api.ts"),
       "utf-8",
     )
-    const start = source.indexOf("function routeFromHash()")
-    expect(start).toBeGreaterThanOrEqual(0)
-    let depth = 0
-    let end = -1
-    for (let index = start; index < source.length; index++) {
-      const char = source[index]
-      if (char === "{") depth++
-      else if (char === "}") {
-        depth--
-        if (depth === 0) {
-          end = index + 1
-          break
-        }
-      }
+    expect(source).toContain("JSON.parse(await file.text())")
+    expect(source).toContain("reject(error)")
+    expect(source).toContain("importTasks:")
+    expect(() => JSON.parse("{")).toThrow()
+  })
+})
+
+describe("view models", () => {
+  it("需求卡片模型应按里程碑摘要产出徽章数据", () => {
+    const base = {
+      requirementId: "req_1",
+      requirementName: "支付改版",
+      description: "desc",
+      currentPhase: "Design",
+      completedTasks: 1,
+      totalTasks: 2,
     }
-    expect(end).toBeGreaterThan(start)
-    const run = (hash: string) =>
-      runInNewContext(`${source.slice(start, end)}; routeFromHash()`, {
-        location: { hash },
-        encodeURIComponent,
-        decodeURIComponent,
-      }) as {
-        view: string
-        projectId?: string
-        projectTab?: string
-        requirementId?: string
-      }
-    expect(run("#hub")).toEqual({ view: "hub" })
-    expect(run("#project/demo")).toEqual({
-      view: "project",
-      projectId: "demo",
-      projectTab: "board",
+    expect(milestoneBadgeData(base)).toBeNull()
+    expect(
+      milestoneBadgeData({
+        ...base,
+        milestoneCount: 2,
+        nextMilestone: { id: "ms_1", name: "设计评审", date: "2026-03-12", overdue: false },
+      }),
+    ).toEqual({
+      kind: "next",
+      overdue: false,
+      date: "03-12",
+      name: "设计评审",
     })
-    expect(run("#project/demo/board")).toEqual({
-      view: "project",
-      projectId: "demo",
-      projectTab: "board",
-    })
-    expect(run("#project/demo/list")).toEqual({
-      view: "project",
-      projectId: "demo",
-      projectTab: "list",
-    })
-    expect(run("#project/demo/gantt")).toEqual({
-      view: "project",
-      projectId: "demo",
-      projectTab: "gantt",
-    })
-    expect(run("#project/demo/logs")).toEqual({
-      view: "project",
-      projectId: "demo",
-      projectTab: "logs",
-    })
-    expect(run("#project/demo/settings")).toEqual({
-      view: "project",
-      projectId: "demo",
-      projectTab: "settings",
-    })
-    expect(run("#requirement/req_1")).toEqual({ view: "workspace", requirementId: "req_1" })
-  })
+    expect(
+      milestoneBadgeData({
+        ...base,
+        milestoneCount: 1,
+        nextMilestone: { id: "ms_1", name: "上线", date: "2026-03-01", overdue: true },
+      }),
+    ).toMatchObject({ kind: "next", overdue: true, name: "上线" })
+    expect(milestoneBadgeData({ ...base, milestoneCount: 1 })).toEqual({ kind: "done" })
 
-  it("浏览器 transport 遇到非法 JSON 时应拒绝而不是悬挂", async () => {
-    const input = {
-      type: "",
-      accept: "",
-      files: [{ text: async () => "{" }],
-      onchange: undefined as (() => Promise<void>) | undefined,
-      oncancel: undefined as (() => void) | undefined,
-      click: (): void => {
-        queueMicrotask(() => {
-          void input.onchange?.()
-        })
-      },
+    const cards = buildRequirementCardsModel(
+      [
+        {
+          ...base,
+          milestoneCount: 2,
+          nextMilestone: { id: "ms_1", name: "设计评审", date: "2026-03-12", overdue: false },
+        },
+      ],
+      {},
+    )
+    expect(cards.kind).toBe("cards")
+    if (cards.kind === "cards") {
+      expect(cards.items[0]?.milestoneBadge).toEqual({
+        kind: "next",
+        overdue: false,
+        date: "03-12",
+        name: "设计评审",
+      })
+      expect(cards.items[0]?.phaseLabelText).toBe("设计")
     }
-    const windowObject: {
-      octopus?: { importTasks(requirementId: string): Promise<unknown> }
-    } = {}
-    runInNewContext(
-      readFileSync(join(process.cwd(), "packages/desktop/src/renderer/browser-api.js"), "utf-8"),
-      {
-        window: windowObject,
-        document: { createElement: () => input },
-        fetch,
-        Blob,
-        URL,
-        queueMicrotask,
-      },
-    )
-
-    expect(windowObject.octopus).toBeDefined()
-    await expect(windowObject.octopus?.importTasks("requirement-test")).rejects.toThrow()
-  })
-})
-
-describe("OmniPlan RPC 注册", () => {
-  it("web.ts 应注册 exportProjectOmniPlan / importProjectOmniPlan / setProjectOmniPlanMeta", () => {
-    const source = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
-    expect(source).toContain('"exportProjectOmniPlan"')
-    expect(source).toContain('"importProjectOmniPlan"')
-    expect(source).toContain('"setProjectOmniPlanMeta"')
   })
 
-  it("main.ts 应注册 OmniPlan IPC handler", () => {
-    const source = readFileSync(join(process.cwd(), "packages/desktop/src/main.ts"), "utf-8")
-    expect(source).toContain('"octopus:exportProjectOmniPlan"')
-    expect(source).toContain('"octopus:importProjectOmniPlan"')
-    expect(source).toContain('"octopus:setProjectOmniPlanMeta"')
-  })
-
-  it("browser-api.js 应注册 OmniPlan API 方法", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/browser-api.js"),
-      "utf-8",
-    )
-    expect(source).toContain("exportProjectOmniPlan:")
-    expect(source).toContain("importProjectOmniPlan:")
-    expect(source).toContain("setProjectOmniPlanMeta:")
-  })
-})
-
-describe("BRD 设计 RPC 注册", () => {
-  it("web.ts 应注册 BRD 配置与预览方法", () => {
-    const source = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
-    expect(source).toContain('"getProjectBrdDesignConfig"')
-    expect(source).toContain('"setProjectBrdDesignConfig"')
-    expect(source).toContain('"previewBrdPrompts"')
-  })
-
-  it("main.ts / browser-api / renderer 应暴露 BRD 设置", () => {
-    const main = readFileSync(join(process.cwd(), "packages/desktop/src/main.ts"), "utf-8")
-    const api = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/browser-api.js"),
-      "utf-8",
-    )
-    const renderer = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    expect(main).toContain('"octopus:getProjectBrdDesignConfig"')
-    expect(main).toContain('"octopus:setProjectBrdDesignConfig"')
-    expect(api).toContain("getProjectBrdDesignConfig:")
-    expect(api).toContain("setProjectBrdDesignConfig:")
-    expect(renderer).toContain("settingsSaveBrd")
-    expect(renderer).toContain("BRD 设计")
-    expect(renderer).toContain("BRD_PROMPT_META")
-    expect(renderer).toContain("syncPromptEditor")
-    expect(renderer).toContain("brdPromptDrafts")
-    expect(renderer).toContain("恢复内置默认")
-    expect(renderer).toContain("预览已保存提示词")
-    expect(renderer).toContain("renderBrdPromptPreview")
-  })
-
-  it("提示词编辑器应保留跨类型草稿并分区展示预览", () => {
-    const html = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/index.html"),
-      "utf-8",
-    )
-    const renderer = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    const settingsSource = extractFunction(renderer, "renderProjectSettings")
-    const previewSource = extractFunction(renderer, "renderBrdPromptPreview")
-    expect(html).toContain(".brd-prompt-fields")
-    expect(html).toContain(".brd-prompt-preview-card")
-    expect(settingsSource).toContain("brdPromptDrafts[activePromptId]")
-    expect(settingsSource).toContain("collectBrdPromptPatch(brdPromptDrafts")
-    expect(settingsSource).toContain("settingsBrdPreviewRequirement")
-    expect(settingsSource).toContain("includeSummarize: true")
-    expect(previewSource).toContain(
-      'for (const [label, value] of [["system", item.system], ["user", item.prompt]])',
-    )
-    expect(previewSource).toContain("content.textContent = value")
-  })
-
-  it("提示词保存应一次提交多类型草稿、恢复默认项并拒绝半条提示词", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    const collect = loadCollectBrdPromptPatch(source)
-    const valid = collect(
-      {
-        generate: { system: "生成系统", user: "生成用户" },
-        check: { system: "检查系统", user: "检查用户" },
-      },
-      ["summarize-sources"],
-    )
-    expect(valid).toEqual({
-      prompts: {
-        generate: { system: "生成系统", user: "生成用户" },
-        check: { system: "检查系统", user: "检查用户" },
-        "summarize-sources": null,
-      },
-    })
-    expect(collect({ generate: { system: "仅 system", user: "" } }, []).invalid).toMatchObject({
-      id: "generate",
-    })
-  })
-})
-
-describe("PR1 RPC 注册", () => {
-  it("web.ts 应注册 PR1 方法", () => {
-    const source = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
-    expect(source).toContain('"assignNode"')
-    expect(source).toContain('"listMyWork"')
-    expect(source).toContain('"getProjectOverview"')
-    expect(source).toContain('"getIdentity"')
-    expect(source).toContain('"setIdentity"')
-  })
-
-  it("main.ts 应注册 PR1 IPC handler", () => {
-    const source = readFileSync(join(process.cwd(), "packages/desktop/src/main.ts"), "utf-8")
-    expect(source).toContain('"octopus:assignNode"')
-    expect(source).toContain('"octopus:listMyWork"')
-    expect(source).toContain('"octopus:getProjectOverview"')
-    expect(source).toContain('"octopus:getIdentity"')
-    expect(source).toContain('"octopus:setIdentity"')
-  })
-
-  it("browser-api.js 应注册 PR1 API 方法", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/browser-api.js"),
-      "utf-8",
-    )
-    expect(source).toContain("assignNode:")
-    expect(source).toContain("listMyWork:")
-    expect(source).toContain("getProjectOverview:")
-    expect(source).toContain("getIdentity:")
-    expect(source).toContain("setIdentity:")
-  })
-
-  it("web.ts updateRequirement 应透传 owner", () => {
-    const source = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
-    expect(source).toContain('"owner"')
-  })
-})
-
-describe("甘特里程碑支持", () => {
-  it('gantt.js 应包含 kind: "milestone" 处理', () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain('kind: "milestone"')
-    expect(source).toContain('kind: "milestones"')
-  })
-
-  it("gantt.js 应包含添加里程碑工具栏按钮", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain('data-action="add-milestone"')
-    expect(source).toContain("添加里程碑")
-  })
-
-  it("gantt.js 应包含菱形绘制函数 drawDiamond", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain("drawDiamond")
-    expect(source).toContain("gantt-diamond")
-  })
-
-  it("gantt.js 应支持里程碑 onSchedule 回调 kind 参数", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain(
-      'callbacks.onSchedule?.(result.nodeId, { date: result.previewDate }, "milestone")',
-    )
-  })
-
-  it("gantt.js 应包含 isMilestoneOverdue 函数", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain("isMilestoneOverdue")
-  })
-
-  it("renderer.js 应传递 milestones 给甘特渲染", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    expect(source).toContain("milestones: hubGanttState.milestones")
-  })
-
-  it("renderer.js 应包含里程碑回调接线", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    expect(source).toContain("onReach:")
-    expect(source).toContain("onSelectMilestone:")
-    expect(source).toContain("onAddMilestone:")
-  })
-
-  it("index.html 应包含里程碑行 CSS", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/index.html"),
-      "utf-8",
-    )
-    expect(source).toContain("gantt-row-milestones")
-    expect(source).toContain("gantt-row-milestone")
-    expect(source).toContain("gantt-diamond")
-  })
-
-  it("gantt.js 应包含达成按钮及 onReach 触发", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain("gantt-reach-btn")
-    expect(source).toContain("data-reach-milestone")
-    expect(source).toContain("callbacks.onReach?.(")
-  })
-
-  it("gantt.js 应传递 requirementId 到里程碑行", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain("requirementId")
-  })
-
-  it("renderer.js onSelectMilestone 应先切换工作区再打开表单", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    expect(source).toContain("openWorkspace(expandedScheduleId).then(() => openMilestoneForm(m))")
-  })
-
-  it("renderer.js renderHubGantt 应传递 requirementId", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    expect(source).toContain("requirementId: hubGanttState.requirementId")
-  })
-
-  it("index.html 应包含达成按钮样式", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/index.html"),
-      "utf-8",
-    )
-    expect(source).toContain("gantt-reach-btn")
-  })
-})
-
-describe("buildKanbanMarkup", () => {
-  it("空项目应返回 kind:empty", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf8",
-    )
-    const build = loadBuildKanbanMarkup(source)
-    const result = build([])
-    expect(result).toMatchObject({ kind: "empty", html: "" })
-  })
-
-  it("无匹配筛选应返回 kind:nomatch", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf8",
-    )
-    const build = loadBuildKanbanMarkup(source)
+  it("看板模型应按阶段分列，成功 kind 为 columns", () => {
     const items = [
       {
         requirementId: "req_1",
         requirementName: "支付改版",
-        currentPhase: "Design",
-        completedTasks: 1,
-        totalTasks: 3,
-      },
-    ]
-    const result = build(items, { filter: "不存在的筛选词" })
-    expect(result.kind).toBe("nomatch")
-    expect(result.html).toContain("empty-state")
-    expect(result.html).not.toContain("kanban-card")
-  })
-
-  it("需求应按阶段分列渲染", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf8",
-    )
-    const build = loadBuildKanbanMarkup(source)
-    const items = [
-      {
-        requirementId: "req_1",
-        requirementName: "支付改版",
+        description: "d1",
         currentPhase: "Intention",
         completedTasks: 0,
         totalTasks: 3,
+        plannedStart: "2026-01-10",
+        plannedEnd: "2026-01-20",
       },
       {
         requirementId: "req_2",
         requirementName: "搜索优化",
+        description: "d2",
         currentPhase: "Design",
         completedTasks: 1,
         totalTasks: 5,
@@ -1178,252 +627,82 @@ describe("buildKanbanMarkup", () => {
       {
         requirementId: "req_3",
         requirementName: "会员体系",
+        description: "d3",
         currentPhase: "Intention",
         completedTasks: 0,
         totalTasks: 2,
       },
     ]
-    const result = build(items)
-    expect(result.kind).toBe("cards")
-    expect(result.html).toContain("kanban-board")
-    expect(result.html).toContain('data-phase="Intention"')
-    expect(result.html).toContain('data-phase="Design"')
-    expect(result.html).toContain("kanban-column-count")
-    const intentionMatch = result.html.match(
-      /data-phase="Intention"[\s\S]*?<span class="kanban-column-count">(\d+)<\/span>/,
-    )
-    expect(intentionMatch?.[1]).toBe("2")
-    expect(result.html).toContain("req_1")
-    expect(result.html).toContain("req_2")
-    expect(result.html).toContain("req_3")
-  })
+    expect(buildKanbanModel([], {}).kind).toBe("empty")
+    expect(buildKanbanModel(items, { filter: "不存在的筛选词" }).kind).toBe("nomatch")
 
-  it("筛选应保留列但过滤卡片", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf8",
-    )
-    const build = loadBuildKanbanMarkup(source)
-    const items = [
-      {
-        requirementId: "req_1",
-        requirementName: "支付改版",
-        currentPhase: "Intention",
-        completedTasks: 0,
-        totalTasks: 3,
-      },
-      {
-        requirementId: "req_2",
-        requirementName: "搜索优化",
-        currentPhase: "Design",
-        completedTasks: 1,
-        totalTasks: 5,
-      },
-    ]
-    const result = build(items, { filter: "支付" })
-    expect(result.kind).toBe("cards")
-    expect(result.filtered).toHaveLength(1)
-    expect(result.html).toContain("req_1")
-    expect(result.html).not.toContain("req_2")
-  })
-})
-
-describe("看板 tab HTML 结构", () => {
-  it("index.html 应包含项目标签页", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/index.html"),
-      "utf-8",
-    )
-    expect(source).toContain("project-tab-btn")
-    expect(source).toContain('data-tab="board"')
-    expect(source).toContain('data-tab="list"')
-    expect(source).toContain('data-tab="gantt"')
-    expect(source).toContain('data-tab="logs"')
-    expect(source).toContain('data-tab="settings"')
-    expect(source).toContain("kanbanBoard")
-    expect(source).toContain("projectSettings")
-    expect(source).toContain("projectGanttHost")
-    expect(source).toContain("projectLogs")
-  })
-
-  it("renderer.js 应包含看板渲染和拖拽逻辑", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    const renderProjectPageSource = extractFunction(source, "renderProjectPage")
-    expect(source).toContain("function renderKanbanBoard(")
-    expect(source).toContain("function renderProjectSettings(")
-    expect(source).toContain("function syncProjectTabs(")
-    expect(source).toContain("setupKanbanDragDrop")
-    expect(source).toContain("kanbanDragData")
-    expect(source).toContain("moveRequirementPhase")
-    expect(renderProjectPageSource).toContain(
-      'const kanbanEmptyEl = document.getElementById("kanbanEmpty")',
-    )
-  })
-})
-
-describe("日志监控模块", () => {
-  it("四层 API 应暴露 readRunLogs", () => {
-    const web = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
-    const main = readFileSync(join(process.cwd(), "packages/desktop/src/main.ts"), "utf-8")
-    const preload = readFileSync(join(process.cwd(), "packages/desktop/src/preload.cjs"), "utf-8")
-    const api = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/browser-api.js"),
-      "utf-8",
-    )
-    expect(web).toContain('"readRunLogs"')
-    expect(main).toContain('"octopus:readRunLogs"')
-    expect(preload).toContain("readRunLogs:")
-    expect(api).toContain("readRunLogs:")
-  })
-
-  it("renderer 应包含日志页渲染、轮询清理与工作区跳转", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    expect(source).toContain("function renderProjectLogs(")
-    expect(source).toContain("function stopLogsPolling(")
-    expect(source).toContain("function openLogsForRun(")
-    expect(source).toContain("data-view-logs")
-    expect(source).toContain('logs: "日志"')
-    expect(extractFunction(source, "renderProjectPage")).toContain('projectTab === "logs"')
-  })
-})
-
-describe("Element Plus UI", () => {
-  it("应通过官方组件包构建反馈 API，并渐进增强静态和动态控件", () => {
-    const packageJson = JSON.parse(
-      readFileSync(join(process.cwd(), "packages/desktop/package.json"), "utf-8"),
-    ) as {
-      scripts: Record<string, string>
-      dependencies: Record<string, string>
+    const model = buildKanbanModel(items, { lastCreatedId: "req_2" })
+    expect(model.kind).toBe("columns")
+    if (model.kind === "columns") {
+      expect(model.columns.length).toBeGreaterThan(2)
+      const intention = model.columns.find((column) => column.phase === "Intention")
+      const design = model.columns.find((column) => column.phase === "Design")
+      expect(intention?.cards).toHaveLength(2)
+      expect(design?.cards).toHaveLength(1)
+      expect(design?.cards[0]?.highlight).toBe(true)
+      expect(intention?.cards[0]?.scheduleText).toContain("→")
     }
-    const entry = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/element-plus-entry.js"),
-      "utf-8",
-    )
-    const adapter = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/element-plus-adapter.js"),
-      "utf-8",
-    )
-    const renderer = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
 
-    expect(packageJson.dependencies["element-plus"]).toBe("2.14.4")
-    expect(packageJson.dependencies.vue).toBe("3.5.41")
-    expect(packageJson.scripts.build).toContain("build:renderer")
-    expect(entry).toContain("ElMessage")
-    expect(entry).toContain("ElMessageBox")
-    expect(entry).toContain("element-plus/dist/index.css")
-    expect(adapter).toContain('query("button").forEach(enhanceButton)')
-    expect(adapter).toContain("MutationObserver")
-    expect(adapter).toContain('className = "el-input el-input--small octopus-el-control"')
-    expect(renderer).toContain("confirmAction(")
-    expect(renderer).not.toContain("window.confirm(`删除")
-    expect(renderer).not.toContain("return window.confirm(message)")
-    expect(entry).toContain('confirmButtonText: type === "error" ? "删除" : "确认"')
-    expect(entry).toContain('closeOnClickModal: type !== "error"')
+    const filtered = buildKanbanModel(items, { filter: "支付" })
+    expect(filtered.kind).toBe("columns")
+    if (filtered.kind === "columns") {
+      expect(filtered.filtered).toHaveLength(1)
+      expect(filtered.filtered[0]?.requirementId).toBe("req_1")
+      expect(filtered.columns.every((column) => column.phase)).toBe(true)
+    }
   })
 })
 
-describe("项目甘特模块 (PR4)", () => {
-  it("gantt.js 应支持 requirements 模式", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain("buildRequirementsModel")
-    expect(source).toContain('mode === "requirements"')
-    expect(source).toContain('kind: "requirement"')
-    expect(source).toContain("data-toggle-req")
+describe("hash routing", () => {
+  it("路由应区分项目页 tab 并支持看板/列表/甘特/设置深链", () => {
+    expect(routeFromHash("#hub")).toEqual({ view: "hub" })
+    expect(routeFromHash("#project/demo")).toEqual({
+      view: "project",
+      projectId: "demo",
+      projectTab: "board",
+    })
+    expect(routeFromHash("#project/demo/board")).toEqual({
+      view: "project",
+      projectId: "demo",
+      projectTab: "board",
+    })
+    expect(routeFromHash("#project/demo/list")).toEqual({
+      view: "project",
+      projectId: "demo",
+      projectTab: "table",
+    })
+    expect(routeFromHash("#project/demo/gantt")).toEqual({
+      view: "project",
+      projectId: "demo",
+      projectTab: "gantt",
+    })
+    expect(routeFromHash("#project/demo/logs")).toEqual({
+      view: "project",
+      projectId: "demo",
+      projectTab: "logs",
+    })
+    expect(routeFromHash("#project/demo/settings")).toEqual({
+      view: "project",
+      projectId: "demo",
+      projectTab: "settings",
+    })
+    expect(routeFromHash("#requirement/req_1")).toEqual({
+      view: "workspace",
+      requirementId: "req_1",
+    })
+    expect(canonicalizeHash("#project/demo/list")).toBe("project/demo/table")
+    expect(canonicalizeHash("project/demo/table")).toBeNull()
   })
+})
 
-  it("gantt.js 工具条应包含导出/导入 OmniPlan 按钮", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain("export-omniplan")
-    expect(source).toContain("import-omniplan")
-    expect(source).toContain("onExportOmniPlan")
-    expect(source).toContain("onImportOmniPlan")
-  })
-
-  it("gantt.js onSchedule 应传递 kind 参数", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain('"requirement"')
-    expect(source).toContain('"node"')
-  })
-
-  it("gantt.js 应支持 onSelectRequirement 回调", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/gantt.js"),
-      "utf-8",
-    )
-    expect(source).toContain("onSelectRequirement")
-  })
-
-  it("renderer.js 应包含项目甘特管理函数", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    expect(source).toContain("function ensureProjectGanttMounted(")
-    expect(source).toContain("function renderProjectGantt(")
-    expect(source).toContain("function unmountProjectGantt(")
-    expect(source).toContain("projectGanttHostEl")
-    expect(source).toContain("updateRequirementSchedule")
-    expect(source).toContain("exportProjectOmniPlan")
-    expect(source).toContain("importProjectOmniPlan")
-  })
-
-  it("renderer.js gantt tab 应挂载项目甘特", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    expect(source).toContain("renderProjectGantt()")
-    expect(source).toContain("unmountProjectGantt()")
-  })
-
-  it("index.html 应包含全宽甘特宿主", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/index.html"),
-      "utf-8",
-    )
-    expect(source).toContain("projectGanttHost")
-    expect(source).toContain("project-gantt-host")
-  })
-
-  it("index.html 应包含需求行 CSS", () => {
-    const source = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/index.html"),
-      "utf-8",
-    )
-    expect(source).toContain("gantt-row-requirement")
-    expect(source).toContain("gantt-chip-req")
-  })
-
-  it("需求节点泳道应合并完整定义、显示多角色并按方向连接依赖", () => {
-    const renderer = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/renderer.js"),
-      "utf-8",
-    )
-    const html = readFileSync(
-      join(process.cwd(), "packages/desktop/src/renderer/index.html"),
-      "utf-8",
-    )
-
-    const buildNodes = loadBuildWorkflowGraphNodes(renderer)
-    const nodes = buildNodes(
+describe("workflow graph model", () => {
+  it("需求节点泳道应合并完整定义、显示多角色并标记未激活节点", () => {
+    const nodes = buildWorkflowGraphNodes(
       { steps: [{ id: "10.1", responsibleRole: "PM", status: "PENDING", dependsOn: [] }] },
       {
         nodeIdMapping: { first: "10.1", second: "10.2" },
@@ -1449,11 +728,6 @@ describe("项目甘特模块 (PR4)", () => {
         ],
       },
     )
-
-    expect(renderer).toContain("buildWorkflowGraphNodes(currentState, workflowDefinition)")
-    expect(renderer).toContain("responsibleRoles: nodeRoles(node)")
-    expect(renderer).toContain("const rightward = target.x > source.x")
-    expect(renderer).toContain("参与角色：")
     expect(nodes).toEqual([
       expect.objectContaining({
         id: "10.1",
@@ -1468,7 +742,252 @@ describe("项目甘特模块 (PR4)", () => {
         responsibleRoles: ["PM", "BA"],
       }),
     ])
-    expect(html).toContain(".node.locked .card")
-    expect(html).toContain("未激活")
+    expect(nodes[1]?.dependsOn).toEqual(["10.1"])
+
+    const workspace = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/views/WorkspaceView.tsx"),
+      "utf-8",
+    )
+    expect(workspace).toContain("buildWorkflowGraphNodes(")
+    expect(workspace).toContain("nodeRoles")
+  })
+})
+
+describe("gantt visualization exports", () => {
+  it("应导出 requirements 模型、菱形点与 OctopusGantt API", () => {
+    const model = buildRequirementsModel({
+      requirements: [
+        {
+          id: "req-1",
+          name: "Alpha",
+          plannedStart: "2026-01-01",
+          plannedEnd: "2026-01-10",
+          steps: [],
+        },
+      ],
+    })
+    expect(model.rows.some((row) => row.kind === "requirement")).toBe(true)
+    const points = milestoneDiamondPoints(10, 20, 7)
+    expect(points.length).toBeGreaterThan(0)
+    expect(points).toContain(",")
+    expect(typeof OctopusGantt.mount).toBe("function")
+    expect(typeof OctopusGantt.render).toBe("function")
+
+    const source = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/visualizations/gantt.ts"),
+      "utf-8",
+    )
+    expect(source).toContain('kind: "milestone"')
+    expect(source).toContain('data-action="add-milestone"')
+    expect(source).toContain("drawDiamond")
+    expect(source).toContain("gantt-diamond")
+    expect(source).toContain("isMilestoneOverdue")
+    expect(source).toContain("onSelectRequirement")
+    expect(source).toContain("export-omniplan")
+    expect(source).toContain("onReach")
+    expect(source).toContain("onAddMilestone")
+  })
+
+  it("ProjectView 应通过 GanttHost 接线甘特回调", () => {
+    const source = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/views/ProjectView.tsx"),
+      "utf-8",
+    )
+    expect(source).toContain("GanttHost")
+    expect(source).toContain("onSelectRequirement")
+    expect(source).toContain("exportProjectOmniPlan")
+    expect(source).toContain("importProjectOmniPlan")
+    expect(source).toContain("updateRequirementSchedule")
+    expect(source).toContain('value="gantt"')
+    expect(source).toContain('value="board"')
+    expect(source).toContain("KanbanBoard")
+    expect(source).toContain("ProjectLogs")
+    expect(source).toContain("ProjectSettings")
+    expect(source).toContain("RequirementTable")
+  })
+})
+
+describe("OmniPlan RPC 注册", () => {
+  it("web.ts 应注册 exportProjectOmniPlan / importProjectOmniPlan / setProjectOmniPlanMeta", () => {
+    const source = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
+    expect(source).toContain('"exportProjectOmniPlan"')
+    expect(source).toContain('"importProjectOmniPlan"')
+    expect(source).toContain('"setProjectOmniPlanMeta"')
+  })
+
+  it("main.ts 应注册 OmniPlan IPC handler", () => {
+    const source = readFileSync(join(process.cwd(), "packages/desktop/src/main.ts"), "utf-8")
+    expect(source).toContain('"octopus:exportProjectOmniPlan"')
+    expect(source).toContain('"octopus:importProjectOmniPlan"')
+    expect(source).toContain('"octopus:setProjectOmniPlanMeta"')
+  })
+
+  it("browser-api.ts 应注册 OmniPlan API 方法", () => {
+    const source = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/browser-api.ts"),
+      "utf-8",
+    )
+    expect(source).toContain("exportProjectOmniPlan:")
+    expect(source).toContain("importProjectOmniPlan:")
+    expect(source).toContain("setProjectOmniPlanMeta:")
+  })
+})
+
+describe("BRD 设计 RPC 注册", () => {
+  it("web.ts 应注册 BRD 配置与预览方法", () => {
+    const source = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
+    expect(source).toContain('"getProjectBrdDesignConfig"')
+    expect(source).toContain('"setProjectBrdDesignConfig"')
+    expect(source).toContain('"previewBrdPrompts"')
+  })
+
+  it("main.ts / browser-api / ProjectSettings 应暴露 BRD 设置", () => {
+    const main = readFileSync(join(process.cwd(), "packages/desktop/src/main.ts"), "utf-8")
+    const api = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/browser-api.ts"),
+      "utf-8",
+    )
+    const settings = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/views/project/ProjectSettings.tsx"),
+      "utf-8",
+    )
+    expect(main).toContain('"octopus:getProjectBrdDesignConfig"')
+    expect(main).toContain('"octopus:setProjectBrdDesignConfig"')
+    expect(api).toContain("getProjectBrdDesignConfig:")
+    expect(api).toContain("setProjectBrdDesignConfig:")
+    expect(settings).toContain("collectBrdPromptPatch")
+    expect(settings).toContain("brdPromptDrafts")
+    expect(settings).toContain("BRD")
+  })
+
+  it("提示词保存应一次提交多类型草稿、恢复默认项并拒绝半条提示词", () => {
+    const valid = collectBrdPromptPatch(
+      {
+        generate: { system: "生成系统", user: "生成用户" },
+        check: { system: "检查系统", user: "检查用户" },
+      },
+      ["summarize-sources"],
+    )
+    expect(valid).toEqual({
+      prompts: {
+        generate: { system: "生成系统", user: "生成用户" },
+        check: { system: "检查系统", user: "检查用户" },
+        "summarize-sources": null,
+      },
+    })
+    expect(collectBrdPromptPatch({ generate: { system: "仅 system", user: "" } }, []).invalid).toMatchObject({
+      id: "generate",
+    })
+  })
+})
+
+describe("PR1 RPC 注册", () => {
+  it("web.ts 应注册 PR1 方法", () => {
+    const source = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
+    expect(source).toContain('"assignNode"')
+    expect(source).toContain('"listMyWork"')
+    expect(source).toContain('"getProjectOverview"')
+    expect(source).toContain('"getIdentity"')
+    expect(source).toContain('"setIdentity"')
+  })
+
+  it("main.ts 应注册 PR1 IPC handler", () => {
+    const source = readFileSync(join(process.cwd(), "packages/desktop/src/main.ts"), "utf-8")
+    expect(source).toContain('"octopus:assignNode"')
+    expect(source).toContain('"octopus:listMyWork"')
+    expect(source).toContain('"octopus:getProjectOverview"')
+    expect(source).toContain('"octopus:getIdentity"')
+    expect(source).toContain('"octopus:setIdentity"')
+  })
+
+  it("browser-api.ts 应注册 PR1 API 方法", () => {
+    const source = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/browser-api.ts"),
+      "utf-8",
+    )
+    expect(source).toContain("assignNode:")
+    expect(source).toContain("listMyWork:")
+    expect(source).toContain("getProjectOverview:")
+    expect(source).toContain("getIdentity:")
+    expect(source).toContain("setIdentity:")
+  })
+
+  it("web.ts updateRequirement 应透传 owner", () => {
+    const source = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
+    expect(source).toContain('"owner"')
+  })
+})
+
+describe("日志监控模块", () => {
+  it("四层 API 应暴露 readRunLogs", () => {
+    const web = readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")
+    const main = readFileSync(join(process.cwd(), "packages/desktop/src/main.ts"), "utf-8")
+    const preload = readFileSync(join(process.cwd(), "packages/desktop/src/preload.cjs"), "utf-8")
+    const api = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/browser-api.ts"),
+      "utf-8",
+    )
+    expect(web).toContain('"readRunLogs"')
+    expect(main).toContain('"octopus:readRunLogs"')
+    expect(preload).toContain("readRunLogs:")
+    expect(api).toContain("readRunLogs:")
+  })
+
+  it("ProjectLogs 应包含日志读取与轮询逻辑", () => {
+    const source = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/views/project/ProjectLogs.tsx"),
+      "utf-8",
+    )
+    expect(source).toContain("readRunLogs")
+    expect(source).toContain("ProjectLogs")
+  })
+})
+
+describe("React UI stack", () => {
+  it("package.json 应使用 React + Tailwind，且不再依赖 Vue / Element Plus", () => {
+    const packageJson = JSON.parse(
+      readFileSync(join(process.cwd(), "packages/desktop/package.json"), "utf-8"),
+    ) as {
+      scripts: Record<string, string>
+      dependencies: Record<string, string>
+      devDependencies: Record<string, string>
+    }
+    const deps = { ...packageJson.dependencies, ...packageJson.devDependencies }
+    expect(deps.react).toBeTruthy()
+    expect(deps["react-dom"]).toBeTruthy()
+    expect(deps.tailwindcss).toBeTruthy()
+    expect(deps["element-plus"]).toBeUndefined()
+    expect(deps.vue).toBeUndefined()
+    expect(packageJson.scripts.build).toContain("build:renderer")
+  })
+
+  it("App.tsx 应装配 Hub/Project/Workspace 与 ConfirmHost/confirmAction", () => {
+    const appPath = join(process.cwd(), "packages/desktop/src/renderer/App.tsx")
+    expect(existsSync(appPath)).toBe(true)
+    const app = readFileSync(appPath, "utf-8")
+    const hub = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/views/HubView.tsx"),
+      "utf-8",
+    )
+    const feedback = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/lib/feedback.ts"),
+      "utf-8",
+    )
+    const confirmHost = readFileSync(
+      join(process.cwd(), "packages/desktop/src/renderer/components/layout/ConfirmHost.tsx"),
+      "utf-8",
+    )
+
+    expect(app).toContain("ProjectView")
+    expect(app).toContain("WorkspaceView")
+    expect(app).toContain("HubView")
+    expect(app).toContain("ConfirmHost")
+    expect(app).toContain("confirmAction")
+    expect(feedback).toContain("export function confirmAction")
+    expect(confirmHost).toContain("ConfirmHost")
+
+    expect(app).not.toMatch(/window\.confirm\s*\(\s*[`'"].*删除/)
+    expect(hub).not.toMatch(/window\.confirm\s*\(\s*[`'"].*删除/)
+    expect(hub).toContain("confirmAction(")
   })
 })

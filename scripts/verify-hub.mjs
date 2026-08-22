@@ -12,7 +12,7 @@ log("start")
 const server = await createOctopusWebServer({
   port: 0,
   storeDir,
-  rendererDir: join(process.cwd(), "packages/desktop/src/renderer"),
+  rendererDir: join(process.cwd(), "packages/desktop/dist/renderer"),
 })
 log("created")
 const url = await server.listen()
@@ -30,7 +30,9 @@ async function invoke(method, ...args) {
 try {
   const page = await fetch(url)
   const html = await page.text()
-  log(`page ${page.status} hub=${html.includes("id=\"hubView\"")} workspace=${html.includes("id=\"workspaceView\"")}`)
+  log(
+    `page ${page.status} title=${html.includes("Octopus Workflow")} root=${html.includes("id=\"root\"")} react=${html.includes("assets/")}`,
+  )
 
   const first = await invoke("init", "中心验证甲", "描述甲")
   const second = await invoke("init", "中心验证乙", "描述乙")

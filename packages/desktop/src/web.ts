@@ -5,9 +5,9 @@
  */
 
 import { execFile } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { dirname, join, resolve } from "node:path"
+import { dirname, extname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { getIdentity, loadConfig, saveIdentity } from "@octopus/context/config.js"
@@ -623,22 +623,39 @@ export async function createOctopusWebServer(
     }
   }
 
-  const staticFiles = new Map([
-    ["/", { file: "index.html", type: "text/html; charset=utf-8" }],
-    ["/index.html", { file: "index.html", type: "text/html; charset=utf-8" }],
-    ["/renderer.js", { file: "renderer.js", type: "text/javascript; charset=utf-8" }],
-    ["/gantt.js", { file: "gantt.js", type: "text/javascript; charset=utf-8" }],
-    ["/browser-api.js", { file: "browser-api.js", type: "text/javascript; charset=utf-8" }],
-    ["/element-plus.js", { file: "element-plus.js", type: "text/javascript; charset=utf-8" }],
-    [
-      "/element-plus-adapter.js",
-      { file: "element-plus-adapter.js", type: "text/javascript; charset=utf-8" },
-    ],
-    ["/element-plus.css", { file: "element-plus.css", type: "text/css; charset=utf-8" }],
-    ["/app-icon.png", { file: "app-icon.png", type: "image/png" }],
-    ["/logo.png", { file: "logo.png", type: "image/png" }],
-    ["/mascot.jpg", { file: "mascot.jpg", type: "image/jpeg" }],
-  ])
+  const contentTypes: Record<string, string> = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".map": "application/json; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+  }
+
+  function resolveRendererAsset(pathname: string): { absolute: string; type: string } {
+    const relativePath =
+      pathname === "/" || pathname === "/index.html" ? "index.html" : pathname.replace(/^\//, "")
+    if (!relativePath || relativePath.includes("\0")) {
+      throw new WebError(404, "页面不存在")
+    }
+    const absolute = resolve(rendererDir, relativePath)
+    const rootWithSep = rendererDir.endsWith(sep) ? rendererDir : `${rendererDir}${sep}`
+    if (absolute !== rendererDir && !absolute.startsWith(rootWithSep)) {
+      throw new WebError(404, "页面不存在")
+    }
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) {
+      throw new WebError(404, "页面不存在")
+    }
+    const type = contentTypes[extname(absolute).toLowerCase()] ?? "application/octet-stream"
+    return { absolute, type }
+  }
 
   let currentUrl = `http://${host}:${requestedPort}`
   const server = createServer((request, response) => {
@@ -661,8 +678,7 @@ export async function createOctopusWebServer(
         return
       }
       if (request.method !== "GET") throw new WebError(405, "请求方法不受支持")
-      const asset = staticFiles.get(url.pathname)
-      if (!asset) throw new WebError(404, "页面不存在")
+      const asset = resolveRendererAsset(url.pathname)
       response.writeHead(200, {
         "Content-Type": asset.type,
         "Cache-Control": "no-store",
@@ -670,7 +686,7 @@ export async function createOctopusWebServer(
         "Content-Security-Policy": "frame-ancestors 'none'",
         "X-Frame-Options": "DENY",
       })
-      response.end(readFileSync(join(rendererDir, asset.file)))
+      response.end(readFileSync(asset.absolute))
     })().catch((cause: unknown) => {
       const error = cause instanceof Error ? cause : new Error(String(cause))
       sendJson(response, error instanceof WebError ? error.status : 500, { error: error.message })

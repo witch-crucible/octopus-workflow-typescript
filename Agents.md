@@ -46,7 +46,7 @@ pnpm web                       # 构建并启动本地 Web 界面
 
 - 使用 TypeScript ESM；遵循现有 `tsconfig` 的严格模式、`noUncheckedIndexedAccess` 和 `exactOptionalPropertyTypes` 约束。
 - 优先复用现有领域类型、错误类型和包边界，不在 CLI、UI 中重复实现领域规则。
-- Desktop/Web UI 统一以 Vue 3 与 Element Plus 为组件库标准。现有命令式 renderer 通过 `element-plus-adapter.js` 保持 DOM/事件兼容；新增或修改基础控件、反馈、确认框和主题能力时优先复用 Element Plus 官方组件/API，不再新增仿制控件或仅复制其视觉样式；保留 SVG 工作流图、甘特图等专用可视化实现。
+- Desktop/Web UI 统一以 React、Tailwind CSS 与官方 shadcn/ui 为组件库标准。基础控件、反馈、确认框和主题能力优先复用 shadcn/ui（Radix）组件与 Tailwind token，不再新增仿制控件或仅复制视觉样式；保留 SVG 工作流图、甘特图等专用可视化实现（由 React 宿主挂载）。
 - 新增行为应同时补充测试；包内测试沿用现有同目录结构，工作流节点测试统一放在节点的 `test/` 中；测试文件使用 `*.test.ts`，测试框架为 Vitest。
 - 保持导入路径和文件名大小写与现有代码一致。不要通过放宽 TypeScript 配置来规避类型错误。
 - 使用 Biome 格式和 lint 规则；修改后运行 `pnpm lint`。
