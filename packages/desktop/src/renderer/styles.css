@@ -49,7 +49,7 @@
   --border: oklch(0.9 0.01 255);
   --input: oklch(0.9 0.01 255);
   --ring: oklch(0.62 0.1 245);
-  --header-h: 68px;
+  --header-h: 56px;
   --graph-surface: #ffffff;
   --graph-surface-inner: #fafbfc;
   --lane-a: #fafbfc;

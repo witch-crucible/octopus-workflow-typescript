@@ -1,4 +1,4 @@
-import { Moon, Sun } from "lucide-react"
+import { ChevronLeft, Moon, Sun } from "lucide-react"
 
 import logo from "@/assets/logo.png"
 import { Badge } from "@/components/ui/badge"
@@ -48,28 +48,30 @@ export function Header({
   const themeTitle = theme === "dark" ? "切换为白昼主题" : "切换为黑夜主题"
 
   return (
-    <header className="flex h-[var(--header-h)] shrink-0 items-center justify-between gap-4 border-b border-border bg-card px-4 md:px-6">
+    <header className="flex h-[var(--header-h)] shrink-0 items-center justify-between gap-4 border-b border-border/80 bg-card px-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)] md:px-5">
       <div className="flex min-w-0 items-center gap-3">
-        <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-muted">
-          <img src={logo} alt="" width={48} height={48} className="size-12 object-contain" />
+        <div className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary/8 ring-1 ring-primary/10">
+          <img src={logo} alt="" width={36} height={36} className="size-9 object-contain" />
         </div>
         <div className="min-w-0">
-          <h1 className="truncate text-base font-semibold tracking-tight md:text-lg">
+          <h1 className="truncate text-sm font-semibold tracking-tight md:text-base">
             <span className="text-primary">Octopus</span> Workflow{" "}
-            <span className="ml-1 text-sm font-medium text-muted-foreground">{viewPulse}</span>
+            <span className="ml-1 text-xs font-medium text-muted-foreground">{viewPulse}</span>
           </h1>
-          <div className="truncate text-xs text-muted-foreground md:text-sm">{subtitle}</div>
+          <div className="truncate text-[11px] text-muted-foreground md:text-xs">{subtitle}</div>
         </div>
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
         {showBackToHub ? (
-          <Button type="button" variant="outline" size="sm" onClick={onBackToHub}>
+          <Button type="button" variant="ghost" size="sm" onClick={onBackToHub}>
+            <ChevronLeft />
             全部项目
           </Button>
         ) : null}
         {showBackToProject ? (
-          <Button type="button" variant="outline" size="sm" onClick={onBackToProject}>
+          <Button type="button" variant="ghost" size="sm" onClick={onBackToProject}>
+            <ChevronLeft />
             返回项目
           </Button>
         ) : null}
