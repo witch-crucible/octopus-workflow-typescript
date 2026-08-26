@@ -27,6 +27,7 @@ import {
 } from "./db/schema.js"
 import type { CreateRunInput, ExecutionStore } from "./execution.js"
 import type { StateStore, StoreConfig } from "./index.js"
+import { createSqlitePersistenceStore, type SyncStatus } from "./sqlite-persistence.js"
 
 export const STORE_SCHEMA_VERSION = "2"
 
@@ -38,10 +39,19 @@ export interface PersistenceStoreOptions extends Partial<StoreConfig> {
 
 export interface PersistenceStore extends StateStore, ExecutionStore {
   close(): Promise<void>
+  getSyncStatus(): Promise<SyncStatus>
+  syncWithSupabase(): Promise<SyncStatus>
 }
 
-/** 创建生产 PostgreSQL 存储；连接探针与 schema 检查均在返回前完成。 */
+/** 创建生产本地 SQLite 存储；普通业务路径不连接 PostgreSQL。 */
 export async function createPersistenceStore(
+  options: PersistenceStoreOptions = {},
+): Promise<PersistenceStore> {
+  return createSqlitePersistenceStore(options)
+}
+
+/** 兼容旧测试和数据库工具的 PostgreSQL repository。生产运行不调用此入口。 */
+export async function createPostgresPersistenceStore(
   options: PersistenceStoreOptions = {},
 ): Promise<PersistenceStore> {
   const storeDir = options.storeDir ?? ".octo"
@@ -139,6 +149,14 @@ class PostgresPersistenceStore implements PersistenceStore {
     if (this.closed) return
     this.closed = true
     await this.closeClient()
+  }
+
+  async getSyncStatus(): Promise<SyncStatus> {
+    return { state: "never-synced", localRevision: 0, lastSyncedLocalRevision: 0 }
+  }
+
+  async syncWithSupabase(): Promise<SyncStatus> {
+    throw new Error("PostgreSQL repository 不支持本地快照同步；请使用本地主库")
   }
 
   async load(requirementId: string): Promise<WorkflowState> {

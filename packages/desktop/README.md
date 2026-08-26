@@ -4,7 +4,7 @@ Octopus 工作流引擎的 **macOS 桌面外壳**（Electron）与本机 Web 界
 
 复用与 CLI 相同的引擎入口（`@octopus/context` 的 `loadConfig` +
 `createWorkflowEngineFromConfig`），通过 IPC / HTTP API 向渲染进程暴露项目和任务能力。
-核心项目状态持久化到 `DATABASE_URL` 指向的 Supabase PostgreSQL；Electron 的 `userData/store` 与 Web 的 `.octo` 只保存本机配置、身份和日志。
+核心项目状态持久化到 Electron `userData/store/octopus.sqlite`；Supabase PostgreSQL 仅作为用户明确发起的云端快照同步目标。
 
 ## 界面技术栈
 
@@ -18,7 +18,7 @@ Octopus 工作流引擎的 **macOS 桌面外壳**（Electron）与本机 Web 界
 pnpm --filter @octopus/desktop start      # 编译、为 Electron 重建原生模块并启动窗口
 ```
 
-独立安全监听集成仍使用 `better-sqlite3`，必须按 **Electron 的 Node ABI** 编译；核心状态库不再使用 SQLite。`start` / `dist:mac` 会自动跑 `rebuild:native`。
+核心状态与独立安全监听集成都使用 `better-sqlite3`，必须按 **Electron 的 Node ABI** 编译。`start` / `dist:mac` 会自动跑 `rebuild:native`。
 
 ## 浏览器界面
 
@@ -27,7 +27,7 @@ pnpm web
 ```
 
 然后访问 `http://127.0.0.1:4173`。默认进入项目管理中心。服务只监听 `127.0.0.1`；
-使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改配置与日志目录；核心状态始终来自 `DATABASE_URL`。
+使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改配置、日志和 SQLite 所在目录；`DATABASE_URL` 只在显式快照同步时需要。
 
 Hash 路由：
 

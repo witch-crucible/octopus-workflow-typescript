@@ -43,7 +43,7 @@ node packages/cli/dist/index.js status
 node packages/cli/dist/index.js node list
 ```
 
-先在未跟踪的 `.env` 中配置 `DATABASE_URL`，再创建**项目**，并在项目下 `init` / `requirement init` 创建**需求**（工作流实例）。Supabase PostgreSQL 是唯一核心状态库；数据库不可用时 CLI、Web、Electron 和 worker 会直接失败，不读取本地旧状态。`.octo/` 只保存配置、身份、日志和 worker 运行文件，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
+默认直接使用本地 SQLite 主库：CLI/Web 为 `.octo/octopus.sqlite`，Electron 为 `userData/store/octopus.sqlite`，目录可用 `OCTOPUS_STORE_DIR` 覆盖。`DATABASE_URL` 仅供用户明确发起的一次快照同步使用；缺少连接串或 Supabase 不可用不影响离线启动、项目操作和 worker。先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
 
 声明：本项目使用 Hermes 作为 JavaScript 运行时。
 
@@ -72,8 +72,9 @@ node packages/cli/dist/index.js node list
 - `packages/core/src/spec.ts`：内置工作流规格，也是缺少定义时的回退来源。
 - `workflow.yaml`：需求级、可版本化的 DAG 定义；初始化不会覆盖已有文件。
 - `workflow/nodes/<nodeKey>/`：节点独立工作目录；`workflow/shared/`：节点共享目录。
-- Supabase PostgreSQL：项目、需求状态、运行记录、事件与集成健康度的唯一核心状态库。
-- `.octo/`：本地配置、身份、运行日志和 worker 文件；应用不再创建或读取其中的 `state.sqlite`。
+- `octopus.sqlite`：项目、需求状态、运行记录、事件与集成健康度的本地核心状态库，使用 WAL、外键和事务。
+- Supabase PostgreSQL：用户明确同意后使用的单机云端快照，不参与普通业务读写，不后台轮询或静默同步。
+- `.octo/`：本地配置、身份、运行日志、worker 文件和 CLI/Web 的 `octopus.sqlite`；旧 `state.sqlite` 只作为迁移备份保留。
 - `.octo/config.json`：可选的本地配置（含 Teambition 凭据）。
 - `workflow.overlay.yaml`：可选的节点叠加（增/禁/改），不必复制整份 DAG。
 - 自定义节点 `key` 必须是英文 kebab-case，`name` / `description` 也必须使用英文；内部运行态 ID 由 `workflow.yaml` 的 `nodeIdMapping` 维护。
@@ -149,7 +150,7 @@ pnpm web
 pnpm --filter @octopus/desktop start
 ```
 
-Electron 与 CLI/Web 共享 `DATABASE_URL` 指向的 Supabase 状态；系统 `userData/store/` 仅保存本机配置、身份、日志和可选 `.env`，不再创建或读取 `state.sqlite`。
+Electron、CLI 和 Web 各自使用本地 `octopus.sqlite`；Electron 的默认位置是 `userData/store/`，CLI/Web 的默认位置是仓库 `.octo/`。显式同步时才读取 `DATABASE_URL`，本地未同步修订以本地快照为准。
 
 ## 开发验证
 
