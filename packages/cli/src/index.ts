@@ -37,45 +37,65 @@ import { buildMilestoneCommands } from "./commands/milestone.js"
 import { buildMineCommands } from "./commands/mine.js"
 import { buildBrdCommands } from "./commands/brd.js"
 
+class CliRequestedExit extends Error {
+  constructor(readonly exitCode: number) {
+    super(`CLI requested exit ${exitCode}`)
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadConfig()
   const engine = await createWorkflowEngineFromConfig(config)
+  const nativeExit = process.exit
+  process.exit = ((code?: number) => {
+    throw new CliRequestedExit(code ?? 0)
+  }) as typeof process.exit
+  try {
+    const program = new Command()
 
-  const program = new Command()
+    program
+      .name("octopus")
+      .description(
+        "AI 项目流程自动化引擎 — AI-assisted software development workflow orchestration",
+      )
+      .version("0.1.0")
 
-  program
-    .name("octopus")
-    .description("AI 项目流程自动化引擎 — AI-assisted software development workflow orchestration")
-    .version("0.1.0")
+    // 注册子命令
+    buildInitCommand(program, engine)
+    buildProjectCommands(program, engine)
+    buildRequirementCommands(program, engine)
+    buildMilestoneCommands(program, engine)
+    buildStatusCommand(program, engine)
+    buildPhaseCommands(program, engine)
+    buildTaskCommands(program, engine)
+    buildChecklistCommands(program, engine)
+    buildHeinrichCommands(program, engine)
+    buildStageCommands(program, engine)
+    buildStepCommands(program, engine)
+    buildAiCommands(program, engine)
+    buildNodeCommands(program, engine)
+    buildWorkflowCommands(program, engine)
+    buildMonitorCommands(program, engine)
+    buildMineCommands(program, engine, config.storeDir)
+    buildBrdCommands(program, engine)
 
-  // 注册子命令
-  buildInitCommand(program, engine)
-  buildProjectCommands(program, engine)
-  buildRequirementCommands(program, engine)
-  buildMilestoneCommands(program, engine)
-  buildStatusCommand(program, engine)
-  buildPhaseCommands(program, engine)
-  buildTaskCommands(program, engine)
-  buildChecklistCommands(program, engine)
-  buildHeinrichCommands(program, engine)
-  buildStageCommands(program, engine)
-  buildStepCommands(program, engine)
-  buildAiCommands(program, engine)
-  buildNodeCommands(program, engine)
-  buildWorkflowCommands(program, engine)
-  buildMonitorCommands(program, engine)
-  buildMineCommands(program, engine, config.storeDir)
-  buildBrdCommands(program, engine)
+    await program.parseAsync(process.argv)
 
-  await program.parseAsync(process.argv)
-
-  // 未指定命令时显示帮助
-  if (!process.argv.slice(2).length) {
-    program.outputHelp()
+    // 未指定命令时显示帮助
+    if (!process.argv.slice(2).length) {
+      program.outputHelp()
+    }
+  } finally {
+    process.exit = nativeExit
+    await engine.close()
   }
 }
 
 main().catch((err) => {
+  if (err instanceof CliRequestedExit) {
+    process.exitCode = err.exitCode
+    return
+  }
   console.error("❌ CLI 启动失败:", err)
-  process.exit(1)
+  process.exitCode = 1
 })

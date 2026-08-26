@@ -7,8 +7,7 @@
 
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { createExecutionStore } from "@octopus/context/execution.js"
-import type { StateStore } from "@octopus/context/index.js"
+import type { PersistenceStore } from "@octopus/context/index.js"
 import {
   loadWorkflowDefinition,
   resolveWorkflowNodeKey,
@@ -59,66 +58,41 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647
 const DEFAULT_LOG_MAX_BYTES = 262_144
 const ABSOLUTE_LOG_MAX_BYTES = 1_048_576
 
-/** 同步阻塞休眠（微秒级退避用；Node 主线程可用） */
-function sleep(ms: number): void {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
-    // busy wait
-  }
-}
-
-/** 是否 SQLite 并发写锁冲突（可重试） */
-function isWriteLockError(cause: unknown): boolean {
-  const err = cause as { code?: string; message?: string }
-  return (
-    err?.code === "SQLITE_BUSY" ||
-    (typeof err?.message === "string" && err.message.includes("database is locked"))
-  )
-}
-
 export class NodeExecutionService {
   private static readonly retentionDays = 30
   private readonly executions
   private readonly storeDir: string
 
   constructor(
-    private readonly store: StateStore,
+    private readonly store: PersistenceStore,
     private readonly loadDefinition: (
       projectRoot: string,
     ) => WorkflowDefinition = loadWorkflowDefinition,
   ) {
     this.storeDir = resolve(store.getStorePath())
-    this.executions = createExecutionStore(this.storeDir)
+    this.executions = store
+  }
+
+  async initialize(): Promise<void> {
     const cutoff = new Date(
       Date.now() - NodeExecutionService.retentionDays * 24 * 60 * 60 * 1000,
     ).toISOString()
-    this.executions.purge(cutoff)
+    await this.executions.purge(cutoff)
   }
 
   /**
-   * 在单个 SQLite 事务内完成读改写；并发写锁冲突（SQLITE_BUSY）时按指数
-   * 退避重试整个事务，避免跨进程并发写入互相覆盖或互相死锁。
+   * 在 PostgreSQL 锁行事务中完成读改写；序列化失败和死锁由存储层有限重试。
    */
-  private transactionalUpdate(
+  private async transactionalUpdate(
     requirementId: string,
     updater: (state: WorkflowState) => WorkflowState,
-  ): WorkflowState {
-    let attempt = 0
-    for (;;) {
-      try {
-        return this.store.update(requirementId, updater)
-      } catch (cause) {
-        if (!isWriteLockError(cause) || attempt >= 30) throw cause
-        attempt++
-        // 抖动退避：避免多个进程以相同节奏反复碰撞
-        sleep(1 + Math.floor(Math.random() * 2 ** Math.min(attempt, 7)))
-      }
-    }
+  ): Promise<WorkflowState> {
+    return this.store.update(requirementId, updater)
   }
 
-  getSnapshot(requirementId: string): WorkflowExecutionSnapshot {
-    const state = this.store.load(requirementId)
-    const runs = this.executions.listRuns(requirementId)
+  async getSnapshot(requirementId: string): Promise<WorkflowExecutionSnapshot> {
+    const state = await this.store.load(requirementId)
+    const runs = await this.executions.listRuns(requirementId)
     const activeRuns = runs.filter((run) => run.status === "QUEUED" || run.status === "RUNNING")
     const runningIds = new Set(activeRuns.map((run) => run.nodeId))
     const readyNodeIds: string[] = []
@@ -162,13 +136,17 @@ export class NodeExecutionService {
     }
   }
 
-  runNode(requirementId: string, nodeId: string, options: RunNodeOptions = {}): NodeRun {
-    const state = this.store.load(requirementId)
+  async runNode(
+    requirementId: string,
+    nodeId: string,
+    options: RunNodeOptions = {},
+  ): Promise<NodeRun> {
+    const state = await this.store.load(requirementId)
     const step = state.steps.find((candidate) => candidate.id === nodeId)
     if (!step) throw new Error(`节点不存在: ${nodeId}`)
-    const active = this.executions
-      .listRuns(requirementId, nodeId)
-      .find((run) => run.status === "QUEUED" || run.status === "RUNNING")
+    const active = (await this.executions.listRuns(requirementId, nodeId)).find(
+      (run) => run.status === "QUEUED" || run.status === "RUNNING",
+    )
     if (active) throw new Error(`节点 ${nodeId} 已有活动运行: ${active.id}`)
     const unmet = step.dependsOn.filter((dependency) => {
       const target = state.steps.find((candidate) => candidate.id === dependency)
@@ -188,7 +166,7 @@ export class NodeExecutionService {
     const runDir = join(this.storeDir, "runs", requirementId, nodeId.replaceAll("/", "_"))
     mkdirSync(runDir, { recursive: true })
     const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const run = this.executions.createRun({
+    const run = await this.executions.createRun({
       id: runId,
       requirementId,
       nodeId,
@@ -196,7 +174,7 @@ export class NodeExecutionService {
       stdoutPath: join(runDir, `${runId}.stdout.log`),
       stderrPath: join(runDir, `${runId}.stderr.log`),
     })
-    this.transactionalUpdate(requirementId, (current) => {
+    await this.transactionalUpdate(requirementId, (current) => {
       const target = current.steps.find((candidate) => candidate.id === nodeId)
       if (target) {
         target.status = TaskStatus.IN_PROGRESS
@@ -205,23 +183,27 @@ export class NodeExecutionService {
       }
       return current
     })
-    this.appendEvent(requirementId, run, "RUN_QUEUED", {
+    await this.appendEvent(requirementId, run, "RUN_QUEUED", {
       forced: run.forced,
       workspace: workspace.nodePath(nodeKey),
     })
     const startedAt = new Date().toISOString()
-    this.executions.updateRun(run.id, { status: "RUNNING", startedAt, heartbeatAt: startedAt })
+    await this.executions.updateRun(run.id, {
+      status: "RUNNING",
+      startedAt,
+      heartbeatAt: startedAt,
+    })
     let pid: number
     try {
       pid = launchWorker({ storeDir: this.storeDir, requirementId, run })
     } catch (cause) {
       const error = (cause as Error).message
-      const failed = this.executions.updateRun(run.id, {
+      const failed = await this.executions.updateRun(run.id, {
         status: "FAILED",
         finishedAt: new Date().toISOString(),
         error,
       })
-      this.transactionalUpdate(requirementId, (current) => {
+      await this.transactionalUpdate(requirementId, (current) => {
         const target = current.steps.find((candidate) => candidate.id === nodeId)
         if (target) {
           target.status = TaskStatus.BLOCKED
@@ -230,16 +212,20 @@ export class NodeExecutionService {
         }
         return current
       })
-      this.appendEvent(requirementId, failed, "RUN_FAILED", { error })
+      await this.appendEvent(requirementId, failed, "RUN_FAILED", { error })
       throw cause
     }
-    const started = this.executions.updateRun(run.id, { pid })
-    this.appendEvent(requirementId, started, "RUN_STARTED", { pid })
+    const started = await this.executions.updateRun(run.id, { pid })
+    await this.appendEvent(requirementId, started, "RUN_STARTED", { pid })
     return started
   }
 
-  completeManualNode(requirementId: string, nodeId: string, force = false): WorkflowState {
-    const state = this.transactionalUpdate(requirementId, (current) => {
+  async completeManualNode(
+    requirementId: string,
+    nodeId: string,
+    force = false,
+  ): Promise<WorkflowState> {
+    const state = await this.transactionalUpdate(requirementId, (current) => {
       const step = current.steps.find((candidate) => candidate.id === nodeId)
       if (!step) throw new Error(`节点不存在: ${nodeId}`)
       if (!(step.actions ?? []).every((action) => action.type === "manual")) {
@@ -256,7 +242,7 @@ export class NodeExecutionService {
       step.updatedAt = new Date().toISOString()
       return current
     })
-    this.executions.appendEvent({
+    await this.executions.appendEvent({
       requirementId,
       nodeId,
       type: "RUN_FINISHED",
@@ -266,24 +252,24 @@ export class NodeExecutionService {
     return state
   }
 
-  cancelRun(requirementId: string, runId: string): NodeRun {
-    const run = this.executions.getRun(runId)
+  async cancelRun(requirementId: string, runId: string): Promise<NodeRun> {
+    const run = await this.executions.getRun(runId)
     if (!run || run.requirementId !== requirementId) throw new Error(`运行不存在: ${runId}`)
     if (run.status !== "QUEUED" && run.status !== "RUNNING") return run
-    const canceled = this.executions.transitionRun(runId, ["QUEUED", "RUNNING"], {
+    const canceled = await this.executions.transitionRun(runId, ["QUEUED", "RUNNING"], {
       status: "CANCELED",
       finishedAt: new Date().toISOString(),
     })
-    if (!canceled) return this.executions.getRun(runId) ?? run
+    if (!canceled) return (await this.executions.getRun(runId)) ?? run
     let finalRun = canceled
     try {
       if (canceled.pid) terminateWorker(canceled)
     } catch (cause) {
-      finalRun = this.executions.updateRun(runId, {
+      finalRun = await this.executions.updateRun(runId, {
         error: `运行已取消，但终止 worker 失败: ${(cause as Error).message}`,
       })
     }
-    this.transactionalUpdate(requirementId, (state) => {
+    await this.transactionalUpdate(requirementId, (state) => {
       const step = state.steps.find((candidate) => candidate.id === canceled.nodeId)
       if (step && step.status === TaskStatus.IN_PROGRESS) {
         step.status = TaskStatus.BLOCKED
@@ -292,18 +278,22 @@ export class NodeExecutionService {
       }
       return state
     })
-    this.appendEvent(requirementId, finalRun, "RUN_CANCELED", {
+    await this.appendEvent(requirementId, finalRun, "RUN_CANCELED", {
       requested: true,
       ...(finalRun.error ? { terminationError: finalRun.error } : {}),
     })
     return finalRun
   }
 
-  retryRun(requirementId: string, runId: string, options: RunNodeOptions = {}): NodeRun {
-    const run = this.executions.getRun(runId)
+  async retryRun(
+    requirementId: string,
+    runId: string,
+    options: RunNodeOptions = {},
+  ): Promise<NodeRun> {
+    const run = await this.executions.getRun(runId)
     if (!run || run.requirementId !== requirementId) throw new Error(`运行不存在: ${runId}`)
     if (["QUEUED", "RUNNING"].includes(run.status)) throw new Error(`运行仍在执行: ${runId}`)
-    this.transactionalUpdate(requirementId, (state) => {
+    await this.transactionalUpdate(requirementId, (state) => {
       const step = state.steps.find((candidate) => candidate.id === run.nodeId)
       if (step) {
         step.status = TaskStatus.PENDING
@@ -319,11 +309,11 @@ export class NodeExecutionService {
     )
   }
 
-  listRuns(requirementId: string, nodeId?: string): NodeRun[] {
+  async listRuns(requirementId: string, nodeId?: string): Promise<NodeRun[]> {
     return this.executions.listRuns(requirementId, nodeId)
   }
 
-  eventsAfter(requirementId: string, sequence = 0): WorkflowEvent[] {
+  async eventsAfter(requirementId: string, sequence = 0): Promise<WorkflowEvent[]> {
     return this.executions.eventsAfter(requirementId, sequence)
   }
 
@@ -331,8 +321,12 @@ export class NodeExecutionService {
    * 读取一次节点运行的 stdout/stderr 片段。
    * 仅允许通过已持久化的 run 记录定位文件，客户端不能传入任意路径。
    */
-  readRunLogs(requirementId: string, runId: string, options: ReadRunLogsOptions = {}): RunLogSlice {
-    const run = this.executions.getRun(runId)
+  async readRunLogs(
+    requirementId: string,
+    runId: string,
+    options: ReadRunLogsOptions = {},
+  ): Promise<RunLogSlice> {
+    const run = await this.executions.getRun(runId)
     if (!run || run.requirementId !== requirementId) throw new Error(`运行不存在: ${runId}`)
 
     const stream = options.stream === "stderr" ? "stderr" : "stdout"
@@ -360,9 +354,9 @@ export class NodeExecutionService {
    * 并同步把对应节点标记为 BLOCKED（事务化），同时写入 RUN_FAILED 事件。
    * @returns 本次恢复（中断）的运行数量
    */
-  recoverStaleRuns(requirementId: string, staleAfterMs = 30_000): number {
+  async recoverStaleRuns(requirementId: string, staleAfterMs = 30_000): Promise<number> {
     const cutoff = Date.now() - staleAfterMs
-    const staleRuns = this.executions.listRuns(requirementId).filter((run) => {
+    const staleRuns = (await this.executions.listRuns(requirementId)).filter((run) => {
       if (run.status !== "RUNNING") return false
       if (run.heartbeatAt === undefined) return true
       const heartbeat = new Date(run.heartbeatAt).getTime()
@@ -370,13 +364,13 @@ export class NodeExecutionService {
     })
 
     for (const run of staleRuns) {
-      const interrupted = this.executions.transitionRun(run.id, ["RUNNING"], {
+      const interrupted = await this.executions.transitionRun(run.id, ["RUNNING"], {
         status: "INTERRUPTED",
         finishedAt: new Date().toISOString(),
         error: "运行超过心跳超时未上报，判定为僵死",
       })
       if (!interrupted) continue
-      this.transactionalUpdate(requirementId, (current) => {
+      await this.transactionalUpdate(requirementId, (current) => {
         const step = current.steps.find((candidate) => candidate.id === interrupted.nodeId)
         if (step) {
           step.status = TaskStatus.BLOCKED
@@ -385,7 +379,7 @@ export class NodeExecutionService {
         }
         return current
       })
-      this.appendEvent(requirementId, interrupted, "RUN_FAILED", {
+      await this.appendEvent(requirementId, interrupted, "RUN_FAILED", {
         status: "INTERRUPTED",
         error: interrupted.error,
       })
@@ -393,11 +387,11 @@ export class NodeExecutionService {
     return staleRuns.length
   }
 
-  saveIntegrationHealth(health: IntegrationHealth): void {
-    this.executions.saveIntegrationHealth(health)
+  async saveIntegrationHealth(health: IntegrationHealth): Promise<void> {
+    await this.executions.saveIntegrationHealth(health)
   }
 
-  listIntegrationHealth(): IntegrationHealth[] {
+  async listIntegrationHealth(): Promise<IntegrationHealth[]> {
     return this.executions.listIntegrationHealth()
   }
 
@@ -420,14 +414,14 @@ export class NodeExecutionService {
     }
     while (true) {
       // 每次轮询先恢复僵死运行，避免卡住调度器
-      this.recoverStaleRuns(requirementId)
-      const snapshot = this.getSnapshot(requirementId)
+      await this.recoverStaleRuns(requirementId)
+      const snapshot = await this.getSnapshot(requirementId)
       const capacity = maxParallel - snapshot.activeRuns.length
       let launchError: unknown
       if (capacity > 0) {
         for (const nodeId of snapshot.readyNodeIds.slice(0, capacity)) {
           try {
-            this.runNode(
+            await this.runNode(
               requirementId,
               nodeId,
               options.force === undefined ? {} : { force: options.force },
@@ -437,20 +431,20 @@ export class NodeExecutionService {
           }
         }
       }
-      const next = this.getSnapshot(requirementId)
+      const next = await this.getSnapshot(requirementId)
       if (next.activeRuns.length === 0 && next.readyNodeIds.length === 0) return next
       if (launchError && next.activeRuns.length === 0) throw launchError
       await new Promise((resolvePromise) => setTimeout(resolvePromise, pollIntervalMs))
     }
   }
 
-  private appendEvent(
+  private async appendEvent(
     requirementId: string,
     run: NodeRun,
     type: WorkflowEvent["type"],
     payload: Record<string, unknown>,
-  ): void {
-    this.executions.appendEvent({
+  ): Promise<void> {
+    await this.executions.appendEvent({
       requirementId,
       runId: run.id,
       nodeId: run.nodeId,

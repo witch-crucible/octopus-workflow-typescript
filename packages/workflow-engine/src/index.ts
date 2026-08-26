@@ -2,8 +2,8 @@
  * Workflow Engine 包 —— 工作流状态机引擎。
  *
  * 阶段转换、任务生命周期与阶段门控校验均为命令式实现（不使用 xstate）。
- * 状态持久化通过 @octopus/context 的 StateStore 完成；所有读改写方法
- * 都在 store.update 的单个 SQLite 事务内执行，避免并发写入互相覆盖。
+ * 状态持久化通过 @octopus/context 的 PersistenceStore 完成；所有读改写方法
+ * 都在 PostgreSQL 锁行事务内执行，避免并发写入互相覆盖。
  *
  * 阶段转换规则（映射 PlantUML）：
  * - 只能按顺序前进：INTENTION → RESEARCH → DESIGN → IMPLEMENTATION → TESTING → UAT → RELEASE → MAINTENANCE → COMPLETED
@@ -42,7 +42,14 @@ import {
   type BrdNodeRuntime,
   type BrdRenderedPrompt,
 } from "../../../workflow/nodes/requirements-analysis-and-brd-design/src/index.js"
-import { Phase, PhaseLock, getPhaseIndex, getNextPhase, getPreviousPhase, PHASE_ORDER } from "@octopus/core/phase.js"
+import {
+  Phase,
+  PhaseLock,
+  getPhaseIndex,
+  getNextPhase,
+  getPreviousPhase,
+  PHASE_ORDER,
+} from "@octopus/core/phase.js"
 import type {
   Task,
   TaskExportDocument,
@@ -56,9 +63,21 @@ import type { StageProgress, StageInfo } from "@octopus/core/task.js"
 import type { Checklist } from "@octopus/core/checklist.js"
 import { ChecklistItemStatus } from "@octopus/core/checklist.js"
 import type { HeinrichRecord, HeinrichObservation, QualityAssessment } from "@octopus/core/risk.js"
-import { QualityVerdict, HEINRICH_IDEAL_RATIO, createEmptyHeinrichRecord, HeinrichLevel } from "@octopus/core/risk.js"
+import {
+  QualityVerdict,
+  HEINRICH_IDEAL_RATIO,
+  createEmptyHeinrichRecord,
+  HeinrichLevel,
+} from "@octopus/core/risk.js"
 import type { ArtifactType, Artifact } from "@octopus/core/artifact.js"
-import { PhaseId, TaskId, ChecklistItemId, ObservationId, ArtifactId, MilestoneId } from "@octopus/core/branded-ids.js"
+import {
+  PhaseId,
+  TaskId,
+  ChecklistItemId,
+  ObservationId,
+  ArtifactId,
+  MilestoneId,
+} from "@octopus/core/branded-ids.js"
 import { Role } from "@octopus/core/role.js"
 import { InvalidPhaseTransitionError, PhaseLockedError } from "@octopus/core/errors.js"
 import {
@@ -78,8 +97,8 @@ import type { MyWorkItem, MyWorkList, ProjectOverview } from "@octopus/core/my-w
 import { stepToTask, stepToStageInfo } from "@octopus/core/workflow.js"
 import type { StepRuntime } from "@octopus/core/step.js"
 import { createEmptyChecklist } from "@octopus/core/checklist.js"
-import type { StateStore } from "@octopus/context/index.js"
-import { createStateStore } from "@octopus/context/index.js"
+import type { PersistenceStore } from "@octopus/context/index.js"
+import { createPersistenceStore } from "@octopus/context/index.js"
 import {
   appendWorkflowNode,
   initializeWorkflowFile,
@@ -141,20 +160,6 @@ import type { RunNodeOptions, RunWorkflowOptions } from "./execution.js"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-/** 同步阻塞休眠（微秒级退避用；Node 主线程可用） */
-function sleep(ms: number): void {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
-    // busy wait
-  }
-}
-
-/** 是否 SQLite 并发写锁冲突（可重试） */
-function isWriteLockError(cause: unknown): boolean {
-  const err = cause as { code?: string; message?: string }
-  return err?.code === "SQLITE_BUSY" || (typeof err?.message === "string" && err.message.includes("database is locked"))
 }
 
 function isIsoDate(value: unknown): value is string {
@@ -242,15 +247,15 @@ function validateTaskExportDocument(document: unknown): TaskExportDocument {
     throw new Error("任务导入文件的 sourceRequirement 无效")
   }
   const hasRequirementShape =
-    typeof sourceRequirement["requirementId"] === "string"
-    && sourceRequirement["requirementId"].length > 0
-    && typeof sourceRequirement["requirementName"] === "string"
-    && typeof sourceRequirement["projectId"] === "string"
-    && sourceRequirement["projectId"].length > 0
+    typeof sourceRequirement["requirementId"] === "string" &&
+    sourceRequirement["requirementId"].length > 0 &&
+    typeof sourceRequirement["requirementName"] === "string" &&
+    typeof sourceRequirement["projectId"] === "string" &&
+    sourceRequirement["projectId"].length > 0
   const hasLegacyProjectShape =
-    typeof sourceRequirement["projectId"] === "string"
-    && sourceRequirement["projectId"].length > 0
-    && typeof sourceRequirement["projectName"] === "string"
+    typeof sourceRequirement["projectId"] === "string" &&
+    sourceRequirement["projectId"].length > 0 &&
+    typeof sourceRequirement["projectName"] === "string"
   if (!hasRequirementShape && !hasLegacyProjectShape) {
     throw new Error("任务导入文件的 sourceRequirement 无效")
   }
@@ -303,8 +308,10 @@ function validateTaskExportDocument(document: unknown): TaskExportDocument {
     if (!Object.values(TaskStatus).includes(value["status"] as TaskStatus)) {
       throw new Error(`任务 ${stageId} 的 status 无效`)
     }
-    if (!Array.isArray(value["artifactIds"])
-      || !value["artifactIds"].every((id) => typeof id === "string")) {
+    if (
+      !Array.isArray(value["artifactIds"]) ||
+      !value["artifactIds"].every((id) => typeof id === "string")
+    ) {
       throw new Error(`任务 ${stageId} 的 artifactIds 无效`)
     }
     if (value["assignedTo"] !== null && typeof value["assignedTo"] !== "string") {
@@ -332,7 +339,7 @@ export interface GateCheckResult {
 
 /** WorkflowEngine 配置 */
 export interface WorkflowEngineConfig {
-  store: StateStore
+  store: PersistenceStore
   aiClient?: AIClient
   /** 是否启用严格权限校验 */
   strictPermissions?: boolean
@@ -360,7 +367,7 @@ export interface CreateNodeResult {
  * 工作流引擎 —— 所有阶段/任务/清单/风险/制品操作的统一入口。
  */
 export class WorkflowEngine {
-  private readonly store: StateStore
+  private readonly store: PersistenceStore
   private readonly aiClient: AIClient | undefined
   private readonly strictPermissions: boolean
   private readonly aiGatingEnabled: boolean
@@ -370,12 +377,14 @@ export class WorkflowEngine {
   private readonly pluginHost: PluginHost
   private readonly nodeExecution: NodeExecutionService
   private readonly teambitionOperatorId: string | undefined
-  private aiHandlers: Array<(event: {
-    type: "onPhaseAdvance" | "onPhaseRollback"
-    from: Phase
-    to: Phase
-    state: WorkflowState
-  }) => Promise<{ allowed: boolean; reason?: string }> | { allowed: boolean; reason?: string }> = []
+  private aiHandlers: Array<
+    (event: {
+      type: "onPhaseAdvance" | "onPhaseRollback"
+      from: Phase
+      to: Phase
+      state: WorkflowState
+    }) => Promise<{ allowed: boolean; reason?: string }> | { allowed: boolean; reason?: string }
+  > = []
 
   constructor(config: WorkflowEngineConfig) {
     this.store = config.store
@@ -389,9 +398,8 @@ export class WorkflowEngine {
     for (const [kind, handler] of this.pluginHost.kindHandlers) {
       this.registry.register(kind, handler)
     }
-    this.nodeExecution = new NodeExecutionService(
-      this.store,
-      (projectRoot) => this.loadDefinition(projectRoot),
+    this.nodeExecution = new NodeExecutionService(this.store, (projectRoot) =>
+      this.loadDefinition(projectRoot),
     )
     this.teambitionOperatorId = config.teambitionOperatorId
   }
@@ -402,8 +410,8 @@ export class WorkflowEngine {
   }
 
   /** 读取叠加插件与项目 overlay 后的工作流定义。 */
-  getWorkflowDefinition(requirementId: string): WorkflowDefinition {
-    const state = this.getState(requirementId)
+  async getWorkflowDefinition(requirementId: string): Promise<WorkflowDefinition> {
+    const state = await this.getState(requirementId)
     return this.loadDefinition(state.projectRoot ?? process.cwd())
   }
 
@@ -412,24 +420,13 @@ export class WorkflowEngine {
   }
 
   /**
-   * 在单个 SQLite 事务内完成读改写；并发写锁冲突（SQLITE_BUSY）时按指数
-   * 退避重试整个事务，避免跨进程并发写入互相覆盖或互相死锁。
+   * 存储层在可序列化事务中锁行并对序列化失败/死锁做有限异步重试。
    */
-  private transactionalUpdate(
+  private async transactionalUpdate(
     requirementId: string,
     updater: (state: WorkflowState) => WorkflowState,
-  ): WorkflowState {
-    let attempt = 0
-    for (;;) {
-      try {
-        return this.store.update(requirementId, updater)
-      } catch (cause) {
-        if (!isWriteLockError(cause) || attempt >= 30) throw cause
-        attempt++
-        // 抖动退避：避免多个进程以相同节奏反复碰撞
-        sleep(1 + Math.floor(Math.random() * (2 ** Math.min(attempt, 7))))
-      }
-    }
+  ): Promise<WorkflowState> {
+    return this.store.update(requirementId, updater)
   }
 
   /** 节点运行与监控服务。 */
@@ -437,19 +434,30 @@ export class WorkflowEngine {
     return this.nodeExecution
   }
 
+  /** 完成启动清理；组合根在返回引擎前调用。 */
+  async initialize(): Promise<void> {
+    await this.nodeExecution.initialize()
+  }
+
+  /** 关闭本进程唯一的 PostgreSQL 客户端。 */
+  async close(): Promise<void> {
+    await this.store.close()
+  }
+
   // ── 项目容器 ──
 
   /** 列出状态库中的项目 ID。 */
-  listProjects(): string[] {
+  async listProjects(): Promise<string[]> {
     return this.store.listProjects()
   }
 
   /** 列出项目管理中心所需的项目摘要。 */
-  listProjectSummaries(): ProjectSummary[] {
-    return this.listProjects().map((projectId) => {
-      const project = this.store.loadProject(projectId)
-      const requirementIds = this.store.listRequirements(projectId)
-      return {
+  async listProjectSummaries(): Promise<ProjectSummary[]> {
+    const summaries: ProjectSummary[] = []
+    for (const projectId of await this.listProjects()) {
+      const project = await this.store.loadProject(projectId)
+      const requirementIds = await this.store.listRequirements(projectId)
+      summaries.push({
         projectId: project.projectId,
         name: project.name,
         description: project.description,
@@ -461,22 +469,31 @@ export class WorkflowEngine {
           ? { teambitionRepoId: project.teambitionVersion.repoId }
           : {}),
         updatedAt: project.updatedAt,
-      }
-    })
+      })
+    }
+    return summaries
   }
 
   /** 项目概览（只读投影，从 state 派生）。 */
-  getProjectOverview(projectId: string): ProjectOverview {
-    const project = this.store.loadProject(projectId)
-    const requirementIds = this.listRequirements(projectId)
-    const byPhase: Array<{ phase: Phase; count: number }> = PHASE_ORDER.map((phase) => ({ phase, count: 0 }))
-    let unscheduledCount = 0, unboundTbCount = 0, ownerlessCount = 0
-    let milestonePlanned = 0, milestoneReached = 0, milestoneOverdue = 0
+  async getProjectOverview(projectId: string): Promise<ProjectOverview> {
+    const project = await this.store.loadProject(projectId)
+    const requirementIds = await this.listRequirements(projectId)
+    const byPhase: Array<{ phase: Phase; count: number }> = PHASE_ORDER.map((phase) => ({
+      phase,
+      count: 0,
+    }))
+    let unscheduledCount = 0,
+      unboundTbCount = 0,
+      ownerlessCount = 0
+    let milestonePlanned = 0,
+      milestoneReached = 0,
+      milestoneOverdue = 0
     const heinrich = { major: 0, minor: 0, trivial: 0 }
-    let readyNodeCount = 0, waitingNodeCount = 0
+    let readyNodeCount = 0,
+      waitingNodeCount = 0
     const today = todayYmd()
     for (const requirementId of requirementIds) {
-      const state = this.getState(requirementId)
+      const state = await this.getState(requirementId)
       const idx = PHASE_ORDER.indexOf(state.currentPhase)
       if (idx >= 0 && byPhase[idx]) byPhase[idx].count++
       if (!(state.plannedStart && state.plannedEnd)) unscheduledCount++
@@ -493,7 +510,7 @@ export class WorkflowEngine {
           milestoneReached++
         }
       }
-      const snapshot = this.nodeExecution.getSnapshot(requirementId)
+      const snapshot = await this.nodeExecution.getSnapshot(requirementId)
       readyNodeCount += snapshot.readyNodeIds.length
       waitingNodeCount += snapshot.waitingNodeIds.length
     }
@@ -515,17 +532,20 @@ export class WorkflowEngine {
   }
 
   /** 创建项目容器。 */
-  createProject(name: string, description?: string): Project {
+  async createProject(name: string, description?: string): Promise<Project> {
     return this.store.createProject(name, description)
   }
 
   /** 获取项目容器。 */
-  getProject(projectId: string): Project {
+  async getProject(projectId: string): Promise<Project> {
     return this.store.loadProject(projectId)
   }
 
   /** 更新项目名称或描述。 */
-  updateProjectMeta(projectId: string, patch: { name?: string; description?: string }): Project {
+  async updateProjectMeta(
+    projectId: string,
+    patch: { name?: string; description?: string },
+  ): Promise<Project> {
     const name = patch.name === undefined ? undefined : patch.name.trim()
     if (name !== undefined && name === "") {
       throw new Error("项目名称必须是非空字符串")
@@ -538,33 +558,34 @@ export class WorkflowEngine {
   }
 
   /** 删除项目及其下需求与运行记录。 */
-  deleteProject(projectId: string): void {
-    this.store.loadProject(projectId)
-    this.store.deleteProject(projectId)
+  async deleteProject(projectId: string): Promise<void> {
+    await this.store.loadProject(projectId)
+    await this.store.deleteProject(projectId)
   }
 
   // ── 需求生命周期 ──
 
   /** 列出需求 ID；可按项目过滤。 */
-  listRequirements(projectId?: string): string[] {
+  async listRequirements(projectId?: string): Promise<string[]> {
     return this.store.listRequirements(projectId)
   }
 
   /** 列出需求摘要。 */
-  listRequirementSummaries(projectId?: string): RequirementSummary[] {
+  async listRequirementSummaries(projectId?: string): Promise<RequirementSummary[]> {
     const projectCache = new Map<string, Project>()
-    const loadProjectCached = (pid: string): Project => {
+    const loadProjectCached = async (pid: string): Promise<Project> => {
       let project = projectCache.get(pid)
       if (!project) {
-        project = this.store.loadProject(pid)
+        project = await this.store.loadProject(pid)
         projectCache.set(pid, project)
       }
       return project
     }
-    return this.listRequirements(projectId).map((requirementId) => {
-      const state = this.getState(requirementId)
-      const project = loadProjectCached(state.projectId)
-      return {
+    const summaries: RequirementSummary[] = []
+    for (const requirementId of await this.listRequirements(projectId)) {
+      const state = await this.getState(requirementId)
+      const project = await loadProjectCached(state.projectId)
+      summaries.push({
         projectId: state.projectId,
         requirementId: state.requirementId,
         requirementName: state.requirementName,
@@ -574,7 +595,9 @@ export class WorkflowEngine {
         completedTasks: state.steps.filter((step) => step.status === TaskStatus.COMPLETED).length,
         ...(state.projectRoot !== undefined ? { projectRoot: state.projectRoot } : {}),
         updatedAt: state.updatedAt,
-        ...(state.teambition?.taskId !== undefined ? { teambitionTaskId: state.teambition.taskId } : {}),
+        ...(state.teambition?.taskId !== undefined
+          ? { teambitionTaskId: state.teambition.taskId }
+          : {}),
         ...(state.teambition?.statusName !== undefined
           ? { teambitionStatusName: state.teambition.statusName }
           : {}),
@@ -590,21 +613,22 @@ export class WorkflowEngine {
         ...(state.plannedStart !== undefined ? { plannedStart: state.plannedStart } : {}),
         ...(state.plannedEnd !== undefined ? { plannedEnd: state.plannedEnd } : {}),
         ...requirementMilestoneSummary(state),
-      }
-    })
+      })
+    }
+    return summaries
   }
 
   /** 初始化新需求（隶属于项目），并写入当前阶段步骤。 */
-  initRequirement(
+  async initRequirement(
     projectId: string,
     name: string,
     description?: string,
     projectRoot?: string,
-  ): WorkflowState {
+  ): Promise<WorkflowState> {
     const definition = projectRoot
       ? (initializeWorkflowFile(projectRoot), this.loadDefinition(projectRoot))
       : undefined
-    const state = this.store.createRequirement(projectId, name, description, projectRoot)
+    const state = await this.store.createRequirement(projectId, name, description, projectRoot)
 
     state.steps = definition
       ? createStepsFromDefinition(state.projectId, definition, state.currentPhase)
@@ -612,12 +636,15 @@ export class WorkflowEngine {
     state.checklists[state.currentPhase] = createEmptyChecklist(state.currentPhase)
     state.heinrich = createEmptyHeinrichRecord()
 
-    this.store.save(state)
+    await this.store.save(state)
     return state
   }
 
   /** 更新需求名称或描述。 */
-  updateRequirement(requirementId: string, patch: { name?: string; description?: string; owner?: string | null }): WorkflowState {
+  async updateRequirement(
+    requirementId: string,
+    patch: { name?: string; description?: string; owner?: string | null },
+  ): Promise<WorkflowState> {
     const name = patch.name === undefined ? undefined : patch.name.trim()
     if (name !== undefined && name === "") {
       throw new Error("需求名称必须是非空字符串")
@@ -643,19 +670,19 @@ export class WorkflowEngine {
   }
 
   /** 删除需求状态及运行记录，不删除磁盘上的 workflow.yaml。 */
-  deleteRequirement(requirementId: string): void {
-    this.getState(requirementId)
-    this.store.deleteRequirement(requirementId)
+  async deleteRequirement(requirementId: string): Promise<void> {
+    await this.getState(requirementId)
+    await this.store.deleteRequirement(requirementId)
   }
 
   /** 更新节点计划起止日期（甘特图排期）。
    * 两个都空则清除排期；否则必须成对提供 YYYY-MM-DD，且结束不早于开始。
    */
-  updateNodeSchedule(
+  async updateNodeSchedule(
     requirementId: string,
     nodeId: string,
     schedule: { plannedStart?: string | null; plannedEnd?: string | null },
-  ): WorkflowState {
+  ): Promise<WorkflowState> {
     const startRaw = schedule.plannedStart
     const endRaw = schedule.plannedEnd
     const startEmpty = startRaw === undefined || startRaw === null || startRaw === ""
@@ -694,7 +721,11 @@ export class WorkflowEngine {
   }
 
   /** 为节点设置或清除负责人。 */
-  assignNode(requirementId: string, nodeId: string, assignedTo: string | null): WorkflowState {
+  async assignNode(
+    requirementId: string,
+    nodeId: string,
+    assignedTo: string | null,
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const step = current.steps.find((item) => item.id === nodeId)
       if (!step) throw new Error(`节点不存在: ${nodeId}`)
@@ -713,10 +744,10 @@ export class WorkflowEngine {
   /** 更新需求级计划起止日期（甘特图排期）。
    * 两个都空则清除排期；否则必须成对提供 YYYY-MM-DD，且结束不早于开始。
    */
-  updateRequirementSchedule(
+  async updateRequirementSchedule(
     requirementId: string,
     schedule: { plannedStart?: string | null; plannedEnd?: string | null },
-  ): WorkflowState {
+  ): Promise<WorkflowState> {
     const startRaw = schedule.plannedStart
     const endRaw = schedule.plannedEnd
     const startEmpty = startRaw === undefined || startRaw === null || startRaw === ""
@@ -756,8 +787,8 @@ export class WorkflowEngine {
    * to === from 时 no-op；toIdx === fromIdx+1 走 advancePhase；
    * toIdx < fromIdx 走 rollbackTo；否则抛 InvalidPhaseTransitionError。
    */
-  moveRequirementPhase(requirementId: string, toPhase: Phase): WorkflowState {
-    const state = this.getState(requirementId)
+  async moveRequirementPhase(requirementId: string, toPhase: Phase): Promise<WorkflowState> {
+    const state = await this.getState(requirementId)
     const from = state.currentPhase
     if (toPhase === from) return state
     if (!PHASE_ORDER.includes(toPhase)) {
@@ -771,20 +802,24 @@ export class WorkflowEngine {
     if (toIdx < fromIdx) {
       return this.rollbackTo(requirementId, toPhase)
     }
-    throw new InvalidPhaseTransitionError(from, toPhase, "看板只能前进到下一阶段，或回退到已到达的阶段")
+    throw new InvalidPhaseTransitionError(
+      from,
+      toPhase,
+      "看板只能前进到下一阶段，或回退到已到达的阶段",
+    )
   }
 
   /** 列出需求里程碑（按日期、创建时间排序）。 */
-  listMilestones(requirementId: string): RequirementMilestone[] {
-    return sortMilestones(this.getState(requirementId).milestones ?? [])
+  async listMilestones(requirementId: string): Promise<RequirementMilestone[]> {
+    return sortMilestones((await this.getState(requirementId)).milestones ?? [])
   }
 
   /** 列出项目下全部需求的里程碑（投影，按日期 / 需求名 / id）。 */
-  listProjectMilestones(projectId: string): ProjectMilestone[] {
-    this.store.loadProject(projectId)
+  async listProjectMilestones(projectId: string): Promise<ProjectMilestone[]> {
+    await this.store.loadProject(projectId)
     const items: ProjectMilestone[] = []
-    for (const requirementId of this.listRequirements(projectId)) {
-      const state = this.getState(requirementId)
+    for (const requirementId of await this.listRequirements(projectId)) {
+      const state = await this.getState(requirementId)
       for (const milestone of state.milestones ?? []) {
         items.push({
           ...milestone,
@@ -793,21 +828,25 @@ export class WorkflowEngine {
         })
       }
     }
-    return items.sort((a, b) =>
-      a.date.localeCompare(b.date)
-      || a.requirementName.localeCompare(b.requirementName)
-      || a.id.localeCompare(b.id))
+    return items.sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) ||
+        a.requirementName.localeCompare(b.requirementName) ||
+        a.id.localeCompare(b.id),
+    )
   }
 
   /** 按身份（姓名/邮箱等）查询分配给自己的需求与节点。 */
-  listMyWork(identity: string, projectId?: string): MyWorkList {
+  async listMyWork(identity: string, projectId?: string): Promise<MyWorkList> {
     if (identity.trim() === "") return { identity: "", requirements: [], nodes: [] }
     const requirements: MyWorkItem[] = []
     const nodes: MyWorkItem[] = []
-    const requirementIds = projectId ? this.listRequirements(projectId) : this.listRequirements()
+    const requirementIds = projectId
+      ? await this.listRequirements(projectId)
+      : await this.listRequirements()
     for (const requirementId of requirementIds) {
-      const state = this.getState(requirementId)
-      const projectName = this.store.loadProject(state.projectId).name
+      const state = await this.getState(requirementId)
+      const projectName = (await this.store.loadProject(state.projectId)).name
       const base = {
         projectId: state.projectId,
         projectName,
@@ -816,7 +855,8 @@ export class WorkflowEngine {
       }
       const next = requirementMilestoneSummary(state).nextMilestone
       const plannedEnd = state.plannedEnd
-      const overdue = (next?.overdue === true) || (plannedEnd !== undefined && plannedEnd < todayYmd())
+      const overdue =
+        next?.overdue === true || (plannedEnd !== undefined && plannedEnd < todayYmd())
       if (identityMatches(state.owner, identity)) {
         requirements.push({
           kind: "requirement",
@@ -829,7 +869,12 @@ export class WorkflowEngine {
         })
       }
       for (const step of state.steps) {
-        if (identityMatches(step.assignedTo, identity) && (step.status === TaskStatus.PENDING || step.status === TaskStatus.IN_PROGRESS || step.status === TaskStatus.BLOCKED)) {
+        if (
+          identityMatches(step.assignedTo, identity) &&
+          (step.status === TaskStatus.PENDING ||
+            step.status === TaskStatus.IN_PROGRESS ||
+            step.status === TaskStatus.BLOCKED)
+        ) {
           nodes.push({
             kind: "node",
             ...base,
@@ -847,8 +892,10 @@ export class WorkflowEngine {
     }
     const sortFn = (a: MyWorkItem, b: MyWorkItem): number => {
       if (a.overdue !== b.overdue) return a.overdue ? -1 : 1
-      const dateA = a.plannedEnd ?? ("nextMilestone" in a && a.nextMilestone ? a.nextMilestone.date : "") ?? ""
-      const dateB = b.plannedEnd ?? ("nextMilestone" in b && b.nextMilestone ? b.nextMilestone.date : "") ?? ""
+      const dateA =
+        a.plannedEnd ?? ("nextMilestone" in a && a.nextMilestone ? a.nextMilestone.date : "") ?? ""
+      const dateB =
+        b.plannedEnd ?? ("nextMilestone" in b && b.nextMilestone ? b.nextMilestone.date : "") ?? ""
       const dateCmp = dateA.localeCompare(dateB)
       if (dateCmp !== 0) return dateCmp
       return a.requirementName.localeCompare(b.requirementName)
@@ -861,10 +908,10 @@ export class WorkflowEngine {
   }
 
   /** 新增需求里程碑。 */
-  addMilestone(
+  async addMilestone(
     requirementId: string,
     input: { name: string; date: string; phase?: Phase; nodeId?: string; note?: string },
-  ): RequirementMilestone {
+  ): Promise<RequirementMilestone> {
     const name = normalizeMilestoneName(input.name)
     const date = normalizeMilestoneDate(input.date)
     const phase = input.phase === undefined ? undefined : assertMilestonePhase(input.phase)
@@ -882,8 +929,11 @@ export class WorkflowEngine {
       ...(note !== undefined ? { note } : {}),
     }
 
-    this.transactionalUpdate(requirementId, (current) => {
-      if (created.nodeId !== undefined && !current.steps.some((step) => step.id === created.nodeId)) {
+    await this.transactionalUpdate(requirementId, (current) => {
+      if (
+        created.nodeId !== undefined &&
+        !current.steps.some((step) => step.id === created.nodeId)
+      ) {
         throw new Error(`节点不存在: ${created.nodeId}`)
       }
       current.milestones = [...(current.milestones ?? []), created]
@@ -893,7 +943,7 @@ export class WorkflowEngine {
   }
 
   /** 更新里程碑字段；日期不能清空。 */
-  updateMilestone(
+  async updateMilestone(
     requirementId: string,
     milestoneId: string,
     patch: {
@@ -903,9 +953,9 @@ export class WorkflowEngine {
       nodeId?: string | null
       note?: string | null
     },
-  ): RequirementMilestone {
+  ): Promise<RequirementMilestone> {
     let updated: RequirementMilestone | undefined
-    this.transactionalUpdate(requirementId, (current) => {
+    await this.transactionalUpdate(requirementId, (current) => {
       const milestones = [...(current.milestones ?? [])]
       const index = milestones.findIndex((item) => item.id === milestoneId)
       if (index === -1) throw new Error(`里程碑不存在: ${milestoneId}`)
@@ -921,7 +971,10 @@ export class WorkflowEngine {
         }
       }
 
-      const next: RequirementMilestone = { ...currentMilestone, updatedAt: new Date().toISOString() }
+      const next: RequirementMilestone = {
+        ...currentMilestone,
+        updatedAt: new Date().toISOString(),
+      }
       if (patch.name !== undefined) next.name = normalizeMilestoneName(patch.name)
       if (typeof patch.date === "string") next.date = normalizeMilestoneDate(patch.date)
       if (patch.phase === null) delete next.phase
@@ -941,18 +994,21 @@ export class WorkflowEngine {
   }
 
   /** 标记里程碑已达成。已达成则 no-op。 */
-  reachMilestone(requirementId: string, milestoneId: string): RequirementMilestone {
+  async reachMilestone(requirementId: string, milestoneId: string): Promise<RequirementMilestone> {
     return this.setMilestoneReached(requirementId, milestoneId, true)
   }
 
   /** 取消达成。计划中则 no-op。 */
-  unreachMilestone(requirementId: string, milestoneId: string): RequirementMilestone {
+  async unreachMilestone(
+    requirementId: string,
+    milestoneId: string,
+  ): Promise<RequirementMilestone> {
     return this.setMilestoneReached(requirementId, milestoneId, false)
   }
 
   /** 删除里程碑。 */
-  deleteMilestone(requirementId: string, milestoneId: string): void {
-    this.transactionalUpdate(requirementId, (current) => {
+  async deleteMilestone(requirementId: string, milestoneId: string): Promise<void> {
+    await this.transactionalUpdate(requirementId, (current) => {
       const milestones = current.milestones ?? []
       if (!milestones.some((item) => item.id === milestoneId)) {
         throw new Error(`里程碑不存在: ${milestoneId}`)
@@ -962,13 +1018,13 @@ export class WorkflowEngine {
     })
   }
 
-  private setMilestoneReached(
+  private async setMilestoneReached(
     requirementId: string,
     milestoneId: string,
     reached: boolean,
-  ): RequirementMilestone {
+  ): Promise<RequirementMilestone> {
     let result: RequirementMilestone | undefined
-    this.transactionalUpdate(requirementId, (current) => {
+    await this.transactionalUpdate(requirementId, (current) => {
       const milestones = [...(current.milestones ?? [])]
       const index = milestones.findIndex((item) => item.id === milestoneId)
       if (index === -1) throw new Error(`里程碑不存在: ${milestoneId}`)
@@ -1011,41 +1067,62 @@ export class WorkflowEngine {
   }
 
   /** 获取当前节点、READY 节点和活动运行摘要。 */
-  getExecutionSnapshot(requirementId: string): WorkflowExecutionSnapshot {
+  async getExecutionSnapshot(requirementId: string): Promise<WorkflowExecutionSnapshot> {
     return this.nodeExecution.getSnapshot(requirementId)
   }
 
   /** 恢复僵死运行（心跳超时的 RUNNING → INTERRUPTED，节点置 BLOCKED），返回恢复数量。 */
-  recoverStaleRuns(requirementId: string, staleAfterMs?: number): number {
+  async recoverStaleRuns(requirementId: string, staleAfterMs?: number): Promise<number> {
     return this.nodeExecution.recoverStaleRuns(requirementId, staleAfterMs)
   }
 
   /** 独立运行一个节点。 */
-  runNode(requirementId: string, nodeKey: string, options?: RunNodeOptions): NodeRun {
-    return this.nodeExecution.runNode(requirementId, this.resolveNodeId(requirementId, nodeKey), options)
+  async runNode(
+    requirementId: string,
+    nodeKey: string,
+    options?: RunNodeOptions,
+  ): Promise<NodeRun> {
+    return this.nodeExecution.runNode(
+      requirementId,
+      await this.resolveNodeId(requirementId, nodeKey),
+      options,
+    )
   }
 
   /** 使用英文节点键完成手动节点。 */
-  completeManualNode(requirementId: string, nodeKey: string, force = false): WorkflowState {
-    return this.nodeExecution.completeManualNode(requirementId, this.resolveNodeId(requirementId, nodeKey), force)
+  async completeManualNode(
+    requirementId: string,
+    nodeKey: string,
+    force = false,
+  ): Promise<WorkflowState> {
+    return this.nodeExecution.completeManualNode(
+      requirementId,
+      await this.resolveNodeId(requirementId, nodeKey),
+      force,
+    )
   }
 
   /** 将英文节点键解析为内部运行态 ID。 */
-  resolveNodeId(requirementId: string, nodeKey: string): string {
-    const state = this.getState(requirementId)
-    if (!state.projectRoot) throw new Error(`需求 ${requirementId} 未配置源码根目录，请重新 init --root`)
+  async resolveNodeId(requirementId: string, nodeKey: string): Promise<string> {
+    const state = await this.getState(requirementId)
+    if (!state.projectRoot)
+      throw new Error(`需求 ${requirementId} 未配置源码根目录，请重新 init --root`)
     return resolveWorkflowNodeId(this.loadDefinition(state.projectRoot), nodeKey)
   }
 
   /** 将内部运行态 ID 反查为英文节点键。 */
-  resolveNodeKey(requirementId: string, nodeId: string): string {
-    const state = this.getState(requirementId)
-    if (!state.projectRoot) throw new Error(`需求 ${requirementId} 未配置源码根目录，请重新 init --root`)
+  async resolveNodeKey(requirementId: string, nodeId: string): Promise<string> {
+    const state = await this.getState(requirementId)
+    if (!state.projectRoot)
+      throw new Error(`需求 ${requirementId} 未配置源码根目录，请重新 init --root`)
     return resolveWorkflowNodeKey(this.loadDefinition(state.projectRoot), nodeId)
   }
 
   /** 自动并行运行所有 READY 节点。 */
-  runWorkflow(requirementId: string, options?: RunWorkflowOptions): Promise<WorkflowExecutionSnapshot> {
+  runWorkflow(
+    requirementId: string,
+    options?: RunWorkflowOptions,
+  ): Promise<WorkflowExecutionSnapshot> {
     return this.nodeExecution.runWorkflow(requirementId, options)
   }
 
@@ -1054,9 +1131,10 @@ export class WorkflowEngine {
    *
    * 当前阶段节点会立即加入运行态；未来阶段节点只写入定义，在阶段推进时激活。
    */
-  createNode(requirementId: string, node: WorkflowNodeSpec): CreateNodeResult {
-    const state = this.getState(requirementId)
-    if (!state.projectRoot) throw new Error(`需求 ${requirementId} 未配置源码根目录，请重新 init --root`)
+  async createNode(requirementId: string, node: WorkflowNodeSpec): Promise<CreateNodeResult> {
+    const state = await this.getState(requirementId)
+    if (!state.projectRoot)
+      throw new Error(`需求 ${requirementId} 未配置源码根目录，请重新 init --root`)
 
     const currentPhaseIndex = getPhaseIndex(state.currentPhase)
     const nodePhaseIndex = getPhaseIndex(node.phase)
@@ -1082,8 +1160,9 @@ export class WorkflowEngine {
     const appended = appendWorkflowNode(state.projectRoot, node)
     const activated = node.phase === state.currentPhase
     if (activated) {
-      this.transactionalUpdate(requirementId, (current) => {
-        if (current.steps.some((step) => step.id === appended.nodeId)) throw new Error(`节点已存在: ${node.key}`)
+      await this.transactionalUpdate(requirementId, (current) => {
+        if (current.steps.some((step) => step.id === appended.nodeId))
+          throw new Error(`节点已存在: ${node.key}`)
         current.steps.push(createStepFromNode(requirementId, node, appended.definition))
         return current
       })
@@ -1111,7 +1190,7 @@ export class WorkflowEngine {
           message: result.message,
           checkedAt: new Date().toISOString(),
         }
-        this.nodeExecution.saveIntegrationHealth(health)
+        await this.nodeExecution.saveIntegrationHealth(health)
         results.push(health)
       } catch (cause) {
         const health: IntegrationHealth = {
@@ -1121,14 +1200,14 @@ export class WorkflowEngine {
           message: (cause as Error).message,
           checkedAt: new Date().toISOString(),
         }
-        this.nodeExecution.saveIntegrationHealth(health)
+        await this.nodeExecution.saveIntegrationHealth(health)
         results.push(health)
       }
     }
     return results
   }
 
-  getIntegrationHealth(): IntegrationHealth[] {
+  async getIntegrationHealth(): Promise<IntegrationHealth[]> {
     return this.nodeExecution.listIntegrationHealth()
   }
 
@@ -1143,8 +1222,12 @@ export class WorkflowEngine {
    * @param input 可选显式输入：传给该步骤声明的 AI 模块；未提供时回退为“步骤名称：步骤描述”
    * 外部调用期间若聚合状态发生并发变化，本次结果不会覆盖最新状态，而是要求调用方重试。
    */
-  async runStepCapabilities(requirementId: string, stepId: string, input?: string): Promise<WorkflowState> {
-    const state = this.getState(requirementId)
+  async runStepCapabilities(
+    requirementId: string,
+    stepId: string,
+    input?: string,
+  ): Promise<WorkflowState> {
+    const state = await this.getState(requirementId)
     const expectedState = JSON.stringify(state)
     const step = state.steps.find((s) => s.id === stepId)
     if (!step) {
@@ -1193,13 +1276,13 @@ export class WorkflowEngine {
   }
 
   /** 获取需求状态 */
-  getState(requirementId: string): WorkflowState {
+  async getState(requirementId: string): Promise<WorkflowState> {
     return this.store.load(requirementId)
   }
 
   /** 获取需求状态摘要 */
-  getRequirementStatus(requirementId: string): RequirementStatusSummary {
-    const state = this.getState(requirementId)
+  async getRequirementStatus(requirementId: string): Promise<RequirementStatusSummary> {
+    const state = await this.getState(requirementId)
     const phaseProgress = PHASE_ORDER.map((phase) => ({
       phase,
       lock: state.phaseStatus[phase] ?? PhaseLock.LOCKED,
@@ -1233,7 +1316,11 @@ export class WorkflowEngine {
       },
       totalTasks: state.steps.length,
       completedTasks: state.steps.filter((s) => s.status === TaskStatus.COMPLETED).length,
-      checklistStats: { total: totalChecklist, verified: verifiedChecklist, pending: pendingChecklist },
+      checklistStats: {
+        total: totalChecklist,
+        verified: verifiedChecklist,
+        pending: pendingChecklist,
+      },
       ...(state.teambition !== undefined ? { teambition: state.teambition } : {}),
     }
   }
@@ -1241,8 +1328,8 @@ export class WorkflowEngine {
   // ── 阶段转换 ──
 
   /** 检查是否可前进到下一阶段 */
-  canAdvance(requirementId: string): GateCheckResult {
-    const state = this.getState(requirementId)
+  async canAdvance(requirementId: string): Promise<GateCheckResult> {
+    const state = await this.getState(requirementId)
     return this.checkAdvanceGate(state)
   }
 
@@ -1272,7 +1359,11 @@ export class WorkflowEngine {
   // ── Stage 生命周期 ──
 
   /** 更新步骤状态（按步骤 id；status 沿用 StageStatus 值域，与 TaskStatus 等价） */
-  updateStageStatus(requirementId: string, stageId: string, status: StageStatus): WorkflowState {
+  async updateStageStatus(
+    requirementId: string,
+    stageId: string,
+    status: StageStatus,
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const step = current.steps.find((s) => s.id === stageId)
 
@@ -1291,15 +1382,15 @@ export class WorkflowEngine {
   }
 
   /** 获取步骤运行态视图（StageInfo，从 steps 派生） */
-  getStageInfos(requirementId: string, phase?: Phase): StageInfo[] {
-    const state = this.getState(requirementId)
+  async getStageInfos(requirementId: string, phase?: Phase): Promise<StageInfo[]> {
+    const state = await this.getState(requirementId)
     const steps = phase ? state.steps.filter((s) => s.phase === phase) : state.steps
     return steps.map(stepToStageInfo)
   }
 
   /** 获取单个步骤运行态视图 */
-  getStageInfo(requirementId: string, stageId: string): StageInfo | undefined {
-    const state = this.getState(requirementId)
+  async getStageInfo(requirementId: string, stageId: string): Promise<StageInfo | undefined> {
+    const state = await this.getState(requirementId)
     const step = state.steps.find((s) => s.id === stageId)
     return step ? stepToStageInfo(step) : undefined
   }
@@ -1327,8 +1418,8 @@ export class WorkflowEngine {
   }
 
   /** 获取阶段步骤进度 */
-  getStageProgress(requirementId: string, phase: Phase): StageProgress {
-    const state = this.getState(requirementId)
+  async getStageProgress(requirementId: string, phase: Phase): Promise<StageProgress> {
+    const state = await this.getState(requirementId)
     const phaseSteps = state.steps.filter((s) => s.phase === phase)
     const total = phaseSteps.length
     const completed = phaseSteps.filter((s) => s.status === TaskStatus.COMPLETED).length
@@ -1360,7 +1451,9 @@ export class WorkflowEngine {
 
     // 2. 检查当前阶段所有步骤是否已完成
     const phaseSteps = state.steps.filter((s) => s.phase === currentPhase)
-    const pendingSteps = phaseSteps.filter((s) => s.status !== TaskStatus.COMPLETED && s.status !== TaskStatus.SKIPPED)
+    const pendingSteps = phaseSteps.filter(
+      (s) => s.status !== TaskStatus.COMPLETED && s.status !== TaskStatus.SKIPPED,
+    )
     if (pendingSteps.length > 0) {
       reasons.push(`有 ${pendingSteps.length} 个任务未完成`)
     }
@@ -1378,9 +1471,9 @@ export class WorkflowEngine {
   }
 
   /** 前进到下一阶段 */
-  advancePhase(requirementId: string, skipAiGating?: boolean): WorkflowState {
+  async advancePhase(requirementId: string, skipAiGating?: boolean): Promise<WorkflowState> {
     // 只读快照上做门控检查；真实变更在事务内基于最新状态完成
-    const state = this.getState(requirementId)
+    const state = await this.getState(requirementId)
     const gate = this.checkAdvanceGate(state)
 
     if (!gate.allowed) {
@@ -1409,7 +1502,7 @@ export class WorkflowEngine {
       })
 
       if (!aiResult.allowed) {
-        this.transactionalUpdate(requirementId, (current) => {
+        await this.transactionalUpdate(requirementId, (current) => {
           current.aiGateResults.push({
             phase: current.currentPhase,
             allowed: false,
@@ -1418,7 +1511,9 @@ export class WorkflowEngine {
           })
           return current
         })
-        throw new PhaseLockedError(state.currentPhase, [`AI 门控拒绝: ${aiResult.reason ?? "未通过预检查"}`])
+        throw new PhaseLockedError(state.currentPhase, [
+          `AI 门控拒绝: ${aiResult.reason ?? "未通过预检查"}`,
+        ])
       }
 
       aiAllowed = true
@@ -1464,7 +1559,8 @@ export class WorkflowEngine {
       this.inheritChecklist(current, current.currentPhase)
 
       // 海因里希三角：阶段前进时记录条数触发计数
-      current.heinrich.triggerCounts[transitionTo] = (current.heinrich.triggerCounts[transitionTo] ?? 0) + 1
+      current.heinrich.triggerCounts[transitionTo] =
+        (current.heinrich.triggerCounts[transitionTo] ?? 0) + 1
 
       // Heinrich 条数审计触发
       this.checkHeinrichAuditTrigger(current, transitionTo)
@@ -1477,18 +1573,14 @@ export class WorkflowEngine {
   }
 
   /** 回退到指定阶段 */
-  rollbackTo(requirementId: string, targetPhase: Phase): WorkflowState {
+  async rollbackTo(requirementId: string, targetPhase: Phase): Promise<WorkflowState> {
     // 只读快照上做校验；真实变更在事务内基于最新状态完成
-    const state = this.getState(requirementId)
+    const state = await this.getState(requirementId)
     const currentIdx = getPhaseIndex(state.currentPhase)
     const targetIdx = getPhaseIndex(targetPhase)
 
     if (targetIdx > currentIdx) {
-      throw new InvalidPhaseTransitionError(
-        state.currentPhase,
-        targetPhase,
-        "不能回退到后续阶段",
-      )
+      throw new InvalidPhaseTransitionError(state.currentPhase, targetPhase, "不能回退到后续阶段")
     }
 
     // AI 门控（handler 收到的是旧快照，保持现有行为）
@@ -1502,7 +1594,7 @@ export class WorkflowEngine {
       })
 
       if (!aiResult.allowed) {
-        this.transactionalUpdate(requirementId, (current) => {
+        await this.transactionalUpdate(requirementId, (current) => {
           current.aiGateResults.push({
             phase: current.currentPhase,
             allowed: false,
@@ -1511,7 +1603,9 @@ export class WorkflowEngine {
           })
           return current
         })
-        throw new PhaseLockedError(state.currentPhase, [`AI 门控拒绝回退: ${aiResult.reason ?? "未通过预检查"}`])
+        throw new PhaseLockedError(state.currentPhase, [
+          `AI 门控拒绝回退: ${aiResult.reason ?? "未通过预检查"}`,
+        ])
       }
 
       aiAllowed = true
@@ -1528,7 +1622,11 @@ export class WorkflowEngine {
 
       const currentIdx = getPhaseIndex(current.currentPhase)
       if (getPhaseIndex(targetPhase) > currentIdx) {
-        throw new InvalidPhaseTransitionError(current.currentPhase, targetPhase, "不能回退到后续阶段")
+        throw new InvalidPhaseTransitionError(
+          current.currentPhase,
+          targetPhase,
+          "不能回退到后续阶段",
+        )
       }
 
       // 锁定当前阶段后的所有阶段
@@ -1550,7 +1648,12 @@ export class WorkflowEngine {
   // ── 权限校验 ──
 
   /** 校验当前操作角色是否有权限 */
-  private requireRole(requirementId: string, taskId: string, userRole: Role, requiredRole: Role): void {
+  private requireRole(
+    requirementId: string,
+    taskId: string,
+    userRole: Role,
+    requiredRole: Role,
+  ): void {
     if (!this.strictPermissions) return
     if (userRole !== requiredRole) {
       throw new Error(`权限不足: 需要角色 ${requiredRole}，当前角色 ${userRole}`)
@@ -1560,8 +1663,8 @@ export class WorkflowEngine {
   // ── 任务操作 ──
 
   /** 获取任务列表（从 steps 派生 Task 视图） */
-  getTasks(requirementId: string, filter?: TaskFilter): Task[] {
-    const state = this.getState(requirementId)
+  async getTasks(requirementId: string, filter?: TaskFilter): Promise<Task[]> {
+    const state = await this.getState(requirementId)
     let tasks = state.steps.map(stepToTask)
 
     if (filter?.phase) {
@@ -1581,8 +1684,8 @@ export class WorkflowEngine {
   }
 
   /** 导出需求中当前已经生成的全部任务 */
-  exportTasks(requirementId: string): TaskExportDocument {
-    const state = this.getState(requirementId)
+  async exportTasks(requirementId: string): Promise<TaskExportDocument> {
+    const state = await this.getState(requirementId)
     return {
       format: "octopus.tasks",
       version: 1,
@@ -1613,12 +1716,12 @@ export class WorkflowEngine {
   }
 
   /** 按 stageId 合并任务进度与执行信息 */
-  importTasks(requirementId: string, document: unknown): TaskImportResult {
+  async importTasks(requirementId: string, document: unknown): Promise<TaskImportResult> {
     // 文档格式校验为只读校验（事务外完成）
     const imported = validateTaskExportDocument(document)
     let matched = 0
     let updated = 0
-    const saved = this.transactionalUpdate(requirementId, (current) => {
+    const saved = await this.transactionalUpdate(requirementId, (current) => {
       const stepsById = new Map<string, StepRuntime>()
 
       for (const step of current.steps) {
@@ -1645,10 +1748,12 @@ export class WorkflowEngine {
         const assignedTo = step.assignedTo ?? null
         const notes = step.notes ?? null
         const completedAt = step.completedAt ?? null
-        if (step.status === task.status
-          && assignedTo === task.assignedTo
-          && notes === task.notes
-          && completedAt === task.completedAt) {
+        if (
+          step.status === task.status &&
+          assignedTo === task.assignedTo &&
+          notes === task.notes &&
+          completedAt === task.completedAt
+        ) {
           continue
         }
 
@@ -1678,7 +1783,7 @@ export class WorkflowEngine {
   }
 
   /** 完成任务（按 taskId 定位对应步骤） */
-  completeTask(requirementId: string, taskId: string, role?: Role): WorkflowState {
+  async completeTask(requirementId: string, taskId: string, role?: Role): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const step = current.steps.find((s) => s.taskId === taskId)
 
@@ -1699,7 +1804,11 @@ export class WorkflowEngine {
   }
 
   /** 设置任务状态 */
-  setTaskStatus(requirementId: string, taskId: string, status: TaskStatus): WorkflowState {
+  async setTaskStatus(
+    requirementId: string,
+    taskId: string,
+    status: TaskStatus,
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const step = current.steps.find((s) => s.taskId === taskId)
 
@@ -1741,13 +1850,18 @@ export class WorkflowEngine {
   // ── 清单操作 ──
 
   /** 获取某阶段清单 */
-  getChecklist(requirementId: string, phase: Phase): Checklist {
-    const state = this.getState(requirementId)
+  async getChecklist(requirementId: string, phase: Phase): Promise<Checklist> {
+    const state = await this.getState(requirementId)
     return state.checklists[phase] ?? createEmptyChecklist(phase)
   }
 
   /** 核验清单项 */
-  verifyChecklistItem(requirementId: string, phase: Phase, itemId: string, role?: Role): WorkflowState {
+  async verifyChecklistItem(
+    requirementId: string,
+    phase: Phase,
+    itemId: string,
+    role?: Role,
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const checklist = current.checklists[phase]
 
@@ -1777,7 +1891,12 @@ export class WorkflowEngine {
   }
 
   /** 添加清单项 */
-  addChecklistItem(requirementId: string, phase: Phase, category: string, description: string): WorkflowState {
+  async addChecklistItem(
+    requirementId: string,
+    phase: Phase,
+    category: string,
+    description: string,
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       if (!current.checklists[phase]) {
         current.checklists[phase] = createEmptyChecklist(phase)
@@ -1798,7 +1917,11 @@ export class WorkflowEngine {
   }
 
   /** 删除清单项 */
-  removeChecklistItem(requirementId: string, phase: Phase, itemId: string): WorkflowState {
+  async removeChecklistItem(
+    requirementId: string,
+    phase: Phase,
+    itemId: string,
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const checklist = current.checklists[phase]
 
@@ -1815,13 +1938,17 @@ export class WorkflowEngine {
   // ── 海因里希三角操作 ──
 
   /** 获取海因里希记录 */
-  getHeinrichRecord(requirementId: string): HeinrichRecord {
-    const state = this.getState(requirementId)
+  async getHeinrichRecord(requirementId: string): Promise<HeinrichRecord> {
+    const state = await this.getState(requirementId)
     return state.heinrich
   }
 
   /** 记录海因里希条数标记 */
-  logHeinrichMarker(requirementId: string, phase: Phase, description?: string): WorkflowState {
+  async logHeinrichMarker(
+    requirementId: string,
+    phase: Phase,
+    description?: string,
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       current.heinrich.triggerCounts[phase] = (current.heinrich.triggerCounts[phase] ?? 0) + 1
 
@@ -1864,7 +1991,12 @@ export class WorkflowEngine {
   }
 
   /** 记录观测 */
-  logObservation(requirementId: string, phase: Phase, level: HeinrichLevel, description: string): WorkflowState {
+  async logObservation(
+    requirementId: string,
+    phase: Phase,
+    level: HeinrichLevel,
+    description: string,
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const observation: HeinrichObservation = {
         id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
@@ -1886,7 +2018,7 @@ export class WorkflowEngine {
   }
 
   /** 解决观测 */
-  resolveObservation(requirementId: string, obsId: string): WorkflowState {
+  async resolveObservation(requirementId: string, obsId: string): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const obs = current.heinrich.observations.find((o) => o.id === obsId)
 
@@ -1898,9 +2030,9 @@ export class WorkflowEngine {
   }
 
   /** 质量评估 */
-  assessQuality(requirementId: string): QualityAssessment {
+  async assessQuality(requirementId: string): Promise<QualityAssessment> {
     let assessment: QualityAssessment | undefined
-    this.transactionalUpdate(requirementId, (current) => {
+    await this.transactionalUpdate(requirementId, (current) => {
       assessment = this.computeQualityAssessment(current.heinrich)
       current.heinrich.observations.push({
         id: ObservationId(`obs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
@@ -1947,8 +2079,8 @@ export class WorkflowEngine {
       }
     }
 
-    const expectedMinor = heinrich.majorDefects * minor / major
-    const expectedTrivial = heinrich.majorDefects * trivial / major
+    const expectedMinor = (heinrich.majorDefects * minor) / major
+    const expectedTrivial = (heinrich.majorDefects * trivial) / major
     const minorRatio = heinrich.minorDefects / expectedMinor
     const trivialRatio = heinrich.trivialDefects / expectedTrivial
 
@@ -2024,7 +2156,7 @@ export class WorkflowEngine {
   // ── 制品操作 ──
 
   /** 创建制品 */
-  createArtifact(
+  async createArtifact(
     requirementId: string,
     params: {
       type: ArtifactType
@@ -2035,7 +2167,7 @@ export class WorkflowEngine {
       content?: string
       filePath?: string
     },
-  ): WorkflowState {
+  ): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       const artifact = {
         id: ArtifactId(`art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
@@ -2057,8 +2189,8 @@ export class WorkflowEngine {
   }
 
   /** 获取制品列表 */
-  getArtifacts(requirementId: string, phase?: Phase, type?: string): Artifact[] {
-    const state = this.getState(requirementId)
+  async getArtifacts(requirementId: string, phase?: Phase, type?: string): Promise<Artifact[]> {
+    const state = await this.getState(requirementId)
     let artifacts = [...state.artifacts]
 
     if (phase) {
@@ -2121,7 +2253,7 @@ export class WorkflowEngine {
   }
 
   /** 解除项目的 Teambition 绑定。 */
-  unbindProjectTeambition(projectId: string): Project {
+  async unbindProjectTeambition(projectId: string): Promise<Project> {
     return this.store.updateProject(projectId, (current) => {
       delete current.teambition
       return current
@@ -2130,7 +2262,7 @@ export class WorkflowEngine {
 
   /** 列出项目绑定的 Teambition 工作流卡片状态。 */
   async listTeambitionCardStatuses(projectId: string): Promise<WorkflowStatus[]> {
-    const project = this.store.loadProject(projectId)
+    const project = await this.store.loadProject(projectId)
     const tbProjectId = project.teambition?.projectId
     if (!tbProjectId) throw new Error(`项目 ${projectId} 未绑定 Teambition 项目`)
     const result = await this.requireTeambition().projectStatuses(tbProjectId)
@@ -2144,8 +2276,8 @@ export class WorkflowEngine {
     opts: { taskRef?: string; taskId?: string },
   ): Promise<WorkflowState> {
     const tb = this.requireTeambition()
-    const state = this.getState(requirementId)
-    const project = this.store.loadProject(state.projectId)
+    const state = await this.getState(requirementId)
+    const project = await this.store.loadProject(state.projectId)
     const tbProjectId = project.teambition?.projectId
 
     let task: TbTask | null = null
@@ -2192,7 +2324,7 @@ export class WorkflowEngine {
   }
 
   /** 解除需求的 Teambition 任务绑定。 */
-  unbindRequirementTask(requirementId: string): WorkflowState {
+  async unbindRequirementTask(requirementId: string): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       delete current.teambition
       return current
@@ -2200,14 +2332,16 @@ export class WorkflowEngine {
   }
 
   /** 读取需求绑定任务的最新 Teambition 状态并回写缓存。 */
-  async getRequirementTeambitionStatus(requirementId: string): Promise<RequirementTeambitionBinding> {
-    const state = this.getState(requirementId)
+  async getRequirementTeambitionStatus(
+    requirementId: string,
+  ): Promise<RequirementTeambitionBinding> {
+    const state = await this.getState(requirementId)
     const binding = state.teambition
     if (!binding?.taskId && !binding?.taskRef) {
       throw new Error(`需求 ${requirementId} 未绑定 Teambition 任务`)
     }
     const tb = this.requireTeambition()
-    const project = this.store.loadProject(state.projectId)
+    const project = await this.store.loadProject(state.projectId)
     const ref = binding.taskRef ?? binding.taskId!
     const resolved = await tb.resolveTask(ref, project.teambition?.projectId)
     if (!resolved.success) throw new Error(resolved.message)
@@ -2221,7 +2355,7 @@ export class WorkflowEngine {
       ...(task.url ? { url: task.url } : {}),
       lastSyncedAt: new Date().toISOString(),
     }
-    this.transactionalUpdate(requirementId, (current) => {
+    await this.transactionalUpdate(requirementId, (current) => {
       current.teambition = next
       return current
     })
@@ -2234,7 +2368,7 @@ export class WorkflowEngine {
     statusId: string,
     operatorId?: string,
   ): Promise<RequirementTeambitionBinding> {
-    const state = this.getState(requirementId)
+    const state = await this.getState(requirementId)
     const binding = state.teambition
     if (!binding?.taskId) {
       throw new Error(`需求 ${requirementId} 未绑定 Teambition 任务 ID`)
@@ -2254,7 +2388,7 @@ export class WorkflowEngine {
       ...(matched ? { statusName: matched.name } : {}),
       lastSyncedAt: new Date().toISOString(),
     }
-    this.transactionalUpdate(requirementId, (current) => {
+    await this.transactionalUpdate(requirementId, (current) => {
       current.teambition = next
       return current
     })
@@ -2266,10 +2400,10 @@ export class WorkflowEngine {
   /**
    * 更新项目的 OmniPlan 元数据（仅允许 omniplanFolder / omniplanIdMap / omniplanFileName 三个键）。
    */
-  setProjectOmniPlanMeta(
+  async setProjectOmniPlanMeta(
     projectId: string,
     patch: { omniplanFolder?: string; omniplanIdMap?: string; omniplanFileName?: string },
-  ): Project {
+  ): Promise<Project> {
     const allowedKeys = new Set(["omniplanFolder", "omniplanIdMap", "omniplanFileName"])
     const invalidKeys = Object.keys(patch).filter((k) => !allowedKeys.has(k))
     if (invalidKeys.length > 0) {
@@ -2295,7 +2429,7 @@ export class WorkflowEngine {
   /**
    * 设置项目默认颜色（`#rrggbb`）。传入空字符串/null 表示清除。
    */
-  setProjectDefaultColor(projectId: string, color: string | null): Project {
+  async setProjectDefaultColor(projectId: string, color: string | null): Promise<Project> {
     const normalized = color === null || color === "" ? "" : color
     if (normalized !== "" && !/^#[0-9a-fA-F]{6}$/.test(normalized)) {
       throw new Error(`默认颜色必须是 #rrggbb 格式，收到：${color}`)
@@ -2318,7 +2452,7 @@ export class WorkflowEngine {
     projectId: string,
     opts: { repoId: string; pluginId?: string; tbProjectId?: string; name?: string },
   ): Promise<Project> {
-    this.store.loadProject(projectId)
+    await this.store.loadProject(projectId)
     const client = this.requireTeambitionVersion()
     const repoId = opts.repoId.trim()
     if (repoId === "") throw new Error("版本仓库 ID 不能为空")
@@ -2336,18 +2470,20 @@ export class WorkflowEngine {
       }
     }
 
-    const project = this.store.loadProject(projectId)
+    const project = await this.store.loadProject(projectId)
     const current = project.teambitionVersion
     const tbProjectId = opts.tbProjectId ?? project.teambition?.projectId
     const repoChanged = current?.repoId !== repoId
 
-    this.store.updateProject(projectId, (cur) => {
+    await this.store.updateProject(projectId, (cur) => {
       const next: ProjectTeambitionVersionBinding = {
         repoId,
         ...(opts.pluginId !== undefined ? { pluginId: opts.pluginId } : {}),
         ...(tbProjectId !== undefined ? { tbProjectId } : {}),
         ...(repoName !== undefined ? { name: repoName } : {}),
-        ...(!repoChanged && current?.defaultVersionId ? { defaultVersionId: current.defaultVersionId } : {}),
+        ...(!repoChanged && current?.defaultVersionId
+          ? { defaultVersionId: current.defaultVersionId }
+          : {}),
       }
       if (!repoChanged && current) {
         if (current.versionsCache) next.versionsCache = current.versionsCache
@@ -2367,7 +2503,7 @@ export class WorkflowEngine {
   }
 
   /** 解除项目的 Teambition 版本仓库绑定。 */
-  unbindProjectTeambitionRepo(projectId: string): Project {
+  async unbindProjectTeambitionRepo(projectId: string): Promise<Project> {
     return this.store.updateProject(projectId, (current) => {
       delete current.teambitionVersion
       return current
@@ -2376,7 +2512,7 @@ export class WorkflowEngine {
 
   /** 列出项目版本；refresh 或缓存不新鲜时同步。 */
   async listProjectVersions(projectId: string, opts?: { refresh?: boolean }): Promise<TbVersion[]> {
-    const project = this.store.loadProject(projectId)
+    const project = await this.store.loadProject(projectId)
     const binding = project.teambitionVersion
     if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
     if (opts?.refresh !== true && isVersionCacheFresh(binding)) {
@@ -2387,29 +2523,30 @@ export class WorkflowEngine {
 
   /** 强制同步项目版本列表并写回缓存。 */
   async syncProjectVersions(projectId: string): Promise<TbVersion[]> {
-    const project = this.store.loadProject(projectId)
+    const project = await this.store.loadProject(projectId)
     const binding = project.teambitionVersion
     if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
     const result = await this.requireTeambitionVersion().listVersions(binding.repoId)
     if (result.error === "UNCONFIRMED_ENDPOINT") {
-      this.store.updateProject(projectId, (cur) => {
+      await this.store.updateProject(projectId, (cur) => {
         if (cur.teambitionVersion) cur.teambitionVersion.listSyncStatus = "unconfirmed"
         return cur
       })
       throw new Error(result.message)
     }
     if (!result.success) {
-      this.store.updateProject(projectId, (cur) => {
+      await this.store.updateProject(projectId, (cur) => {
         if (cur.teambitionVersion) cur.teambitionVersion.listSyncStatus = "error"
         return cur
       })
       throw new Error(result.message)
     }
     const versions = ((result.data as TbVersion[] | undefined) ?? []).map((v) => {
-      const urlIds: { tbProjectId?: string; pluginId?: string; repoId: string; versionId: string } = {
-        repoId: binding.repoId,
-        versionId: v.versionId,
-      }
+      const urlIds: { tbProjectId?: string; pluginId?: string; repoId: string; versionId: string } =
+        {
+          repoId: binding.repoId,
+          versionId: v.versionId,
+        }
       const tbProjectId = binding.tbProjectId ?? project.teambition?.projectId
       if (tbProjectId) urlIds.tbProjectId = tbProjectId
       if (binding.pluginId) urlIds.pluginId = binding.pluginId
@@ -2417,7 +2554,7 @@ export class WorkflowEngine {
       return { ...v, ...(url !== undefined ? { url } : {}) }
     })
     const now = new Date().toISOString()
-    this.store.updateProject(projectId, (cur) => {
+    await this.store.updateProject(projectId, (cur) => {
       if (!cur.teambitionVersion) return cur
       cur.teambitionVersion.versionsCache = versions
       cur.teambitionVersion.versionsCachedAt = now
@@ -2430,7 +2567,7 @@ export class WorkflowEngine {
 
   /** 获取单个版本；缓存不新鲜时同步，未确认时抛中文，找不到抛「版本不存在」。 */
   async getProjectVersion(projectId: string, versionId: string): Promise<TbVersion> {
-    const project = this.store.loadProject(projectId)
+    const project = await this.store.loadProject(projectId)
     const binding = project.teambitionVersion
     if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
     if (isVersionCacheFresh(binding)) {
@@ -2448,8 +2585,8 @@ export class WorkflowEngine {
   }
 
   /** 设置项目默认版本；null/"" 清除；非空须在版本缓存中（缓存空只校验非空字符串）。 */
-  setProjectDefaultVersion(projectId: string, versionId: string | null): Project {
-    const project = this.store.loadProject(projectId)
+  async setProjectDefaultVersion(projectId: string, versionId: string | null): Promise<Project> {
+    const project = await this.store.loadProject(projectId)
     if (versionId === null || versionId === "") {
       return this.store.updateProject(projectId, (cur) => {
         if (cur.teambitionVersion) delete cur.teambitionVersion.defaultVersionId
@@ -2473,8 +2610,8 @@ export class WorkflowEngine {
 
   /** 绑定需求到版本。顺序严格按 §7.4：仅 listSyncStatus==="ok" 才校验 ID 存在。 */
   async bindRequirementVersion(requirementId: string, versionId: string): Promise<WorkflowState> {
-    const state = this.getState(requirementId)
-    const project = this.store.loadProject(state.projectId)
+    const state = await this.getState(requirementId)
+    const project = await this.store.loadProject(state.projectId)
     const binding = project.teambitionVersion
     if (!binding?.repoId) throw new Error(`项目 ${state.projectId} 未绑定 Teambition 版本仓库`)
     const vId = versionId.trim()
@@ -2485,7 +2622,10 @@ export class WorkflowEngine {
     if (status === "ok" && isVersionCacheFresh(binding)) {
       const found = (binding.versionsCache ?? []).find((v) => v.versionId === vId)
       if (!found) throw new Error(`版本不存在: ${vId}`)
-      hit = { ...(found.name ? { name: found.name } : {}), ...(found.url ? { url: found.url } : {}) }
+      hit = {
+        ...(found.name ? { name: found.name } : {}),
+        ...(found.url ? { url: found.url } : {}),
+      }
     } else if (status === "ok") {
       let versions: TbVersion[] | undefined
       try {
@@ -2496,7 +2636,10 @@ export class WorkflowEngine {
       if (versions) {
         const found = versions.find((v) => v.versionId === vId)
         if (!found) throw new Error(`版本不存在: ${vId}`)
-        hit = { ...(found.name ? { name: found.name } : {}), ...(found.url ? { url: found.url } : {}) }
+        hit = {
+          ...(found.name ? { name: found.name } : {}),
+          ...(found.url ? { url: found.url } : {}),
+        }
       }
     }
 
@@ -2513,7 +2656,7 @@ export class WorkflowEngine {
   }
 
   /** 解除需求的版本绑定。 */
-  unbindRequirementVersion(requirementId: string): WorkflowState {
+  async unbindRequirementVersion(requirementId: string): Promise<WorkflowState> {
     return this.transactionalUpdate(requirementId, (current) => {
       delete current.teambitionVersion
       return current
@@ -2521,21 +2664,25 @@ export class WorkflowEngine {
   }
 
   /** 读取需求版本绑定；未绑定返回 undefined，不打远端。 */
-  getRequirementVersionBinding(requirementId: string): RequirementVersionBinding | undefined {
-    return this.getState(requirementId).teambitionVersion
+  async getRequirementVersionBinding(
+    requirementId: string,
+  ): Promise<RequirementVersionBinding | undefined> {
+    return (await this.getState(requirementId)).teambitionVersion
   }
 
   /** 列出挂到版本上的需求；可按 versionId 过滤，按 requirementName 排序。 */
-  listVersionRequirements(
+  async listVersionRequirements(
     projectId: string,
     versionId?: string,
-  ): Array<{
-    requirementId: string
-    requirementName: string
-    versionId: string
-    versionName?: string
-  }> {
-    return this.listRequirementSummaries(projectId)
+  ): Promise<
+    Array<{
+      requirementId: string
+      requirementName: string
+      versionId: string
+      versionName?: string
+    }>
+  > {
+    return (await this.listRequirementSummaries(projectId))
       .filter((s) => s.teambitionVersionId)
       .filter((s) => !versionId || s.teambitionVersionId === versionId)
       .map((s) => ({
@@ -2554,7 +2701,7 @@ export class WorkflowEngine {
     note: string,
   ): Promise<{ versionId: string; note: string }> {
     if (typeof note !== "string") throw new Error("note 必须是字符串")
-    const project = this.store.loadProject(projectId)
+    const project = await this.store.loadProject(projectId)
     const binding = project.teambitionVersion
     if (!binding?.repoId) throw new Error(`项目 ${projectId} 未绑定 Teambition 版本仓库`)
     const ids: { tbProjectId?: string; pluginId?: string } = {}
@@ -2568,7 +2715,7 @@ export class WorkflowEngine {
       ids,
     )
     if (!result.success) throw new Error(result.message)
-    this.store.updateProject(projectId, (cur) => {
+    await this.store.updateProject(projectId, (cur) => {
       if (!cur.teambitionVersion) return cur
       const cache = cur.teambitionVersion.versionsCache
       if (cache && cache.some((v) => v.versionId === versionId)) {
@@ -2583,19 +2730,19 @@ export class WorkflowEngine {
 
   /** 内部刷新版本缓存（绑仓库后用；UNCONFIRMED/401 不失败、不写 cachedAt）。 */
   private async refreshVersionCache(projectId: string): Promise<void> {
-    const project = this.store.loadProject(projectId)
+    const project = await this.store.loadProject(projectId)
     const binding = project.teambitionVersion
     if (!binding?.repoId) return
     const result = await this.requireTeambitionVersion().listVersions(binding.repoId)
     if (result.error === "UNCONFIRMED_ENDPOINT") {
-      this.store.updateProject(projectId, (cur) => {
+      await this.store.updateProject(projectId, (cur) => {
         if (cur.teambitionVersion) cur.teambitionVersion.listSyncStatus = "unconfirmed"
         return cur
       })
       return
     }
     if (!result.success) {
-      this.store.updateProject(projectId, (cur) => {
+      await this.store.updateProject(projectId, (cur) => {
         if (cur.teambitionVersion) cur.teambitionVersion.listSyncStatus = "error"
         return cur
       })
@@ -2603,7 +2750,7 @@ export class WorkflowEngine {
     }
     const versions = (result.data as TbVersion[] | undefined) ?? []
     const now = new Date().toISOString()
-    this.store.updateProject(projectId, (cur) => {
+    await this.store.updateProject(projectId, (cur) => {
       if (!cur.teambitionVersion) return cur
       cur.teambitionVersion.versionsCache = versions
       cur.teambitionVersion.versionsCachedAt = now
@@ -2616,19 +2763,19 @@ export class WorkflowEngine {
   // ── BRD 设计（项目配置 + AI 生成/检查）──
 
   /** 读取项目 BRD 设计配置（无配置时返回空对象） */
-  getProjectBrdDesignConfig(projectId: string): ProjectBrdDesignConfig {
-    const project = this.store.loadProject(projectId)
+  async getProjectBrdDesignConfig(projectId: string): Promise<ProjectBrdDesignConfig> {
+    const project = await this.store.loadProject(projectId)
     return parseBrdDesignConfigFromMetadata(project.metadata)
   }
 
   /** 深合并更新项目 BRD 设计配置；空串字段表示清除 */
-  setProjectBrdDesignConfig(projectId: string, patch: ProjectBrdDesignConfigPatch): Project {
+  async setProjectBrdDesignConfig(
+    projectId: string,
+    patch: ProjectBrdDesignConfigPatch,
+  ): Promise<Project> {
     return this.store.updateProject(projectId, (current) => {
       if (!current.metadata) current.metadata = {}
-      const merged = mergeBrdDesignConfig(
-        parseBrdDesignConfigFromMetadata(current.metadata),
-        patch,
-      )
+      const merged = mergeBrdDesignConfig(parseBrdDesignConfigFromMetadata(current.metadata), patch)
       const serialized = serializeBrdDesignConfig(merged)
       if (serialized === undefined) {
         delete current.metadata[BRD_DESIGN_METADATA_KEY]
@@ -2640,12 +2787,12 @@ export class WorkflowEngine {
   }
 
   /** 预览已渲染提示词（不调用 AI） */
-  previewBrdPrompts(
+  async previewBrdPrompts(
     projectId: string,
     requirementId: string,
     options?: { mode?: "generate" | "check" | "all"; includeSummarize?: boolean },
-  ): { prompts: BrdRenderedPrompt[]; warnings: string[]; outputPath: string } {
-    return previewBrdNodePrompts(this.prepareBrdNodeInput(projectId, requirementId), options)
+  ): Promise<{ prompts: BrdRenderedPrompt[]; warnings: string[]; outputPath: string }> {
+    return previewBrdNodePrompts(await this.prepareBrdNodeInput(projectId, requirementId), options)
   }
 
   /** AI 生成 BRD；dryRun 只返回提示词不写文件 */
@@ -2655,7 +2802,7 @@ export class WorkflowEngine {
     options?: { dryRun?: boolean },
   ): Promise<BrdGenerateResult> {
     return runBrdGenerate(
-      this.prepareBrdNodeInput(projectId, requirementId),
+      await this.prepareBrdNodeInput(projectId, requirementId),
       this.createBrdNodeRuntime(),
       options,
     )
@@ -2668,15 +2815,18 @@ export class WorkflowEngine {
     options?: { dryRun?: boolean },
   ): Promise<BrdCheckResult> {
     return runBrdCheck(
-      this.prepareBrdNodeInput(projectId, requirementId),
+      await this.prepareBrdNodeInput(projectId, requirementId),
       this.createBrdNodeRuntime(),
       options,
     )
   }
 
-  private prepareBrdNodeInput(projectId: string, requirementId: string): BrdNodeInput {
-    const project = this.store.loadProject(projectId)
-    const state = this.getState(requirementId)
+  private async prepareBrdNodeInput(
+    projectId: string,
+    requirementId: string,
+  ): Promise<BrdNodeInput> {
+    const project = await this.store.loadProject(projectId)
+    const state = await this.getState(requirementId)
     if (state.projectId !== project.projectId) {
       throw new Error(`需求 ${requirementId} 不属于项目 ${projectId}`)
     }
@@ -2699,8 +2849,8 @@ export class WorkflowEngine {
       ...(aiClient
         ? { callAssistant: (assistant, input) => aiClient.callAssistant(assistant, input) }
         : {}),
-      createArtifact: (requirementId, params) => {
-        this.createArtifact(requirementId, params)
+      createArtifact: async (requirementId, params) => {
+        await this.createArtifact(requirementId, params)
       },
     }
   }
@@ -2708,12 +2858,12 @@ export class WorkflowEngine {
   /**
    * 导出项目为 OmniPlan .oplx 文件。
    */
-  exportProjectOmniPlan(
+  async exportProjectOmniPlan(
     projectId: string,
     options?: { fileName?: string | undefined; rootDir?: string | undefined },
-  ): { path: string; taskCount: number; folder: string } {
-    const project = this.store.loadProject(projectId)
-    const requirementIds = this.store.listRequirements(projectId)
+  ): Promise<{ path: string; taskCount: number; folder: string }> {
+    const project = await this.store.loadProject(projectId)
+    const requirementIds = await this.store.listRequirements(projectId)
 
     // Resolve root directory
     const config = loadConfig()
@@ -2747,7 +2897,7 @@ export class WorkflowEngine {
     let totalTaskCount = 0
 
     for (const reqId of requirementIds) {
-      const state = this.getState(reqId)
+      const state = await this.getState(reqId)
       const nodes = state.steps.map((step) => ({
         id: step.id,
         name: step.name,
@@ -2811,7 +2961,7 @@ export class WorkflowEngine {
 
     // Save updated ID map
     const updatedIdMap = JSON.stringify(idMap)
-    this.store.updateProject(projectId, (current) => {
+    await this.store.updateProject(projectId, (current) => {
       if (!current.metadata) current.metadata = {}
       current.metadata["omniplanFolder"] = folder
       current.metadata["omniplanIdMap"] = updatedIdMap
@@ -2825,12 +2975,16 @@ export class WorkflowEngine {
   /**
    * 导入 OmniPlan .oplx 文件到项目。
    */
-  importProjectOmniPlan(
+  async importProjectOmniPlan(
     projectId: string,
-    options?: { fileName?: string | undefined; path?: string | undefined; rootDir?: string | undefined },
-  ): OmniPlanImportResult {
-    const project = this.store.loadProject(projectId)
-    const requirementIds = this.store.listRequirements(projectId)
+    options?: {
+      fileName?: string | undefined
+      path?: string | undefined
+      rootDir?: string | undefined
+    },
+  ): Promise<OmniPlanImportResult> {
+    const project = await this.store.loadProject(projectId)
+    const requirementIds = await this.store.listRequirements(projectId)
 
     // Resolve root directory
     const config = loadConfig()
@@ -2881,9 +3035,9 @@ export class WorkflowEngine {
     }
 
     // Build reverse maps
-    const noteToTask = new Map<string, typeof doc.tasks[0]>()
-    const titleToTask = new Map<string, typeof doc.tasks[0]>()
-    const omniIdToTask = new Map<string, typeof doc.tasks[0]>()
+    const noteToTask = new Map<string, (typeof doc.tasks)[0]>()
+    const titleToTask = new Map<string, (typeof doc.tasks)[0]>()
+    const omniIdToTask = new Map<string, (typeof doc.tasks)[0]>()
 
     for (const task of doc.tasks) {
       if (task.note) {
@@ -2897,9 +3051,9 @@ export class WorkflowEngine {
     }
 
     // Map octopus keys to OmniPlan tasks
-    const requirementMap = new Map<string, typeof doc.tasks[0]>()
-    const nodeMap = new Map<string, typeof doc.tasks[0]>()
-    const milestoneMap = new Map<string, typeof doc.tasks[0]>()
+    const requirementMap = new Map<string, (typeof doc.tasks)[0]>()
+    const nodeMap = new Map<string, (typeof doc.tasks)[0]>()
+    const milestoneMap = new Map<string, (typeof doc.tasks)[0]>()
     const unmatched: string[] = []
     const skipped: string[] = []
 
@@ -2916,7 +3070,7 @@ export class WorkflowEngine {
 
     // Match nodes by note
     for (const reqId of requirementIds) {
-      const state = this.getState(reqId)
+      const state = await this.getState(reqId)
       for (const step of state.steps) {
         const nodeNote = `octopus:node:${reqId}:${step.id}`
         const task = noteToTask.get(nodeNote)
@@ -2928,12 +3082,13 @@ export class WorkflowEngine {
         // Try title match in same parent group
         const reqTask = requirementMap.get(reqId)
         if (reqTask) {
-          const childTasks = doc.tasks.filter((t) =>
-            reqTask.childIds.includes(t.id) ||
-            reqTask.childIds.some((cid) => {
-              const parent = omniIdToTask.get(cid)
-              return parent?.childIds.includes(t.id)
-            }),
+          const childTasks = doc.tasks.filter(
+            (t) =>
+              reqTask.childIds.includes(t.id) ||
+              reqTask.childIds.some((cid) => {
+                const parent = omniIdToTask.get(cid)
+                return parent?.childIds.includes(t.id)
+              }),
           )
           const titleMatch = childTasks.find((t) => t.title === step.name)
           if (titleMatch) {
@@ -2948,7 +3103,7 @@ export class WorkflowEngine {
 
     // Match milestones by note → idMap → title+type=milestone (unique)
     for (const reqId of requirementIds) {
-      const state = this.getState(reqId)
+      const state = await this.getState(reqId)
       const octopusMsIds = new Set<string>((state.milestones ?? []).map((ms) => ms.id))
 
       // Track which Octopus milestones matched
@@ -2979,16 +3134,15 @@ export class WorkflowEngine {
         // 3. title match: unique milestone with same name in same requirement group
         const reqTask = requirementMap.get(reqId)
         if (reqTask) {
-          const childTasks = doc.tasks.filter((t) =>
-            reqTask.childIds.includes(t.id) ||
-            reqTask.childIds.some((cid) => {
-              const parent = omniIdToTask.get(cid)
-              return parent?.childIds.includes(t.id)
-            }),
+          const childTasks = doc.tasks.filter(
+            (t) =>
+              reqTask.childIds.includes(t.id) ||
+              reqTask.childIds.some((cid) => {
+                const parent = omniIdToTask.get(cid)
+                return parent?.childIds.includes(t.id)
+              }),
           )
-          const sameName = childTasks.filter(
-            (t) => t.type === "milestone" && t.title === ms.name,
-          )
+          const sameName = childTasks.filter((t) => t.type === "milestone" && t.title === ms.name)
           if (sameName.length === 1) {
             milestoneMap.set(ms.id, sameName[0]!)
             matchedMsIds.add(ms.id)
@@ -3033,7 +3187,7 @@ export class WorkflowEngine {
           const end = endDate.toISOString().slice(0, 10)
 
           try {
-            this.updateRequirementSchedule(reqId, { plannedStart: start, plannedEnd: end })
+            await this.updateRequirementSchedule(reqId, { plannedStart: start, plannedEnd: end })
             updatedRequirements++
           } catch {
             // Skip if invalid dates
@@ -3042,7 +3196,7 @@ export class WorkflowEngine {
       }
 
       // Import node schedules
-      const state = this.getState(reqId)
+      const state = await this.getState(reqId)
       for (const step of state.steps) {
         const nodeTask = nodeMap.get(step.id)
         if (!nodeTask) continue
@@ -3063,7 +3217,7 @@ export class WorkflowEngine {
 
         if (start && end) {
           try {
-            this.updateNodeSchedule(reqId, step.id, { plannedStart: start, plannedEnd: end })
+            await this.updateNodeSchedule(reqId, step.id, { plannedStart: start, plannedEnd: end })
             updatedNodes++
           } catch {
             // Skip if invalid dates
@@ -3074,7 +3228,7 @@ export class WorkflowEngine {
       }
 
       // Import milestone dates
-      const state2 = this.getState(reqId)
+      const state2 = await this.getState(reqId)
       for (const ms of state2.milestones ?? []) {
         const msTask = milestoneMap.get(ms.id)
         if (!msTask) continue
@@ -3086,7 +3240,7 @@ export class WorkflowEngine {
 
         try {
           const start = omniPlanIsoToDate(msTask.lockedStartDate)
-          this.updateMilestone(reqId, ms.id, { date: start })
+          await this.updateMilestone(reqId, ms.id, { date: start })
           updatedMilestones++
         } catch {
           // Skip if invalid dates
@@ -3096,7 +3250,7 @@ export class WorkflowEngine {
 
     // Save updated ID map
     const updatedIdMap = JSON.stringify(idMap)
-    this.store.updateProject(projectId, (current) => {
+    await this.store.updateProject(projectId, (current) => {
       if (!current.metadata) current.metadata = {}
       current.metadata["omniplanIdMap"] = updatedIdMap
       return current
@@ -3113,10 +3267,10 @@ export class WorkflowEngine {
   }
 }
 
-function firstProjectRoot(store: StateStore): string | undefined {
-  const requirementId = store.listRequirements()[0]
+async function firstProjectRoot(store: PersistenceStore): Promise<string | undefined> {
+  const requirementId = (await store.listRequirements())[0]
   if (!requirementId) return undefined
-  return store.load(requirementId).projectRoot
+  return (await store.load(requirementId)).projectRoot
 }
 
 /**
@@ -3128,47 +3282,62 @@ export async function createWorkflowEngineFromConfig(
   config: OctopusConfig,
   options?: { projectRoot?: string },
 ): Promise<WorkflowEngine> {
-  const store = createStateStore({ storeDir: config.storeDir })
-  const projectRoot = options?.projectRoot ?? firstProjectRoot(store) ?? process.cwd()
-  const pluginHost = await loadPlugins(
-    [...loadWorkflowPluginRefs(projectRoot), ...config.plugins],
-    { projectRoot },
-  )
-  const integrations: Record<string, IntegrationService> = { ...pluginHost.integrations }
-  const teambition = config.teambition
-  if (teambition?.appId && teambition.appSecret && teambition.orgId) {
-    integrations["teambition"] = createTeambitionClient({
-      appId: teambition.appId,
-      appSecret: teambition.appSecret,
-      orgId: teambition.orgId,
-      ...(teambition.gatewayBase !== undefined ? { gatewayBase: teambition.gatewayBase } : {}),
-      ...(teambition.refStrategy !== undefined ? { refStrategy: teambition.refStrategy } : {}),
-      ...(teambition.timeoutMs !== undefined ? { timeoutMs: teambition.timeoutMs } : {}),
-    })
-  }
-  const hasAppJwt = !!(teambition?.appId && teambition.appSecret && teambition.orgId)
-  const hasVersionSession = !!(teambition?.sessionCookie || teambition?.userAccessToken)
-  if (hasAppJwt || hasVersionSession) {
-    integrations["teambition-version"] = createTeambitionVersionClient({
-      ...(hasAppJwt
-        ? { appId: teambition.appId, appSecret: teambition.appSecret, orgId: teambition.orgId }
+  const store = await createPersistenceStore({ storeDir: config.storeDir })
+  try {
+    const projectRoot = options?.projectRoot ?? (await firstProjectRoot(store)) ?? process.cwd()
+    const pluginHost = await loadPlugins(
+      [...loadWorkflowPluginRefs(projectRoot), ...config.plugins],
+      { projectRoot },
+    )
+    const integrations: Record<string, IntegrationService> = { ...pluginHost.integrations }
+    const teambition = config.teambition
+    if (teambition?.appId && teambition.appSecret && teambition.orgId) {
+      integrations["teambition"] = createTeambitionClient({
+        appId: teambition.appId,
+        appSecret: teambition.appSecret,
+        orgId: teambition.orgId,
+        ...(teambition.gatewayBase !== undefined ? { gatewayBase: teambition.gatewayBase } : {}),
+        ...(teambition.refStrategy !== undefined ? { refStrategy: teambition.refStrategy } : {}),
+        ...(teambition.timeoutMs !== undefined ? { timeoutMs: teambition.timeoutMs } : {}),
+      })
+    }
+    const hasAppJwt = !!(teambition?.appId && teambition.appSecret && teambition.orgId)
+    const hasVersionSession = !!(teambition?.sessionCookie || teambition?.userAccessToken)
+    if (hasAppJwt || hasVersionSession) {
+      integrations["teambition-version"] = createTeambitionVersionClient({
+        ...(hasAppJwt
+          ? { appId: teambition.appId, appSecret: teambition.appSecret, orgId: teambition.orgId }
+          : {}),
+        ...(teambition?.orgId && !hasAppJwt ? { orgId: teambition.orgId } : {}),
+        ...(teambition?.versionManageBase !== undefined
+          ? { versionManageBase: teambition.versionManageBase }
+          : {}),
+        ...(teambition?.sessionCookie !== undefined
+          ? { sessionCookie: teambition.sessionCookie }
+          : {}),
+        ...(teambition?.userAccessToken !== undefined
+          ? { userAccessToken: teambition.userAccessToken }
+          : {}),
+        ...(teambition?.versionAuth !== undefined ? { versionAuth: teambition.versionAuth } : {}),
+        ...(teambition?.timeoutMs !== undefined ? { timeoutMs: teambition.timeoutMs } : {}),
+      })
+    }
+    const engine = new WorkflowEngine({
+      store,
+      aiClient: createAIClient(toAIClientConfig(config)),
+      strictPermissions: config.workflow.strictPermissions,
+      aiGatingEnabled: config.workflow.aiGatingEnabled,
+      heinrichThreshold: config.workflow.heinrichThreshold,
+      integrations,
+      pluginHost,
+      ...(teambition?.operatorId !== undefined
+        ? { teambitionOperatorId: teambition.operatorId }
         : {}),
-      ...(teambition?.orgId && !hasAppJwt ? { orgId: teambition.orgId } : {}),
-      ...(teambition?.versionManageBase !== undefined ? { versionManageBase: teambition.versionManageBase } : {}),
-      ...(teambition?.sessionCookie !== undefined ? { sessionCookie: teambition.sessionCookie } : {}),
-      ...(teambition?.userAccessToken !== undefined ? { userAccessToken: teambition.userAccessToken } : {}),
-      ...(teambition?.versionAuth !== undefined ? { versionAuth: teambition.versionAuth } : {}),
-      ...(teambition?.timeoutMs !== undefined ? { timeoutMs: teambition.timeoutMs } : {}),
     })
+    await engine.initialize()
+    return engine
+  } catch (cause) {
+    await store.close().catch(() => undefined)
+    throw cause
   }
-  return new WorkflowEngine({
-    store,
-    aiClient: createAIClient(toAIClientConfig(config)),
-    strictPermissions: config.workflow.strictPermissions,
-    aiGatingEnabled: config.workflow.aiGatingEnabled,
-    heinrichThreshold: config.workflow.heinrichThreshold,
-    integrations,
-    pluginHost,
-    ...(teambition?.operatorId !== undefined ? { teambitionOperatorId: teambition.operatorId } : {}),
-  })
 }

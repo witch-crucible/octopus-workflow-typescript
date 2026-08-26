@@ -14,9 +14,7 @@ import { resolveRequirementId } from "../resolve-requirement.js"
 import { Phase, PHASE_ORDER, PhaseLock } from "@octopus/core/phase.js"
 
 export function buildPhaseCommands(program: Command, engine: WorkflowEngine): void {
-  const phaseCmd = program
-    .command("phase")
-    .description("阶段管理")
+  const phaseCmd = program.command("phase").description("阶段管理")
 
   // ── phase list ──
   phaseCmd
@@ -24,24 +22,30 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .description("列出所有阶段状态")
     .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((requirementId?: string, options?: { json?: boolean }) => {
+    .action(async (requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveRequirementId(engine, requirementId)
+        const pid = await resolveRequirementId(engine, requirementId)
         if (!pid) return
 
-        const state = engine.getState(pid)
+        const state = await engine.getState(pid)
         if (options?.json) {
-          console.log(JSON.stringify({
-            projectId: state.projectId,
-            requirementId: state.requirementId,
-            requirementName: state.requirementName,
-            currentPhase: state.currentPhase,
-            phases: PHASE_ORDER.map((phase) => ({
-              phase,
-              lock: state.phaseStatus[phase] ?? PhaseLock.LOCKED,
-              progress: engine.getPhaseProgress(state, phase),
-            })),
-          }, null, 2))
+          console.log(
+            JSON.stringify(
+              {
+                projectId: state.projectId,
+                requirementId: state.requirementId,
+                requirementName: state.requirementName,
+                currentPhase: state.currentPhase,
+                phases: PHASE_ORDER.map((phase) => ({
+                  phase,
+                  lock: state.phaseStatus[phase] ?? PhaseLock.LOCKED,
+                  progress: engine.getPhaseProgress(state, phase),
+                })),
+              },
+              null,
+              2,
+            ),
+          )
           return
         }
 
@@ -50,7 +54,9 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
           const lock = state.phaseStatus[phase] ?? PhaseLock.LOCKED
           const progress = engine.getPhaseProgress(state, phase)
           const active = phase === state.currentPhase ? " ◀ 当前" : ""
-          console.log(`   ${lock === PhaseLock.COMPLETED ? "✅" : lock === PhaseLock.ACTIVE ? "▶" : "🔒"} ${phase.padEnd(16)} ${progress.completed}/${progress.total} 任务${active}`)
+          console.log(
+            `   ${lock === PhaseLock.COMPLETED ? "✅" : lock === PhaseLock.ACTIVE ? "▶" : "🔒"} ${phase.padEnd(16)} ${progress.completed}/${progress.total} 任务${active}`,
+          )
         }
         console.log()
       } catch (err) {
@@ -66,26 +72,34 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .argument("[requirementId]", "需求 ID")
     .option("--skip-ai-gates", "跳过 AI 门控检查")
     .option("--json", "以 JSON 格式输出")
-    .action((requirementId?: string, options?: { skipAiGates?: boolean; json?: boolean }) => {
+    .action(async (requirementId?: string, options?: { skipAiGates?: boolean; json?: boolean }) => {
       try {
-        const pid = resolveRequirementId(engine, requirementId)
+        const pid = await resolveRequirementId(engine, requirementId)
         if (!pid) return
 
-        const state = engine.advancePhase(pid, options?.skipAiGates)
+        const state = await engine.advancePhase(pid, options?.skipAiGates)
 
         if (options?.json) {
-          console.log(JSON.stringify({
-            projectId: state.projectId,
-            requirementId: state.requirementId,
-            requirementName: state.requirementName,
-            currentPhase: state.currentPhase,
-            taskCount: state.steps.filter((t) => t.phase === state.currentPhase).length,
-          }, null, 2))
+          console.log(
+            JSON.stringify(
+              {
+                projectId: state.projectId,
+                requirementId: state.requirementId,
+                requirementName: state.requirementName,
+                currentPhase: state.currentPhase,
+                taskCount: state.steps.filter((t) => t.phase === state.currentPhase).length,
+              },
+              null,
+              2,
+            ),
+          )
           return
         }
 
         console.log(`✅ 已前进到: ${state.currentPhase} (${PhaseLabel(state.currentPhase)})`)
-        console.log(`   当前任务数: ${state.steps.filter((t) => t.phase === state.currentPhase).length}`)
+        console.log(
+          `   当前任务数: ${state.steps.filter((t) => t.phase === state.currentPhase).length}`,
+        )
       } catch (err) {
         console.error(`❌ ${(err as Error).message}`)
         process.exit(1)
@@ -99,12 +113,14 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .argument("<phase>", "目标阶段名称")
     .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((targetPhase: string, requirementId?: string, options?: { json?: boolean }) => {
+    .action(async (targetPhase: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveRequirementId(engine, requirementId)
+        const pid = await resolveRequirementId(engine, requirementId)
         if (!pid) return
 
-        const phase = Object.values(Phase).find((p) => p.toLowerCase() === targetPhase.toLowerCase())
+        const phase = Object.values(Phase).find(
+          (p) => p.toLowerCase() === targetPhase.toLowerCase(),
+        )
         if (!phase) {
           console.error(`❌ 未知阶段: ${targetPhase}`)
           console.log(`   可用阶段: ${Object.values(Phase).join(", ")}`)
@@ -112,15 +128,21 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
           return
         }
 
-        const state = engine.rollbackTo(pid, phase)
+        const state = await engine.rollbackTo(pid, phase)
 
         if (options?.json) {
-          console.log(JSON.stringify({
-            projectId: state.projectId,
-            requirementId: state.requirementId,
-            requirementName: state.requirementName,
-            currentPhase: state.currentPhase,
-          }, null, 2))
+          console.log(
+            JSON.stringify(
+              {
+                projectId: state.projectId,
+                requirementId: state.requirementId,
+                requirementName: state.requirementName,
+                currentPhase: state.currentPhase,
+              },
+              null,
+              2,
+            ),
+          )
           return
         }
 
@@ -138,9 +160,9 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
     .argument("<phase>", "阶段名称")
     .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((phaseName: string, requirementId?: string, options?: { json?: boolean }) => {
+    .action(async (phaseName: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveRequirementId(engine, requirementId)
+        const pid = await resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const phase = Object.values(Phase).find((p) => p.toLowerCase() === phaseName.toLowerCase())
@@ -150,23 +172,29 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
           return
         }
 
-        const state = engine.getState(pid)
-        const tasks = engine.getTasks(pid, { phase })
+        const state = await engine.getState(pid)
+        const tasks = await engine.getTasks(pid, { phase })
         const progress = engine.getPhaseProgress(state, phase)
 
         if (options?.json) {
-          console.log(JSON.stringify({
-            phase,
-            label: PhaseLabel(phase),
-            lock: state.phaseStatus[phase] ?? PhaseLock.LOCKED,
-            progress,
-            tasks: tasks.map((t) => ({
-              id: t.id,
-              title: t.title,
-              status: t.status,
-              responsibleRole: t.responsibleRole,
-            })),
-          }, null, 2))
+          console.log(
+            JSON.stringify(
+              {
+                phase,
+                label: PhaseLabel(phase),
+                lock: state.phaseStatus[phase] ?? PhaseLock.LOCKED,
+                progress,
+                tasks: tasks.map((t) => ({
+                  id: t.id,
+                  title: t.title,
+                  status: t.status,
+                  responsibleRole: t.responsibleRole,
+                })),
+              },
+              null,
+              2,
+            ),
+          )
           return
         }
 
@@ -177,7 +205,9 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
         if (tasks.length > 0) {
           console.log("\n   任务列表:")
           for (const task of tasks) {
-            console.log(`   ${task.status === "COMPLETED" ? "✅" : "⬜"} ${task.id} - ${task.title}`)
+            console.log(
+              `   ${task.status === "COMPLETED" ? "✅" : "⬜"} ${task.id} - ${task.title}`,
+            )
           }
         }
         console.log()
@@ -187,7 +217,6 @@ export function buildPhaseCommands(program: Command, engine: WorkflowEngine): vo
       }
     })
 }
-
 
 function PhaseLabel(phase: Phase): string {
   const labels: Record<Phase, string> = {

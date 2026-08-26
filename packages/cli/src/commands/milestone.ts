@@ -35,9 +35,9 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
     .argument("<requirementId>", "需求 ID")
     .option("--all", "包含已达成")
     .option("--json", "以 JSON 格式输出")
-    .action((requirementId: string, options: { all?: boolean; json?: boolean }) => {
+    .action(async (requirementId: string, options: { all?: boolean; json?: boolean }) => {
       try {
-        const items = engine.listMilestones(requirementId)
+        const items = await engine.listMilestones(requirementId)
         const visible = options.all ? items : items.filter((item) => item.status === "planned")
         if (options.json) {
           console.log(JSON.stringify(visible, null, 2))
@@ -65,7 +65,7 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
     .option("--note <text>", "备注")
     .option("--json", "以 JSON 格式输出")
     .action(
-      (
+      async (
         requirementId: string,
         options: {
           name: string
@@ -77,7 +77,7 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
         },
       ) => {
         try {
-          const created = engine.addMilestone(requirementId, {
+          const created = await engine.addMilestone(requirementId, {
             name: options.name,
             date: options.date,
             ...(options.phase !== undefined ? { phase: options.phase as Phase } : {}),
@@ -109,7 +109,7 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
     .option("--note <text>", "备注；传空字符串清除")
     .option("--json", "以 JSON 格式输出")
     .action(
-      (
+      async (
         milestoneId: string,
         options: {
           requirement: string
@@ -122,7 +122,7 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
         },
       ) => {
         try {
-          const updated = engine.updateMilestone(options.requirement, milestoneId, {
+          const updated = await engine.updateMilestone(options.requirement, milestoneId, {
             ...(options.name !== undefined ? { name: options.name } : {}),
             ...(options.date !== undefined ? { date: options.date } : {}),
             ...(options.phase !== undefined
@@ -153,9 +153,9 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
     .argument("<milestoneId>", "里程碑 ID")
     .requiredOption("--requirement <requirementId>", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((milestoneId: string, options: { requirement: string; json?: boolean }) => {
+    .action(async (milestoneId: string, options: { requirement: string; json?: boolean }) => {
       try {
-        const reached = engine.reachMilestone(options.requirement, milestoneId)
+        const reached = await engine.reachMilestone(options.requirement, milestoneId)
         if (options.json) {
           console.log(JSON.stringify(reached, null, 2))
           return
@@ -173,9 +173,9 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
     .argument("<milestoneId>", "里程碑 ID")
     .requiredOption("--requirement <requirementId>", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((milestoneId: string, options: { requirement: string; json?: boolean }) => {
+    .action(async (milestoneId: string, options: { requirement: string; json?: boolean }) => {
       try {
-        const planned = engine.unreachMilestone(options.requirement, milestoneId)
+        const planned = await engine.unreachMilestone(options.requirement, milestoneId)
         if (options.json) {
           console.log(JSON.stringify(planned, null, 2))
           return
@@ -193,12 +193,12 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
     .argument("<milestoneId>", "里程碑 ID")
     .requiredOption("--requirement <requirementId>", "需求 ID")
     .option("--yes", "确认删除")
-    .action((milestoneId: string, options: { requirement: string; yes?: boolean }) => {
+    .action(async (milestoneId: string, options: { requirement: string; yes?: boolean }) => {
       try {
         if (!options.yes) {
           throw new Error("删除不可恢复，请加 --yes 确认。")
         }
-        engine.deleteMilestone(options.requirement, milestoneId)
+        await engine.deleteMilestone(options.requirement, milestoneId)
         console.log(`✅ 已删除里程碑: ${milestoneId}`)
       } catch (err) {
         console.error(`❌ 删除里程碑失败: ${(err as Error).message}`)
@@ -211,9 +211,9 @@ export function buildMilestoneCommands(program: Command, engine: WorkflowEngine)
     .description("列出项目下全部需求里程碑")
     .argument("<projectId>", "项目 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { json?: boolean }) => {
+    .action(async (projectId: string, options: { json?: boolean }) => {
       try {
-        const items = engine.listProjectMilestones(projectId)
+        const items = await engine.listProjectMilestones(projectId)
         if (options.json) {
           console.log(JSON.stringify(items, null, 2))
           return

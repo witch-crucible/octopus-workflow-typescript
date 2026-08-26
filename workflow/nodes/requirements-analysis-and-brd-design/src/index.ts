@@ -33,7 +33,7 @@ export interface BrdNodeInput {
 
 export interface BrdNodeRuntime {
   callAssistant?: (assistant: AIAssistantType, input: string) => Promise<AIResponse>
-  createArtifact: (requirementId: string, params: CreateArtifactParams) => void
+  createArtifact: (requirementId: string, params: CreateArtifactParams) => Promise<void>
 }
 
 export interface BrdGenerateResult {
@@ -102,7 +102,7 @@ export async function runBrdGenerate(
   const response = await runtime.callAssistant(AIAssistantType.BRD_GENERATE, envelope)
   mkdirSync(dirname(context.absoluteOutputPath), { recursive: true })
   writeFileSync(context.absoluteOutputPath, response.result, "utf8")
-  runtime.createArtifact(input.requirementId, {
+  await runtime.createArtifact(input.requirementId, {
     type: ArtifactType.BRD,
     title: `${input.requirementName} BRD`,
     description: "AI 生成的商业需求文档",

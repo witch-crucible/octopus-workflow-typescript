@@ -20,9 +20,7 @@ export function buildAiCommands(
   engine: WorkflowEngine,
   _store?: StateStore,
 ): void {
-  const aiCmd = program
-    .command("ai")
-    .description("AI 助手")
+  const aiCmd = program.command("ai").description("AI 助手")
 
   // ── ai ask ──
   aiCmd
@@ -34,11 +32,17 @@ export function buildAiCommands(
       try {
         // 注意：实际项目中 AIClient 应从 engine 获取
         if (options?.json) {
-          console.log(JSON.stringify({
-            prompt,
-            result: "AI 集成需要配置 claude CLI。请确保已安装并登录 Claude。运行: claude login",
-            durationMs: 0,
-          }, null, 2))
+          console.log(
+            JSON.stringify(
+              {
+                prompt,
+                result: "AI 集成需要配置 claude CLI。请确保已安装并登录 Claude。运行: claude login",
+                durationMs: 0,
+              },
+              null,
+              2,
+            ),
+          )
           return
         }
         console.log("🤖 AI 思考中...")
@@ -57,14 +61,20 @@ export function buildAiCommands(
     .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
     .action(async (requirementId?: string, options?: { json?: boolean }) => {
-      const pid = resolveRequirementId(engine, requirementId)
+      const pid = await resolveRequirementId(engine, requirementId)
       if (!pid) return
 
       if (options?.json) {
-        console.log(JSON.stringify({
-          requirementId: pid,
-          result: "此功能需要读取 git diff 并调用 claude CLI。确保 claude CLI 已安装并登录。",
-        }, null, 2))
+        console.log(
+          JSON.stringify(
+            {
+              requirementId: pid,
+              result: "此功能需要读取 git diff 并调用 claude CLI。确保 claude CLI 已安装并登录。",
+            },
+            null,
+            2,
+          ),
+        )
         return
       }
 
@@ -80,17 +90,23 @@ export function buildAiCommands(
     .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
     .action(async (requirementId?: string, options?: { json?: boolean }) => {
-      const pid = resolveRequirementId(engine, requirementId)
+      const pid = await resolveRequirementId(engine, requirementId)
       if (!pid) {
         console.log("⚠️  未指定需求 ID。")
         return
       }
 
       if (options?.json) {
-        console.log(JSON.stringify({
-          requirementId: pid,
-          result: "此功能需要 PRD 内容作为输入并调用 claude CLI。",
-        }, null, 2))
+        console.log(
+          JSON.stringify(
+            {
+              requirementId: pid,
+              result: "此功能需要 PRD 内容作为输入并调用 claude CLI。",
+            },
+            null,
+            2,
+          ),
+        )
         return
       }
 
@@ -107,10 +123,16 @@ export function buildAiCommands(
     .option("--json", "以 JSON 格式输出")
     .action(async (sql: string, options?: { json?: boolean }) => {
       if (options?.json) {
-        console.log(JSON.stringify({
-          sql,
-          result: "此功能需要调用 claude CLI。",
-        }, null, 2))
+        console.log(
+          JSON.stringify(
+            {
+              sql,
+              result: "此功能需要调用 claude CLI。",
+            },
+            null,
+            2,
+          ),
+        )
         return
       }
 
@@ -126,14 +148,20 @@ export function buildAiCommands(
     .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 格式输出")
     .action(async (requirementId?: string, options?: { json?: boolean }) => {
-      const pid = resolveRequirementId(engine, requirementId)
+      const pid = await resolveRequirementId(engine, requirementId)
       if (!pid) return
 
       if (options?.json) {
-        console.log(JSON.stringify({
-          requirementId: pid,
-          result: "此功能需要分析代码指标并调用 claude CLI。",
-        }, null, 2))
+        console.log(
+          JSON.stringify(
+            {
+              requirementId: pid,
+              result: "此功能需要分析代码指标并调用 claude CLI。",
+            },
+            null,
+            2,
+          ),
+        )
         return
       }
 
@@ -141,4 +169,3 @@ export function buildAiCommands(
       console.log("   此功能需要分析代码指标并调用 claude CLI。")
     })
 }
-

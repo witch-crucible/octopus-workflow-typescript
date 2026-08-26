@@ -43,7 +43,7 @@ node packages/cli/dist/index.js status
 node packages/cli/dist/index.js node list
 ```
 
-先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）并初始化工作流目录。同一状态库可有多个项目，每个项目下可有多个需求。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
+先在未跟踪的 `.env` 中配置 `DATABASE_URL`，再创建**项目**，并在项目下 `init` / `requirement init` 创建**需求**（工作流实例）。Supabase PostgreSQL 是唯一核心状态库；数据库不可用时 CLI、Web、Electron 和 worker 会直接失败，不读取本地旧状态。`.octo/` 只保存配置、身份、日志和 worker 运行文件，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
 
 声明：本项目使用 Hermes 作为 JavaScript 运行时。
 
@@ -72,7 +72,8 @@ node packages/cli/dist/index.js node list
 - `packages/core/src/spec.ts`：内置工作流规格，也是缺少定义时的回退来源。
 - `workflow.yaml`：需求级、可版本化的 DAG 定义；初始化不会覆盖已有文件。
 - `workflow/nodes/<nodeKey>/`：节点独立工作目录；`workflow/shared/`：节点共享目录。
-- `.octo/state.sqlite`：项目、需求状态、运行记录与事件数据库（旧库会自动迁移为「项目 ⊃ 需求」）。
+- Supabase PostgreSQL：项目、需求状态、运行记录、事件与集成健康度的唯一核心状态库。
+- `.octo/`：本地配置、身份、运行日志和 worker 文件；应用不再创建或读取其中的 `state.sqlite`。
 - `.octo/config.json`：可选的本地配置（含 Teambition 凭据）。
 - `workflow.overlay.yaml`：可选的节点叠加（增/禁/改），不必复制整份 DAG。
 - 自定义节点 `key` 必须是英文 kebab-case，`name` / `description` 也必须使用英文；内部运行态 ID 由 `workflow.yaml` 的 `nodeIdMapping` 维护。
@@ -103,7 +104,18 @@ add:
 
 插件导出 `default` 或 `octopusPlugin`，在 `activate(ctx)` 里叠加节点、注册新的 AI 模块 id、集成服务或自定义能力名称；不能覆盖内置 12 类 AI 模块，也不能覆盖 `ai` / `heinrich` 能力处理器。路径相对项目根，包名从该项目的 `node_modules` 解析，加载失败则进程退出。测试夹具 `packages/plugin/fixtures/sample-plugin/` 是一份可复制的最小插件，本仓库默认不启用任何插件。
 
-可用环境变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`。
+数据库环境变量：运行时必填 `DATABASE_URL`；迁移可选 `DATABASE_MIGRATION_URL`（推荐 direct 或 5432 session pooler）。开发态读取仓库根 `.env`；打包 Electron 读取进程环境或 `userData/store/.env`。其他变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`。
+
+数据库首次切换命令：
+
+```bash
+pnpm db:migrate
+pnpm db:import:sqlite -- --source .octo/state.sqlite --source "/path/to/Electron/userData/store/state.sqlite"
+pnpm db:import:sqlite -- --source .octo/state.sqlite --source "/path/to/Electron/userData/store/state.sqlite" --apply
+pnpm db:verify
+```
+
+导入默认只 dry-run；相同主键内容不同会中止，`--apply` 在单个远端事务中执行。旧 SQLite 文件不会被删除、改名或写入。
 
 Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
 
@@ -119,7 +131,7 @@ Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
 pnpm web
 ```
 
-访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 日志 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/archive/teambition-kanban-gantt-omniplan.md`、`docs/archive/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
+访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，通过后端进程使用 `DATABASE_URL` 与 CLI/Electron/worker 共享 Supabase 状态；连接串不会传给渲染器。可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 日志 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/archive/teambition-kanban-gantt-omniplan.md`、`docs/archive/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
 
 ### 需求泳道图（Node Swimlane）
 
@@ -137,7 +149,7 @@ pnpm web
 pnpm --filter @octopus/desktop start
 ```
 
-Electron 默认使用系统 `userData/store/state.sqlite`，不会自动与 CLI/Web 共享状态；如需共享，请为它们设置相同的 `OCTOPUS_STORE_DIR`。
+Electron 与 CLI/Web 共享 `DATABASE_URL` 指向的 Supabase 状态；系统 `userData/store/` 仅保存本机配置、身份、日志和可选 `.env`，不再创建或读取 `state.sqlite`。
 
 ## 开发验证
 

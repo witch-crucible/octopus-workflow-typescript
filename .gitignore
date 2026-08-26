@@ -6,6 +6,9 @@ dist/
 coverage/
 .tmp/
 *.log
+.env
+.env.*
+!.env.example
 
 # Runtime state
 .omo/

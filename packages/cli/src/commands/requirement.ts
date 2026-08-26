@@ -26,50 +26,58 @@ export function buildRequirementCommands(program: Command, engine: WorkflowEngin
     .option("-d, --desc <desc>", "需求描述")
     .option("--root <path>", "项目源码根目录（默认当前目录）")
     .option("--json", "以 JSON 格式输出")
-    .action((
-      name: string,
-      options: { project: string; desc?: string; root?: string; json?: boolean },
-    ) => {
-      try {
-        const projectRoot = resolve(options.root ?? process.cwd())
-        const state = engine.initRequirement(
-          options.project,
-          name,
-          options.desc,
-          projectRoot,
-        )
-        if (options.json) {
-          console.log(JSON.stringify({
-            projectId: state.projectId,
-            requirementId: state.requirementId,
-            requirementName: state.requirementName,
-            description: state.description,
-            currentPhase: state.currentPhase,
-            taskCount: state.steps.length,
+    .action(
+      async (
+        name: string,
+        options: { project: string; desc?: string; root?: string; json?: boolean },
+      ) => {
+        try {
+          const projectRoot = resolve(options.root ?? process.cwd())
+          const state = await engine.initRequirement(
+            options.project,
+            name,
+            options.desc,
             projectRoot,
-            createdAt: state.createdAt,
-          }, null, 2))
-          return
+          )
+          if (options.json) {
+            console.log(
+              JSON.stringify(
+                {
+                  projectId: state.projectId,
+                  requirementId: state.requirementId,
+                  requirementName: state.requirementName,
+                  description: state.description,
+                  currentPhase: state.currentPhase,
+                  taskCount: state.steps.length,
+                  projectRoot,
+                  createdAt: state.createdAt,
+                },
+                null,
+                2,
+              ),
+            )
+            return
+          }
+          console.log(`✅ 需求已创建: ${state.requirementName}`)
+          console.log(`   需求 ID: ${state.requirementId}`)
+          console.log(`   项目 ID: ${state.projectId}`)
+          console.log(`   当前阶段: ${state.currentPhase}`)
+          console.log(`   任务数: ${state.steps.length}`)
+        } catch (err) {
+          console.error(`❌ 创建需求失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        console.log(`✅ 需求已创建: ${state.requirementName}`)
-        console.log(`   需求 ID: ${state.requirementId}`)
-        console.log(`   项目 ID: ${state.projectId}`)
-        console.log(`   当前阶段: ${state.currentPhase}`)
-        console.log(`   任务数: ${state.steps.length}`)
-      } catch (err) {
-        console.error(`❌ 创建需求失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 
   requirement
     .command("list")
     .description("列出需求")
     .option("--project <projectId>", "按项目过滤")
     .option("--json", "以 JSON 格式输出")
-    .action((options: { project?: string; json?: boolean }) => {
+    .action(async (options: { project?: string; json?: boolean }) => {
       try {
-        const summaries = engine.listRequirementSummaries(options.project)
+        const summaries = await engine.listRequirementSummaries(options.project)
         if (options.json) {
           console.log(JSON.stringify(summaries, null, 2))
           return
@@ -108,14 +116,12 @@ export function buildRequirementCommands(program: Command, engine: WorkflowEngin
     .description("删除需求状态（不删除源码目录）")
     .argument("<requirementId>", "需求 ID")
     .option("--yes", "确认删除")
-    .action((requirementId: string, options: { yes?: boolean }) => {
+    .action(async (requirementId: string, options: { yes?: boolean }) => {
       try {
         if (!options.yes) {
-          throw new Error(
-            "删除不可恢复，请加 --yes 确认。只会删除状态库记录，不会删除源码目录。",
-          )
+          throw new Error("删除不可恢复，请加 --yes 确认。只会删除状态库记录，不会删除源码目录。")
         }
-        engine.deleteRequirement(requirementId)
+        await engine.deleteRequirement(requirementId)
         console.log(`✅ 已删除需求状态: ${requirementId}`)
       } catch (err) {
         console.error(`❌ 删除需求失败: ${(err as Error).message}`)
@@ -130,52 +136,63 @@ export function buildRequirementCommands(program: Command, engine: WorkflowEngin
     .option("--ref <REF>", "Teambition 任务编号")
     .option("--task-id <id>", "Teambition 任务 ID")
     .option("--json", "以 JSON 格式输出")
-    .action(async (
-      requirementId: string,
-      options: { ref?: string; taskId?: string; json?: boolean },
-    ) => {
-      try {
-        if (!options.ref && !options.taskId) {
-          throw new Error("请提供 --ref <REF> 或 --task-id <id>")
+    .action(
+      async (requirementId: string, options: { ref?: string; taskId?: string; json?: boolean }) => {
+        try {
+          if (!options.ref && !options.taskId) {
+            throw new Error("请提供 --ref <REF> 或 --task-id <id>")
+          }
+          const state = await engine.bindRequirementTask(requirementId, {
+            ...(options.ref !== undefined ? { taskRef: options.ref } : {}),
+            ...(options.taskId !== undefined ? { taskId: options.taskId } : {}),
+          })
+          if (options.json) {
+            console.log(
+              JSON.stringify(
+                {
+                  requirementId: state.requirementId,
+                  projectId: state.projectId,
+                  teambition: state.teambition,
+                },
+                null,
+                2,
+              ),
+            )
+            return
+          }
+          console.log(`✅ 已绑定 Teambition 任务`)
+          if (state.teambition?.taskRef) console.log(`   编号: ${state.teambition.taskRef}`)
+          if (state.teambition?.taskId) console.log(`   任务 ID: ${state.teambition.taskId}`)
+          if (state.teambition?.statusName) {
+            console.log(`   状态: ${state.teambition.statusName}`)
+          }
+        } catch (err) {
+          console.error(`❌ 绑定任务失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        const state = await engine.bindRequirementTask(requirementId, {
-          ...(options.ref !== undefined ? { taskRef: options.ref } : {}),
-          ...(options.taskId !== undefined ? { taskId: options.taskId } : {}),
-        })
-        if (options.json) {
-          console.log(JSON.stringify({
-            requirementId: state.requirementId,
-            projectId: state.projectId,
-            teambition: state.teambition,
-          }, null, 2))
-          return
-        }
-        console.log(`✅ 已绑定 Teambition 任务`)
-        if (state.teambition?.taskRef) console.log(`   编号: ${state.teambition.taskRef}`)
-        if (state.teambition?.taskId) console.log(`   任务 ID: ${state.teambition.taskId}`)
-        if (state.teambition?.statusName) {
-          console.log(`   状态: ${state.teambition.statusName}`)
-        }
-      } catch (err) {
-        console.error(`❌ 绑定任务失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 
   requirement
     .command("unbind-task")
     .description("解除 Teambition 任务绑定")
     .argument("<requirementId>", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((requirementId: string, options: { json?: boolean }) => {
+    .action(async (requirementId: string, options: { json?: boolean }) => {
       try {
-        const state = engine.unbindRequirementTask(requirementId)
+        const state = await engine.unbindRequirementTask(requirementId)
         if (options.json) {
-          console.log(JSON.stringify({
-            requirementId: state.requirementId,
-            projectId: state.projectId,
-            teambition: state.teambition ?? null,
-          }, null, 2))
+          console.log(
+            JSON.stringify(
+              {
+                requirementId: state.requirementId,
+                projectId: state.projectId,
+                teambition: state.teambition ?? null,
+              },
+              null,
+              2,
+            ),
+          )
           return
         }
         console.log(`✅ 已解除 Teambition 任务绑定: ${requirementId}`)
@@ -218,26 +235,28 @@ export function buildRequirementCommands(program: Command, engine: WorkflowEngin
     .requiredOption("--status-id <id>", "目标状态 ID")
     .option("--operator <userId>", "操作者用户 ID")
     .option("--json", "以 JSON 格式输出")
-    .action(async (
-      requirementId: string,
-      options: { statusId: string; operator?: string; json?: boolean },
-    ) => {
-      try {
-        const binding = await engine.updateRequirementTeambitionStatus(
-          requirementId,
-          options.statusId,
-          options.operator,
-        )
-        if (options.json) {
-          console.log(JSON.stringify(binding, null, 2))
-          return
+    .action(
+      async (
+        requirementId: string,
+        options: { statusId: string; operator?: string; json?: boolean },
+      ) => {
+        try {
+          const binding = await engine.updateRequirementTeambitionStatus(
+            requirementId,
+            options.statusId,
+            options.operator,
+          )
+          if (options.json) {
+            console.log(JSON.stringify(binding, null, 2))
+            return
+          }
+          console.log(`✅ 已更新 Teambition 状态`)
+          if (binding.statusName) console.log(`   状态: ${binding.statusName}`)
+          if (binding.statusId) console.log(`   状态 ID: ${binding.statusId}`)
+        } catch (err) {
+          console.error(`❌ 更新 Teambition 状态失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        console.log(`✅ 已更新 Teambition 状态`)
-        if (binding.statusName) console.log(`   状态: ${binding.statusName}`)
-        if (binding.statusId) console.log(`   状态 ID: ${binding.statusId}`)
-      } catch (err) {
-        console.error(`❌ 更新 Teambition 状态失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 }

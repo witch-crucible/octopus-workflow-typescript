@@ -13,13 +13,17 @@
     "@octopus/agent-layer": "workspace:*",
     "@octopus/core": "workspace:*",
     "@octopus/plugin": "workspace:*",
-    "@types/better-sqlite3": "^7.6.13",
-    "better-sqlite3": "12.11.1",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
     "js-yaml": "4.3.0",
+    "postgres": "^3.4.9",
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.7",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.2.0",
+    "better-sqlite3": "12.11.1",
     "typescript": "^5.6.0"
   }
 }

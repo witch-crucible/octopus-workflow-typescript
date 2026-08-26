@@ -18,6 +18,9 @@ export type ErrorCode =
   | "ARTIFACT_NOT_FOUND"
   | "STORE_LOAD_FAILED"
   | "STORE_SAVE_FAILED"
+  | "DATABASE_UNAVAILABLE"
+  | "DATABASE_SCHEMA_MISMATCH"
+  | "DATABASE_CONFLICT"
   | "PROJECT_NOT_FOUND"
   | "INVALID_INPUT"
   | "INTERNAL_ERROR"
@@ -100,13 +103,21 @@ export class InvalidPhaseTransitionError extends OctopusError {
 
 /** 存储错误 —— 状态持久化读写失败 */
 export class StoreError extends OctopusError {
+  constructor(code: "STORE_LOAD_FAILED" | "STORE_SAVE_FAILED", message: string, cause?: unknown) {
+    super(code, message, cause)
+    this.name = "StoreError"
+  }
+}
+
+/** PostgreSQL 连接、schema 或事务冲突错误。 */
+export class PersistenceError extends OctopusError {
   constructor(
-    code: "STORE_LOAD_FAILED" | "STORE_SAVE_FAILED",
+    code: "DATABASE_UNAVAILABLE" | "DATABASE_SCHEMA_MISMATCH" | "DATABASE_CONFLICT",
     message: string,
     cause?: unknown,
   ) {
     super(code, message, cause)
-    this.name = "StoreError"
+    this.name = "PersistenceError"
   }
 }
 
@@ -131,8 +142,5 @@ export class WorkflowError extends OctopusError {
  *   }
  */
 export function assertNever(value: never): never {
-  throw new OctopusError(
-    "INTERNAL_ERROR",
-    `不应到达的分支: ${String(value)}`,
-  )
+  throw new OctopusError("INTERNAL_ERROR", `不应到达的分支: ${String(value)}`)
 }

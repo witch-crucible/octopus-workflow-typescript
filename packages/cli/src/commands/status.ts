@@ -12,12 +12,12 @@ export function buildStatusCommand(program: Command, engine: WorkflowEngine): vo
     .description("展示需求状态摘要")
     .argument("[requirementId]", "需求 ID（仅当状态库恰好有一个需求时可省略）")
     .option("--json", "以 JSON 格式输出")
-    .action((requirementId: string | undefined, options: { json?: boolean }) => {
+    .action(async (requirementId: string | undefined, options: { json?: boolean }) => {
       try {
-        const rid = resolveRequirementId(engine, requirementId)
+        const rid = await resolveRequirementId(engine, requirementId)
         if (!rid) return
 
-        const summary = engine.getRequirementStatus(rid)
+        const summary = await engine.getRequirementStatus(rid)
 
         if (options.json) {
           console.log(JSON.stringify(summary, null, 2))
@@ -38,11 +38,12 @@ export function buildStatusCommand(program: Command, engine: WorkflowEngine): vo
         console.log("   阶段进度:")
         for (const p of summary.phaseProgress) {
           const icon = phaseLockLabel[p.lock] ?? "❓"
-          const bar = "#".repeat(Math.floor(p.progress.percent / 10))
-            + "░".repeat(10 - Math.floor(p.progress.percent / 10))
+          const bar =
+            "#".repeat(Math.floor(p.progress.percent / 10)) +
+            "░".repeat(10 - Math.floor(p.progress.percent / 10))
           console.log(`   ${icon} ${p.phase.padEnd(16)} [${bar}] ${p.progress.percent}%`)
 
-          const stageProgress = engine.getStageProgress(rid, p.phase)
+          const stageProgress = await engine.getStageProgress(rid, p.phase)
           console.log(`      步骤: ${stageProgress.completed}/${stageProgress.total} 已完成`)
         }
 

@@ -3,7 +3,7 @@
  *
  * 需求隶属于上层「项目（Project）」容器。单一真相源为 `steps`（StepRuntime[]）。
  * `Task` / `StageInfo` 通过 stepToTask / stepToStageInfo 派生，供前端复用。
- * 通过 StateStore 持久化为事务化 SQLite 聚合。
+ * 通过 PersistenceStore 持久化为事务化 PostgreSQL 聚合。
  */
 
 import type { ProjectId, RequirementId, TaskId } from "./branded-ids.js"
@@ -287,8 +287,10 @@ function phaseForStepId(stepId: string, fallback: string | Phase): Phase {
 
 function remapLegacyPhaseKey(key: string): Phase {
   if (key === "RequirementsAnalysis") return Phase.RESEARCH
-  return LEGACY_PHASE_REMAP[key]
-    ?? (Object.values(Phase).includes(key as Phase) ? (key as Phase) : Phase.INTENTION)
+  return (
+    LEGACY_PHASE_REMAP[key] ??
+    (Object.values(Phase).includes(key as Phase) ? (key as Phase) : Phase.INTENTION)
+  )
 }
 
 function remapCurrentPhase(
@@ -296,7 +298,9 @@ function remapCurrentPhase(
   steps: readonly { id: string; phase: Phase; status?: string }[],
 ): Phase {
   if (rawPhase === "RequirementsAnalysis") {
-    const hasResearchStep = steps.some((step) => step.id.startsWith("10.") && !INTENTION_STEP_IDS.has(step.id))
+    const hasResearchStep = steps.some(
+      (step) => step.id.startsWith("10.") && !INTENTION_STEP_IDS.has(step.id),
+    )
     return hasResearchStep ? Phase.RESEARCH : Phase.INTENTION
   }
   if (rawPhase === "Testing") {
@@ -384,7 +388,9 @@ function remapChecklists(
   return result
 }
 
-function remapHeinrichPhases<T extends { triggerCounts?: Partial<Record<string, number>> }>(heinrich: T): T {
+function remapHeinrichPhases<T extends { triggerCounts?: Partial<Record<string, number>> }>(
+  heinrich: T,
+): T {
   if (!heinrich?.triggerCounts) return heinrich
   const counts: Partial<Record<Phase, number>> = {}
   for (const phase of Object.values(Phase)) counts[phase] = 0
@@ -403,7 +409,10 @@ function remapHeinrichPhases<T extends { triggerCounts?: Partial<Record<string, 
  * v7 补齐 milestones[]。
  * v9 需求级 teambitionVersion 绑定；缺字段保持 undefined。
  */
-export function migrateWorkflowState(raw: unknown, options?: { projectId?: ProjectId }): WorkflowState {
+export function migrateWorkflowState(
+  raw: unknown,
+  options?: { projectId?: ProjectId },
+): WorkflowState {
   const state = raw as WorkflowState & {
     tasks?: LegacyTaskLike[]
     stages?: Record<string, LegacyStageLike>
@@ -465,7 +474,10 @@ export function migrateWorkflowState(raw: unknown, options?: { projectId?: Proje
   }
 
   const currentPhase = remapCurrentPhase(String(state.currentPhase ?? Phase.INTENTION), steps)
-  const phaseStatus = remapPhaseStatus(state.phaseStatus as Partial<Record<string, PhaseLock>>, currentPhase)
+  const phaseStatus = remapPhaseStatus(
+    state.phaseStatus as Partial<Record<string, PhaseLock>>,
+    currentPhase,
+  )
   const checklists = remapChecklists(state.checklists as Partial<Record<string, Checklist>>)
   const heinrich = remapHeinrichPhases(state.heinrich ?? createEmptyHeinrichRecord())
   const aiGateResults = (state.aiGateResults ?? []).map((item) => ({
@@ -476,16 +488,14 @@ export function migrateWorkflowState(raw: unknown, options?: { projectId?: Proje
   // v5：旧 projectId/projectName 下沉为 requirementId/requirementName
   const legacyProjectId = (state as { projectId?: string }).projectId
   const legacyProjectName = state.projectName
-  const requirementId = (state.requirementId
-    ?? legacyProjectId
-    ?? `req_${Date.now()}`) as RequirementId
-  const requirementName = state.requirementName
-    ?? legacyProjectName
-    ?? "未命名需求"
-  const projectId = (options?.projectId
-    ?? state.projectId
-    ?? legacyProjectId
-    ?? `proj_${Date.now()}`) as ProjectId
+  const requirementId = (state.requirementId ??
+    legacyProjectId ??
+    `req_${Date.now()}`) as RequirementId
+  const requirementName = state.requirementName ?? legacyProjectName ?? "未命名需求"
+  const projectId = (options?.projectId ??
+    state.projectId ??
+    legacyProjectId ??
+    `proj_${Date.now()}`) as ProjectId
 
   const migrated: WorkflowState = {
     ...state,
@@ -509,5 +519,18 @@ export function migrateWorkflowState(raw: unknown, options?: { projectId?: Proje
 }
 
 // 为满足类型定义引用，重新导出这些类型
-export type { Task, TaskFilter, TaskProgress, StageInfo, Checklist, ChecklistItem, HeinrichRecord, HeinrichObservation, HeinrichLevel, Artifact, ArtifactType, StepRuntime }
+export type {
+  Task,
+  TaskFilter,
+  TaskProgress,
+  StageInfo,
+  Checklist,
+  ChecklistItem,
+  HeinrichRecord,
+  HeinrichObservation,
+  HeinrichLevel,
+  Artifact,
+  ArtifactType,
+  StepRuntime,
+}
 export { Role, PhaseLock }
