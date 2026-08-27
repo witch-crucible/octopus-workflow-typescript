@@ -31,7 +31,7 @@ Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，�
 
 ## 快速开始
 
-需要 Node.js 20+ 和 pnpm 9.15.0；运行 AI 节点还需要安装并登录 Claude CLI。
+需要 Node.js 20+ 和 pnpm 9.15.0；运行通用 AI 节点需要安装并登录 Claude CLI，运行 `brd optimize` 还需要安装 Hermes Agent CLI。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -46,6 +46,8 @@ node packages/cli/dist/index.js node list
 默认直接使用本地 SQLite 主库：CLI/Web 为 `.octo/octopus.sqlite`，Electron 为 `userData/store/octopus.sqlite`，目录可用 `OCTOPUS_STORE_DIR` 覆盖。`DATABASE_URL` 仅供用户明确发起的一次快照同步使用；缺少连接串或 Supabase 不可用不影响离线启动、项目操作和 worker。先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
 
 BRD 自动优化使用 Hermes Agent CLI 的无头模式；TypeScript/JavaScript 运行时仍为 Node.js 20+。
+
+BRD 优化运行记录与查询方式见 [`requirements-analysis-and-brd-design/README.md`](workflow/nodes/requirements-analysis-and-brd-design/README.md#hermes-运行记录与优化过程)。
 
 ## 核心命令
 
@@ -105,7 +107,7 @@ add:
 
 插件导出 `default` 或 `octopusPlugin`，在 `activate(ctx)` 里叠加节点、注册新的 AI 模块 id、集成服务或自定义能力名称；不能覆盖内置 12 类 AI 模块，也不能覆盖 `ai` / `heinrich` 能力处理器。路径相对项目根，包名从该项目的 `node_modules` 解析，加载失败则进程退出。测试夹具 `packages/plugin/fixtures/sample-plugin/` 是一份可复制的最小插件，本仓库默认不启用任何插件。
 
-数据库环境变量：运行时必填 `DATABASE_URL`；迁移可选 `DATABASE_MIGRATION_URL`（推荐 direct 或 5432 session pooler）。开发态读取仓库根 `.env`；打包 Electron 读取进程环境或 `userData/store/.env`。其他变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`。
+数据库环境变量：运行时必填 `DATABASE_URL`；迁移可选 `DATABASE_MIGRATION_URL`（推荐 direct 或 5432 session pooler）。开发态读取仓库根 `.env`；打包 Electron 读取进程环境或 `userData/store/.env`。其他变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_HERMES_PATH`。
 
 数据库首次切换命令：
 

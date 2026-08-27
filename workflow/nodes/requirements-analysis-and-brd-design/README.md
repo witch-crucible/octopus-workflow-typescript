@@ -97,4 +97,63 @@ hermes skills trust
 
 历史 BRD 有界采集仅支持 `md`、`markdown`、`txt`、`adoc`，最多读取 20 个文件；缺失、不支持或截断均返回明确警告。每次 `optimize` 都重新读取配置路径，因此新增历史文档无需重新配置或训练模型。
 
+## Hermes 运行记录与优化过程
+
+Hermes 会把每次无头调用保存为 Session。`brd optimize` 的输入（当前需求、代码摘要、历史 BRD 和规范）与最终 BRD 可以从 Hermes Session 查询；Session 还包含模型、Provider、Token、时间和工具调用等元数据：
+
+命令参数以 [Hermes Sessions 文档](https://hermes-agent.nousresearch.com/docs/user-guide/sessions) 和 [Hermes CLI Reference](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) 为准。
+
+```bash
+# 按项目目录查找 BRD 优化对应的 CLI Session
+hermes sessions list --source cli --workspace octopus-workflow-typescript --limit 20
+
+# 导出一条完整会话；对外分享前使用 --redact
+hermes sessions export /tmp/hermes-brd-export \
+  --format md --session-id <SESSION_ID> --redact
+
+# 机器可读 JSONL
+hermes sessions export - \
+  --format jsonl --session-id <SESSION_ID> --redact
+
+# 查看该 Session 的运行日志
+hermes logs --session <SESSION_ID> --since 2h --lines 500
+
+# 查看近期 CLI 会话的 Token、费用和活动汇总
+hermes insights --days 7 --source cli
+```
+
+当前 Skill 的“生成 → 内部审查 → 修订”最多执行三轮，但 Skill 契约要求只返回最终 Markdown，因此 Hermes Session 能看到输入和最终输出，不能看到每轮草稿、每轮缺口、每轮修改摘要或模型隐藏推理。Octopus 当前也只落盘最终 BRD 和 BRD Artifact，没有独立的优化 trace 文件。
+
+如果要审计每轮优化，需要扩展输出协议和节点持久化，至少保存：
+
+- Octopus Run ID、Hermes Session ID、需求 ID、Skill 名称和版本；
+- 当前代码摘要与历史 BRD 文件清单/摘要哈希；
+- 每轮问题、修改摘要、质量指标和停止原因；
+- 模型、Provider、Token、费用、开始/结束时间；
+- 最终 BRD 与优化报告的文件路径。
+
+建议分别保存 `brd.md`、`brd-optimization-report.md` 和机器可读的 `brd-optimization-trace.json`，不要试图保存模型隐藏思维链。
+
+### Skill 本身的变更记录
+
+`brd-generator` 是仓库内手工维护的项目级 Skill。查询其源码变更使用 Git：
+
+```bash
+git log --follow -- .hermes/skills/brd-generator/SKILL.md
+git log -p --follow -- .hermes/skills/brd-generator/SKILL.md
+```
+
+Hermes Curator 的查询命令如下：
+
+```bash
+hermes curator status
+hermes curator usage --json
+hermes curator ledger --skill brd-generator --limit 50
+hermes curator run --dry-run
+```
+
+这些命令主要记录 Hermes 对 Skill 文件本身的使用、维护和归档。手工创建的项目级 Skill 默认不属于 Curator 自动托管范围；因此 `ledger --skill brd-generator` 为空，不代表 BRD 没有运行，只代表没有 Curator 的 Skill 文件变更记录。
+
+Curator 的职责和审计 Ledger 说明见 [Hermes Curator 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/curator)。
+
 确认 `brd.md` 后，用 `octopus node complete requirements-analysis-and-brd-design`（或 UI）标记本节点完成。
