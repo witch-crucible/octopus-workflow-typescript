@@ -35,6 +35,7 @@ describe("brd-design", () => {
       sources: {
         miniprogramCodePath: "apps/mini",
         websiteUrl: "https://example.com",
+        historicalBrdPaths: ["docs/history", "docs/example.md"],
       },
       brdOutputPath: "docs/brd.md",
     })
@@ -45,6 +46,7 @@ describe("brd-design", () => {
     })
     expect(parsed.sources.miniprogramCodePath).toBe("apps/mini")
     expect(parsed.sources.websiteUrl).toBe("https://example.com")
+    expect(parsed.sources.historicalBrdPaths).toEqual(["docs/history", "docs/example.md"])
     expect(parsed.brdOutputPath).toBe("docs/brd.md")
   })
 
@@ -53,6 +55,7 @@ describe("brd-design", () => {
     expect(() => normalizeBrdDesignConfig("x")).toThrow(/对象/)
     expect(() => normalizeBrdDesignConfig({ prompts: { generate: { system: "" } } })).toThrow(/system 与 user/)
     expect(() => normalizeBrdDesignConfig({ prompts: { unknown: { system: "a", user: "b" } } })).toThrow(/未知提示词/)
+    expect(() => normalizeBrdDesignConfig({ sources: { historicalBrdPaths: "docs" } })).toThrow(/字符串数组/)
   })
 
   it("merge 支持深合并与空串清除", () => {
@@ -75,6 +78,15 @@ describe("brd-design", () => {
     expect(merged.brdOutputPath).toBe("out/brd.md")
     expect(merged.prompts?.generate?.user).toBe("自定义 {{requirementName}}")
     expect(merged.prompts?.generate?.system).toContain("资深产品经理")
+
+    const withHistory = mergeBrdDesignConfig(merged, {
+      sources: { historicalBrdPaths: [" docs/a.md ", "docs/a.md", "docs/b"] },
+    })
+    expect(withHistory.sources.historicalBrdPaths).toEqual(["docs/a.md", "docs/b"])
+    const clearedHistory = mergeBrdDesignConfig(withHistory, {
+      sources: { historicalBrdPaths: [] },
+    })
+    expect(clearedHistory.sources.historicalBrdPaths).toBeUndefined()
   })
 
   it("merge prompts[id]=null 删除覆盖", () => {
@@ -93,6 +105,7 @@ describe("brd-design", () => {
     })
     expect(resolved.generate.system).toBe("SYS")
     expect(resolved.check.system).toContain("BRD 评审")
+    expect(buildDefaultBrdPrompts().generate.user).toContain("{{historicalBrds}}")
   })
 
   it("renderBrdPrompt 替换占位符，缺失为空串", () => {

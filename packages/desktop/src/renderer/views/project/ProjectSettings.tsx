@@ -97,6 +97,7 @@ export function ProjectSettings({
   })
   const [brdSpecPath, setBrdSpecPath] = useState("")
   const [brdOutputPath, setBrdOutputPath] = useState("")
+  const [brdHistoryPaths, setBrdHistoryPaths] = useState("")
   const [brdPromptConfig, setBrdPromptConfig] = useState<Record<string, BrdPromptDraft>>({})
   const [brdPromptDrafts, setBrdPromptDrafts] = useState<Record<string, BrdPromptDraft | undefined>>({})
   const [brdPromptClearIds, setBrdPromptClearIds] = useState<string[]>([])
@@ -135,7 +136,7 @@ export function ProjectSettings({
     void (async () => {
       try {
         const config = (await loadBrd(projectId)) as BrdConfig & {
-          sources?: Partial<BrdSources>
+          sources?: Partial<BrdSources> & { historicalBrdPaths?: string[] }
           brdSpecPath?: string
           brdOutputPath?: string
         }
@@ -150,6 +151,7 @@ export function ProjectSettings({
         })
         setBrdSpecPath(config.brdSpecPath || "")
         setBrdOutputPath(config.brdOutputPath || "")
+        setBrdHistoryPaths((sources.historicalBrdPaths || []).join("\n"))
         const prompts: Record<string, BrdPromptDraft> = {}
         for (const [id, value] of Object.entries(config.prompts || {})) {
           if (value && typeof value === "object") {
@@ -556,6 +558,19 @@ export function ProjectSettings({
             </div>
           ))}
           <div className="grid gap-1.5">
+            <Label htmlFor="brdHistoryPaths">历史 BRD 路径</Label>
+            <Textarea
+              id="brdHistoryPaths"
+              value={brdHistoryPaths}
+              rows={3}
+              placeholder={"每行一个 Markdown/文本文件或目录\ndocs/brd-history"}
+              onChange={(event) => setBrdHistoryPaths(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              每次 Hermes 无头生成都会重新读取这些路径；仅采集 md、markdown、txt、adoc 文本。
+            </p>
+          </div>
+          <div className="grid gap-1.5">
             <Label htmlFor="brdSpecPath">BRD 规范路径</Label>
             <Input
               id="brdSpecPath"
@@ -729,7 +744,13 @@ export function ProjectSettings({
                       return
                     }
                     await saveBrd(projectId, {
-                      sources: brdSources,
+                      sources: {
+                        ...brdSources,
+                        historicalBrdPaths: brdHistoryPaths
+                          .split(/\r?\n/)
+                          .map((item) => item.trim())
+                          .filter((item) => item !== ""),
+                      },
                       brdSpecPath,
                       brdOutputPath,
                       prompts: promptPatch.prompts,

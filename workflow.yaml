@@ -62,7 +62,9 @@ nodes:
       - type: manual
         instructions: >-
           Configure project BRD sources and prompts (octopus brd config / Web settings),
-          then run octopus brd generate or octopus brd check. Confirm brd.md before completing this node.
+          then run octopus brd optimize for headless Hermes generation and automatic revision,
+          or use octopus brd generate / octopus brd check for the compatible AI paths.
+          Confirm brd.md before completing this node.
   - key: brd-walkthrough
     phase: Intention
     name: BRD Walkthrough

@@ -871,6 +871,10 @@ describe("BRD 设计 RPC 注册", () => {
     expect(api).toContain("setProjectBrdDesignConfig:")
     expect(settings).toContain("collectBrdPromptPatch")
     expect(settings).toContain("brdPromptDrafts")
+    expect(settings).toContain("brdHistoryPaths")
+    expect(readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")).toContain(
+      "historicalBrdPaths",
+    )
     expect(settings).toContain("BRD")
   })
 

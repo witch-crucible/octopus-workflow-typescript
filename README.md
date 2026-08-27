@@ -25,7 +25,7 @@ Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，�
 - 以 `workflow.yaml` 定义节点、依赖、角色和执行动作。
 - 支持手动、命令、AI、外部集成和 Heinrich 标记五类动作。
 - 按依赖调度可运行节点，支持并行执行、手动暂停、取消和重试。
-- 内置 AI 辅助能力（含 BRD 生成/检查）通过 Claude CLI 执行；BRD 源路径与提示词可按项目配置。
+- 通用 AI 辅助能力通过 Claude CLI 执行；BRD 节点另支持 Hermes Agent 无头模式，结合项目代码与历史 BRD 自动生成和优化。
 - 项目可绑定 Teambition 项目，需求可绑定任务卡片并读写状态。版本计划对接（仓库 / 版本 / note）方案见 `docs/plans/teambition-version-plan.md`。
 - 提供 CLI、本地 Web 界面和 macOS Electron 客户端。
 
@@ -45,7 +45,7 @@ node packages/cli/dist/index.js node list
 
 默认直接使用本地 SQLite 主库：CLI/Web 为 `.octo/octopus.sqlite`，Electron 为 `userData/store/octopus.sqlite`，目录可用 `OCTOPUS_STORE_DIR` 覆盖。`DATABASE_URL` 仅供用户明确发起的一次快照同步使用；缺少连接串或 Supabase 不可用不影响离线启动、项目操作和 worker。先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
 
-声明：本项目使用 Hermes 作为 JavaScript 运行时。
+BRD 自动优化使用 Hermes Agent CLI 的无头模式；TypeScript/JavaScript 运行时仍为 Node.js 20+。
 
 ## 核心命令
 
@@ -64,7 +64,7 @@ node packages/cli/dist/index.js node list
 | `octopus workflow validate/sync/run/status` | 校验工作流、同步目录并调度 DAG |
 | `octopus stage` / `octopus step` | 管理阶段步骤并执行步骤能力 |
 | `octopus ai` | 独立调用 AI 助手 |
-| `octopus brd config/prompts/generate/check` | 按项目配置源与提示词，生成或检查 BRD |
+| `octopus brd config/prompts/generate/optimize/check` | 按项目配置代码源、历史 BRD 与提示词，生成、自动优化或检查 BRD |
 | `octopus monitor` | 查看运行事件与集成健康度 |
 
 ## 工作流与数据

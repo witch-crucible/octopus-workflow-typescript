@@ -7,6 +7,7 @@
  *   prompts <projectId> [requirementId] [--mode] [--write] [--json]
  *   prompt-set <projectId> --id <id> --system-file <path> --user-file <path>
  *   generate [requirementId] [--project] [--dry-run] [--json]
+ *   optimize [requirementId] [--project] [--dry-run] [--json]
  *   check [requirementId] [--project] [--dry-run] [--json]
  */
 
@@ -33,7 +34,7 @@ function parsePromptId(value: string): BrdPromptId {
 }
 
 export function buildBrdCommands(program: Command, engine: WorkflowEngine): void {
-  const brd = program.command("brd").description("BRD 设计：项目配置、提示词、生成与检查")
+  const brd = program.command("brd").description("BRD 设计：项目配置、生成、自动优化与检查")
 
   const configCmd = brd.command("config").description("查看或设置项目 BRD 配置")
 
@@ -59,6 +60,7 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
         console.log(`   后端代码:   ${s.backendCodePath ?? "（未配置）"}`)
         console.log(`   小程序产物: ${s.miniprogramBuildArtifact ?? "（未配置）"}`)
         console.log(`   官网域名:   ${s.websiteUrl ?? "（未配置）"}`)
+        console.log(`   历史 BRD:  ${s.historicalBrdPaths?.join(", ") ?? "（未配置）"}`)
         console.log(`规范: ${config.brdSpecPath ?? "（内置默认）"}`)
         console.log(`产出: ${config.brdOutputPath ?? "（默认节点目录 brd.md）"}`)
         const promptIds = config.prompts ? Object.keys(config.prompts) : []
@@ -82,6 +84,8 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
     .option("--backend <path>", "后端代码路径")
     .option("--miniprogram-artifact <path>", "小程序编译产物路径")
     .option("--website-url <url>", "官网展示域名")
+    .option("--history <paths...>", "历史 BRD 文件或目录（可多个）")
+    .option("--clear-history", "清除历史 BRD 路径")
     .option("--spec <path>", "BRD 规范文件路径")
     .option("--output <path>", "BRD 产出路径")
     .option("--json", "以 JSON 格式输出")
@@ -95,6 +99,8 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
           backend?: string
           miniprogramArtifact?: string
           websiteUrl?: string
+          history?: string[]
+          clearHistory?: boolean
           spec?: string
           output?: string
           json?: boolean
@@ -111,6 +117,11 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
             sources.miniprogramBuildArtifact = options.miniprogramArtifact
           }
           if (options.websiteUrl !== undefined) sources.websiteUrl = options.websiteUrl
+          if (options.history !== undefined && options.clearHistory === true) {
+            throw new Error("--history 与 --clear-history 不能同时使用")
+          }
+          if (options.history !== undefined) sources.historicalBrdPaths = options.history
+          if (options.clearHistory === true) sources.historicalBrdPaths = []
           if (options.spec !== undefined) patch.brdSpecPath = options.spec
           if (options.output !== undefined) patch.brdOutputPath = options.output
 
@@ -262,6 +273,47 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
           console.log(`✅ BRD 已生成: ${result.outputPath}`)
         } catch (err) {
           console.error(`❌ 生成 BRD 失败: ${(err as Error).message}`)
+          process.exitCode = 1
+        }
+      },
+    )
+
+  brd
+    .command("optimize")
+    .description("Hermes Agent 无头运行 BRD Skill，结合历史文档与当前代码生成并自动优化 BRD")
+    .argument("[requirementId]", "需求 ID")
+    .option("--project <projectId>", "项目 ID（默认从需求反查）")
+    .option("--dry-run", "只渲染输入，不调用 Hermes Agent")
+    .option("--json", "以 JSON 格式输出")
+    .action(
+      async (
+        requirementId: string | undefined,
+        options: { project?: string; dryRun?: boolean; json?: boolean },
+      ) => {
+        try {
+          const rid = await resolveRequirementId(engine, requirementId)
+          if (!rid) return
+          const projectId = options.project ?? (await resolveProjectIdForRequirement(engine, rid))
+          const result = await engine.optimizeBrd(
+            projectId,
+            rid,
+            options.dryRun === true ? { dryRun: true } : undefined,
+          )
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2))
+            return
+          }
+          for (const warning of result.warnings) console.log(`⚠️  ${warning}`)
+          if (result.dryRun) {
+            console.log(`🧪 dry-run：未调用 Hermes Agent（Skill: ${result.skill}）`)
+            for (const item of result.promptsUsed) {
+              console.log(`── ${item.id} ──\n${item.prompt.slice(0, 500)}\n`)
+            }
+            return
+          }
+          console.log(`✅ Hermes Agent 已生成并自动优化 BRD: ${result.outputPath}`)
+        } catch (err) {
+          console.error(`❌ Hermes BRD 自动优化失败: ${(err as Error).message}`)
           process.exitCode = 1
         }
       },

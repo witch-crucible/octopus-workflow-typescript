@@ -36,8 +36,10 @@ import {
   previewBrdNodePrompts,
   runBrdCheck,
   runBrdGenerate,
+  runBrdOptimize,
   type BrdCheckResult,
   type BrdGenerateResult,
+  type BrdOptimizeResult,
   type BrdNodeInput,
   type BrdNodeRuntime,
   type BrdRenderedPrompt,
@@ -2808,6 +2810,19 @@ export class WorkflowEngine {
     )
   }
 
+  /** Hermes Agent 无头运行项目级 Skill，基于历史 BRD 与当前代码生成并自动优化 BRD。 */
+  async optimizeBrd(
+    projectId: string,
+    requirementId: string,
+    options?: { dryRun?: boolean },
+  ): Promise<BrdOptimizeResult> {
+    return runBrdOptimize(
+      await this.prepareBrdNodeInput(projectId, requirementId),
+      this.createBrdNodeRuntime(),
+      options,
+    )
+  }
+
   /** AI 检查 BRD；dryRun 只返回提示词；缺少已有 BRD 时抛错 */
   async checkBrd(
     projectId: string,
@@ -2847,7 +2862,10 @@ export class WorkflowEngine {
     const aiClient = this.aiClient
     return {
       ...(aiClient
-        ? { callAssistant: (assistant, input) => aiClient.callAssistant(assistant, input) }
+        ? {
+            callAssistant: (assistant, input) => aiClient.callAssistant(assistant, input),
+            runHermesSkill: (skill, input, options) => aiClient.runHermesSkill(skill, input, options),
+          }
         : {}),
       createArtifact: async (requirementId, params) => {
         await this.createArtifact(requirementId, params)

@@ -8,6 +8,7 @@ import { DEFAULT_CONFIG, getIdentity, loadConfig, saveIdentity } from "./config.
 const temporaryDirectories: string[] = []
 const originalStoreDir = process.env["OCTOPUS_STORE_DIR"]
 const originalMe = process.env["OCTOPUS_ME"]
+const originalHermesPath = process.env["OCTOPUS_AI_HERMES_PATH"]
 const originalTbEnv: Record<string, string | undefined> = {
   OCTOPUS_TB_APP_ID: process.env["OCTOPUS_TB_APP_ID"],
   OCTOPUS_TB_APP_SECRET: process.env["OCTOPUS_TB_APP_SECRET"],
@@ -26,6 +27,8 @@ afterEach(() => {
   else process.env["OCTOPUS_STORE_DIR"] = originalStoreDir
   if (originalMe === undefined) delete process.env["OCTOPUS_ME"]
   else process.env["OCTOPUS_ME"] = originalMe
+  if (originalHermesPath === undefined) delete process.env["OCTOPUS_AI_HERMES_PATH"]
+  else process.env["OCTOPUS_AI_HERMES_PATH"] = originalHermesPath
   for (const [key, value] of Object.entries(originalTbEnv)) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
@@ -119,6 +122,15 @@ describe("loadConfig", () => {
       ai: { defaultModel: "sonnet", retries: 3, defaultTimeout: 120_000 },
       workflow: { strictPermissions: true, aiGatingEnabled: false, heinrichThreshold: 3 },
     })
+  })
+
+  it("Hermes CLI 路径可由配置或环境变量覆盖", () => {
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-hermes-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({ ai: { hermesPath: "/file/hermes" } }))
+    expect(loadConfig(storeDir).ai.hermesPath).toBe("/file/hermes")
+    process.env["OCTOPUS_AI_HERMES_PATH"] = "/env/hermes"
+    expect(loadConfig(storeDir).ai.hermesPath).toBe("/env/hermes")
   })
 
   it("未知额外字段不应导致校验失败", () => {

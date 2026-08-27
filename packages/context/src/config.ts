@@ -98,6 +98,7 @@ const configFileSchema = z.object({
       defaultModel: z.string().optional(),
       defaultTimeout: z.number().optional(),
       claudePath: z.string().optional(),
+      hermesPath: z.string().optional(),
       persistent: z.boolean().optional(),
       retries: z.number().optional(),
       retryDelay: z.number().optional(),
@@ -145,6 +146,7 @@ export const DEFAULT_CONFIG: OctopusConfig = {
     defaultModel: "haiku",
     defaultTimeout: 120_000,
     claudePath: "claude",
+    hermesPath: "hermes",
     persistent: false,
     retries: 2,
     retryDelay: 1000,
@@ -166,11 +168,12 @@ function loadFromEnv(): Partial<OctopusConfig> {
     config.storeDir = process.env["OCTOPUS_STORE_DIR"]
   }
 
-  if (process.env["OCTOPUS_AI_MODEL"] || process.env["OCTOPUS_AI_TIMEOUT"] || process.env["OCTOPUS_AI_CLAUDE_PATH"]) {
+  if (process.env["OCTOPUS_AI_MODEL"] || process.env["OCTOPUS_AI_TIMEOUT"] || process.env["OCTOPUS_AI_CLAUDE_PATH"] || process.env["OCTOPUS_AI_HERMES_PATH"]) {
     config.ai = { ...DEFAULT_CONFIG.ai }
     if (process.env["OCTOPUS_AI_MODEL"]) config.ai.defaultModel = process.env["OCTOPUS_AI_MODEL"]
     if (process.env["OCTOPUS_AI_TIMEOUT"]) config.ai.defaultTimeout = Number(process.env["OCTOPUS_AI_TIMEOUT"])
     if (process.env["OCTOPUS_AI_CLAUDE_PATH"]) config.ai.claudePath = process.env["OCTOPUS_AI_CLAUDE_PATH"]
+    if (process.env["OCTOPUS_AI_HERMES_PATH"]) config.ai.hermesPath = process.env["OCTOPUS_AI_HERMES_PATH"]
   }
 
   const teambition: TeambitionConfig = {}

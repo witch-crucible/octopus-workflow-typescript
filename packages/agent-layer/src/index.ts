@@ -22,6 +22,8 @@ export interface AIClientConfig {
   defaultTimeout: number
   /** claude CLI 路径 */
   claudePath: string
+  /** Hermes Agent CLI 路径（BRD Skill 使用无头模式） */
+  hermesPath: string
   /** 是否启用常驻模式 */
   persistent: boolean
   /** 重试次数 */
@@ -35,6 +37,7 @@ const DEFAULT_CONFIG: AIClientConfig = {
   defaultModel: "haiku",
   defaultTimeout: 120_000,
   claudePath: "claude",
+  hermesPath: "hermes",
   persistent: false,
   retries: 2,
   retryDelay: 1000,
@@ -168,6 +171,88 @@ export class AIClient {
         finish(new Error(`claude 退出失败（${signal ?? code ?? "unknown"}）${detail ? `: ${detail}` : ""}`))
       })
       child.stdin.once("error", (error) => finish(error))
+    })
+  }
+
+  /** 以 Hermes Agent 无头模式运行项目级 Skill；只启用 skills toolset。 */
+  async runHermesSkill(
+    skill: string,
+    prompt: string,
+    options: { projectRoot: string; timeout?: number },
+  ): Promise<AIResponse> {
+    const startedAt = Date.now()
+    const timeout = options.timeout ?? this.config.defaultTimeout
+    if (!skill.trim()) throw new AICallError("Hermes Skill 名称不能为空")
+    if (!options.projectRoot.trim()) throw new AICallError("Hermes 项目根目录不能为空")
+    if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 2_147_483_647) {
+      throw new AICallError("Hermes 调用超时必须是 0 至 2147483647ms 的整数")
+    }
+    const args = [
+      "--in", options.projectRoot,
+      "--skills", skill,
+      "--toolsets", "skills",
+      "--oneshot", prompt,
+    ]
+    try {
+      const result = await this.executeHermes(args, timeout)
+      return { result, durationMs: Date.now() - startedAt }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      throw new AICallError(`Hermes Agent 调用失败: ${message}`, cause)
+    }
+  }
+
+  private executeHermes(args: readonly string[], timeout: number): Promise<string> {
+    const maxBuffer = 10 * 1024 * 1024
+    return new Promise((resolve, reject) => {
+      const child = spawn(this.config.hermesPath, args, { stdio: ["ignore", "pipe", "pipe"] })
+      const stdout: Buffer[] = []
+      const stderr: Buffer[] = []
+      let stdoutLength = 0
+      let stderrLength = 0
+      let settled = false
+      let terminationError: Error | undefined
+      let timer: NodeJS.Timeout | undefined
+      const finish = (error?: Error, output?: string): void => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        if (error) reject(error)
+        else resolve(output ?? "")
+      }
+      const append = (chunks: Buffer[], chunk: Buffer, currentLength: number): number => {
+        const nextLength = currentLength + chunk.length
+        if (nextLength > maxBuffer) {
+          if (!terminationError) {
+            terminationError = new Error(`hermes 输出超过 ${maxBuffer} 字节`)
+            child.kill("SIGKILL")
+          }
+          return currentLength
+        }
+        chunks.push(chunk)
+        return nextLength
+      }
+      if (timeout > 0) {
+        timer = setTimeout(() => {
+          terminationError = new Error(`hermes 调用超时（${timeout}ms）`)
+          child.kill("SIGKILL")
+        }, timeout)
+      }
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdoutLength = append(stdout, chunk, stdoutLength)
+      })
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderrLength = append(stderr, chunk, stderrLength)
+      })
+      child.once("error", (error) => finish(error))
+      child.once("close", (code, signal) => {
+        if (terminationError) return finish(terminationError)
+        const output = Buffer.concat(stdout).toString("utf-8").trim()
+        if (code === 0 && output) return finish(undefined, output)
+        const detail = Buffer.concat(stderr).toString("utf-8").trim()
+        if (code === 0) return finish(new Error("hermes 无头模式未返回最终答复"))
+        finish(new Error(`hermes 退出失败（${signal ?? code ?? "unknown"}）${detail ? `: ${detail}` : ""}`))
+      })
     })
   }
 

@@ -33,8 +33,15 @@ export interface BrdNodeInput {
 
 export interface BrdNodeRuntime {
   callAssistant?: (assistant: AIAssistantType, input: string) => Promise<AIResponse>
+  runHermesSkill?: (
+    skill: string,
+    input: string,
+    options: { projectRoot: string },
+  ) => Promise<AIResponse>
   createArtifact: (requirementId: string, params: CreateArtifactParams) => Promise<void>
 }
+
+export const HERMES_BRD_SKILL = "brd-generator"
 
 export interface BrdGenerateResult {
   outputPath: string
@@ -50,6 +57,11 @@ export interface BrdCheckResult {
   promptsUsed: BrdRenderedPrompt[]
   warnings: string[]
   dryRun: boolean
+}
+
+export interface BrdOptimizeResult extends BrdGenerateResult {
+  agent: "hermes"
+  skill: typeof HERMES_BRD_SKILL
 }
 
 export interface BrdPreviewOptions {
@@ -117,6 +129,65 @@ export async function runBrdGenerate(
     promptsUsed,
     warnings: context.warnings,
     dryRun: false,
+  }
+}
+
+/** 使用项目级 Hermes Skill 生成并在一次无头调用中自动审查、修订 BRD。 */
+export async function runBrdOptimize(
+  input: BrdNodeInput,
+  runtime: BrdNodeRuntime,
+  options?: { dryRun?: boolean },
+): Promise<BrdOptimizeResult> {
+  const context = gather(input)
+  const promptsUsed = renderBrdPromptsForContext(input.config, context, "generate")
+  const generatePrompt = promptsUsed.find((item) => item.id === "generate")
+  if (!generatePrompt) throw new Error("未找到 generate 提示词")
+
+  if (options?.dryRun) {
+    return {
+      outputPath: context.outputPath,
+      promptsUsed,
+      warnings: context.warnings,
+      dryRun: true,
+      agent: "hermes",
+      skill: HERMES_BRD_SKILL,
+    }
+  }
+  if (!runtime.runHermesSkill) throw new Error("未配置 Hermes Agent 客户端，无法自动优化 BRD")
+
+  const prompt = [
+    `请严格使用已预加载的 ${HERMES_BRD_SKILL} Skill 完成任务。`,
+    "以下输入已经由 Octopus 有界采集；不要调用终端或修改文件，只返回最终 BRD Markdown。",
+    `## 节点系统要求\n${generatePrompt.system}`,
+    `## 节点任务输入\n${generatePrompt.prompt}`,
+  ].join("\n\n")
+  const response = await runtime.runHermesSkill(HERMES_BRD_SKILL, prompt, {
+    projectRoot: input.projectRoot,
+  })
+  const optimizedBrd = response.result.trim()
+  if (!optimizedBrd.startsWith("# ")) {
+    throw new Error("Hermes Agent 返回内容不符合 BRD 输出契约：首行必须是 Markdown 一级标题")
+  }
+
+  mkdirSync(dirname(context.absoluteOutputPath), { recursive: true })
+  writeFileSync(context.absoluteOutputPath, optimizedBrd, "utf8")
+  await runtime.createArtifact(input.requirementId, {
+    type: ArtifactType.BRD,
+    title: `${input.requirementName} BRD`,
+    description: `Hermes Agent 使用 ${HERMES_BRD_SKILL} Skill 自动优化生成的商业需求文档`,
+    phase: Phase.INTENTION,
+    createdBy: Role.AI,
+    content: optimizedBrd.slice(0, 4_000),
+    filePath: toProjectRelative(input.projectRoot, context.absoluteOutputPath),
+  })
+  return {
+    outputPath: context.outputPath,
+    result: optimizedBrd,
+    promptsUsed,
+    warnings: context.warnings,
+    dryRun: false,
+    agent: "hermes",
+    skill: HERMES_BRD_SKILL,
   }
 }
 

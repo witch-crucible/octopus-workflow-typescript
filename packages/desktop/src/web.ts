@@ -597,6 +597,13 @@ export async function createOctopusWebServer(
                   ...(typeof sources["websiteUrl"] === "string"
                     ? { websiteUrl: sources["websiteUrl"] }
                     : {}),
+                  ...(Array.isArray(sources["historicalBrdPaths"])
+                    ? {
+                        historicalBrdPaths: sources["historicalBrdPaths"].filter(
+                          (item): item is string => typeof item === "string",
+                        ),
+                      }
+                    : {}),
                 },
               }
             : {}),
