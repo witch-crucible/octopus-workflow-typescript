@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AIAssistantType } from "@octopus/core/agent.js"
-import { prepareAIOutput, writeAIOutput } from "./ai-output.js"
+import {
+  prepareAIOutput,
+  resolveAIOutputPath,
+  writeAIOutput,
+  writeCrossReviewReports,
+} from "./ai-output.js"
 
 const temporaryDirectories: string[] = []
 
@@ -82,5 +87,36 @@ describe("AI 节点文件输出", () => {
       assistant: AIAssistantType.DOCUMENT_SYNC,
       outputFile: "../outside.md",
     }, nodePath)).toThrow("必须位于节点工作目录内")
+  })
+
+  it("拒绝通过节点目录内的符号链接写到外部", () => {
+    const nodePath = createTemporaryDirectory()
+    const outsidePath = createTemporaryDirectory()
+    symlinkSync(outsidePath, join(nodePath, "reviews"), "dir")
+
+    expect(() => resolveAIOutputPath(nodePath, "reviews/ocr.md")).toThrow("必须位于节点工作目录内")
+  })
+
+  it("按 requirement 隔离原始报告并同时发布 latest 汇总", () => {
+    const nodePath = createTemporaryDirectory()
+    const written = writeCrossReviewReports(nodePath, {
+      result: "# aggregate",
+      successCount: 1,
+      durationMs: 5,
+      reviews: [
+        { agent: "ocr", ok: true, output: "OCR finding", durationMs: 1 },
+        { agent: "commandcode", ok: false, output: "partial", error: "failed", durationMs: 2 },
+      ],
+    }, {
+      outputFile: "cross-review.md",
+      reviewOutputDir: "reviews",
+      scope: "req/example",
+    })
+
+    expect(written.reviewOutputDir).toBe("reviews/req_example")
+    expect(readFileSync(join(nodePath, "reviews/req_example/ocr.md"), "utf8")).toBe("OCR finding")
+    expect(readFileSync(join(nodePath, "reviews/req_example/commandcode.md"), "utf8")).toContain("partial")
+    expect(readFileSync(join(nodePath, "reviews/req_example/cross-review.md"), "utf8")).toBe("# aggregate")
+    expect(readFileSync(join(nodePath, "cross-review.md"), "utf8")).toBe("# aggregate")
   })
 })

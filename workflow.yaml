@@ -44,6 +44,7 @@ nodeIdMapping:
   ai-code-review: '50.5'
   postman-and-test-script-generation: '50.6'
   sql-execution-and-risk-check: '50.7'
+  go-live-check: '50.7a'
   magento-release-risk-assessment: '50.8'
   regression-testing: '50.9'
   ab-validation-and-branch-merge: '50.10'
@@ -533,8 +534,8 @@ nodes:
     phase: Release
     name: AI Code Review
     description: >-
-      AI generates UML sequence diagrams and control-flow graphs, then scores
-      change risk
+      OCR, Command Code, and Codex independently review the current Git changes
+      and produce a cross-review report
     responsibleRoles:
       - AI
     dependsOn:
@@ -542,6 +543,13 @@ nodes:
     actions:
       - type: ai
         assistant: CODE_REVIEW
+        reviewers:
+          - ocr
+          - commandcode
+          - codex
+        minimumSuccessfulReviewers: 2
+        outputFile: cross-review.md
+        reviewOutputDir: reviews
   - key: postman-and-test-script-generation
     phase: Release
     name: Postman and Test Script Generation
@@ -576,6 +584,24 @@ nodes:
         assistant: SQL_RISK_CHECK
       - type: heinrich
         delta: 1
+  - key: go-live-check
+    phase: Release
+    name: Go-Live Check
+    description: SA and QA verify that every test case has passed before production go-live
+    responsibleRoles:
+      - SA
+      - QA
+    dependsOn:
+      - self-test-and-code-quality
+      - functional-and-performance-testing
+      - uat-and-user-acceptance
+      - postman-and-test-script-generation
+      - sql-execution-and-risk-check
+    actions:
+      - type: manual
+        instructions: >-
+          Confirm that every test case has passed. Do not approve production
+          go-live while any test case is failed, blocked, or pending.
   - key: magento-release-risk-assessment
     phase: Release
     name: Magento Release Risk Assessment
@@ -584,7 +610,7 @@ nodes:
       - SA
       - AI
     dependsOn:
-      - sql-execution-and-risk-check
+      - go-live-check
     actions:
       - type: ai
         assistant: RELEASE_RISK_ASSESSMENT

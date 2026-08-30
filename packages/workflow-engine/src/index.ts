@@ -1143,7 +1143,12 @@ export class WorkflowEngine {
    * @param input 可选显式输入：传给该步骤声明的 AI 模块；未提供时回退为“步骤名称：步骤描述”
    * 外部调用期间若聚合状态发生并发变化，本次结果不会覆盖最新状态，而是要求调用方重试。
    */
-  async runStepCapabilities(requirementId: string, stepId: string, input?: string): Promise<WorkflowState> {
+  async runStepCapabilities(
+    requirementId: string,
+    stepId: string,
+    input?: string,
+    signal?: AbortSignal,
+  ): Promise<WorkflowState> {
     const state = this.getState(requirementId)
     const expectedState = JSON.stringify(state)
     const step = state.steps.find((s) => s.id === stepId)
@@ -1165,10 +1170,17 @@ export class WorkflowEngine {
       aiClient: this.aiClient,
       integrations: this.integrations,
       ...(input !== undefined ? { input } : {}),
+      ...(signal !== undefined ? { signal } : {}),
     }
     const runs = workingStep.capabilityRuns ?? []
+    let crossReviewAttempted = false
+    let crossReviewFailure: string | undefined
     for (const ref of caps) {
       const result = await this.registry.dispatch(ref, ctx)
+      if (ref.kind === "ai" && ref.reviewers !== undefined) {
+        crossReviewAttempted = true
+        if (!result.ok) crossReviewFailure = result.summary ?? "交叉代码评审未达到成功门槛"
+      }
       runs.push({
         kind: result.kind,
         ref: result.ref,
@@ -1176,6 +1188,17 @@ export class WorkflowEngine {
         at: new Date().toISOString(),
         ...(result.summary !== undefined ? { summary: result.summary } : {}),
       })
+    }
+    if (crossReviewAttempted) {
+      if (crossReviewFailure) {
+        workingStep.status = TaskStatus.BLOCKED
+        delete workingStep.completedAt
+        workingStep.notes = crossReviewFailure
+      } else if (workingStep.status === TaskStatus.BLOCKED) {
+        workingStep.status = TaskStatus.PENDING
+        delete workingStep.completedAt
+        delete workingStep.notes
+      }
     }
     workingStep.capabilityRuns = runs
     workingStep.updatedAt = new Date().toISOString()

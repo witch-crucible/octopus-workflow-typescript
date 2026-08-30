@@ -6,5 +6,5 @@ SA performs the release and AI assesses release risk in advance
 | --- | --- |
 | Phase | Release |
 | Responsible Roles | SA, AI |
-| Depends On | sql-execution-and-risk-check |
+| Depends On | go-live-check |
 | Actions | AI (assistant: RELEASE_RISK_ASSESSMENT) |

@@ -25,13 +25,13 @@ Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，�
 - 以 `workflow.yaml` 定义节点、依赖、角色和执行动作。
 - 支持手动、命令、AI、外部集成和 Heinrich 标记五类动作。
 - 按依赖调度可运行节点，支持并行执行、手动暂停、取消和重试。
-- 内置 AI 辅助能力（含 BRD 生成/检查）通过 Claude CLI 执行；BRD 源路径与提示词可按项目配置。
+- 通用 AI 辅助能力（含 BRD 生成/检查）通过 Claude CLI 执行；代码评审可并行使用 OCR、Command Code 与 Codex。
 - 项目可绑定 Teambition 项目，需求可绑定任务卡片并读写状态。版本计划对接（仓库 / 版本 / note）方案见 `docs/plans/teambition-version-plan.md`。
 - 提供 CLI、本地 Web 界面和 macOS Electron 客户端。
 
 ## 快速开始
 
-需要 Node.js 20+ 和 pnpm 9.15.0；运行 AI 节点还需要安装并登录 Claude CLI。
+需要 Node.js 20+ 和 pnpm 9.15.0；通用 AI 节点需要安装并登录 Claude CLI，默认交叉代码评审还需要可用的 `ocr`、`commandcode` 与 `codex` CLI。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -103,7 +103,9 @@ add:
 
 插件导出 `default` 或 `octopusPlugin`，在 `activate(ctx)` 里叠加节点、注册新的 AI 模块 id、集成服务或自定义能力名称；不能覆盖内置 12 类 AI 模块，也不能覆盖 `ai` / `heinrich` 能力处理器。路径相对项目根，包名从该项目的 `node_modules` 解析，加载失败则进程退出。测试夹具 `packages/plugin/fixtures/sample-plugin/` 是一份可复制的最小插件，本仓库默认不启用任何插件。
 
-可用环境变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`。
+可用环境变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_OCR_PATH`、`OCTOPUS_AI_COMMANDCODE_PATH`、`OCTOPUS_AI_CODEX_PATH`。
+
+`AI Code Review` 节点默认并行调用 `ocr`、`commandcode` 与 `codex` 审查当前 Git 变更。三个 reviewer 的原始报告按需求隔离写入节点目录的 `reviews/<requirement-id>/`，最新汇总报告写入 `cross-review.md`；至少两个 reviewer 成功时节点才通过。每次调用都会显式排除这些生成报告，避免被后续 review 再次纳入；本仓库的内置节点目录另有 `.gitignore` 作为补充。
 
 Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
 

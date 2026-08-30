@@ -68,3 +68,32 @@ describe("generate-documentation 步骤", () => {
     expect(capability.input).toContain("Preserve valid existing content and extend changed sections.")
   })
 })
+
+describe("AI Code Review 步骤", () => {
+  it("50.5 配置 OCR、Command Code、Codex 交叉评审与双成功门槛", () => {
+    const step = findStepSpec("50.5")
+    const capability = step?.capabilities?.find((candidate) => candidate.kind === "ai")
+
+    expect(capability).toMatchObject({
+      kind: "ai",
+      assistant: AIAssistantType.CODE_REVIEW,
+      reviewers: ["ocr", "commandcode", "codex"],
+      minimumSuccessfulReviewers: 2,
+      outputFile: "cross-review.md",
+      reviewOutputDir: "reviews",
+    })
+  })
+})
+
+describe("上线检查步骤", () => {
+  it("只有全部测试链路完成后才能进入真正发布", () => {
+    const step = findStepSpec("50.7a")
+    expect(step).toBeDefined()
+    expect(step?.name).toBe("Go-Live Check")
+    expect(step?.responsibleRoles).toEqual([Role.SA, Role.QA])
+    expect(step?.dependsOn).toEqual(["30.10", "40.2", "40.3", "50.6", "50.7"])
+
+    const release = findStepSpec("50.8")
+    expect(release?.dependsOn).toEqual(["50.7a"])
+  })
+})

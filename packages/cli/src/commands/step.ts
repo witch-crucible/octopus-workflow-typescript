@@ -7,6 +7,8 @@
 
 import type { Command } from "commander"
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
+import { AIAssistantType } from "@octopus/core/agent.js"
+import type { WorkflowState } from "@octopus/core/workflow.js"
 import { resolveRequirementId } from "../resolve-requirement.js"
 
 export function buildStepCommands(program: Command, engine: WorkflowEngine): void {
@@ -25,9 +27,24 @@ export function buildStepCommands(program: Command, engine: WorkflowEngine): voi
         const pid = resolveRequirementId(engine, requirementId)
         if (!pid) return
 
-        const state = await engine.runStepCapabilities(pid, stageId)
+        const previousRunCount = engine.getState(pid).steps
+          .find((step) => step.id === stageId)?.capabilityRuns?.length ?? 0
+        const controller = new AbortController()
+        const abort = (): void => controller.abort()
+        process.once("SIGINT", abort)
+        process.once("SIGTERM", abort)
+        let state: WorkflowState
+        try {
+          state = await engine.runStepCapabilities(pid, stageId, undefined, controller.signal)
+        } finally {
+          process.removeListener("SIGINT", abort)
+          process.removeListener("SIGTERM", abort)
+        }
         const step = state.steps.find((s) => s.id === stageId)
-        const runs = step?.capabilityRuns ?? []
+        const runs = (step?.capabilityRuns ?? []).slice(previousRunCount)
+        if (runs.some((run) =>
+          run.kind === "ai" && run.ref === AIAssistantType.CODE_REVIEW && !run.ok
+        )) process.exitCode = 1
 
         if (options?.json) {
           console.log(JSON.stringify({ requirementId: pid, stageId, runs }, null, 2))
@@ -51,4 +68,3 @@ export function buildStepCommands(program: Command, engine: WorkflowEngine): voi
       }
     })
 }
-

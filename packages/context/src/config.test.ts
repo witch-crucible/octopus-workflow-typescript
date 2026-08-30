@@ -8,6 +8,11 @@ import { DEFAULT_CONFIG, getIdentity, loadConfig, saveIdentity } from "./config.
 const temporaryDirectories: string[] = []
 const originalStoreDir = process.env["OCTOPUS_STORE_DIR"]
 const originalMe = process.env["OCTOPUS_ME"]
+const originalAiReviewerEnv: Record<string, string | undefined> = {
+  OCTOPUS_AI_OCR_PATH: process.env["OCTOPUS_AI_OCR_PATH"],
+  OCTOPUS_AI_COMMANDCODE_PATH: process.env["OCTOPUS_AI_COMMANDCODE_PATH"],
+  OCTOPUS_AI_CODEX_PATH: process.env["OCTOPUS_AI_CODEX_PATH"],
+}
 const originalTbEnv: Record<string, string | undefined> = {
   OCTOPUS_TB_APP_ID: process.env["OCTOPUS_TB_APP_ID"],
   OCTOPUS_TB_APP_SECRET: process.env["OCTOPUS_TB_APP_SECRET"],
@@ -26,6 +31,10 @@ afterEach(() => {
   else process.env["OCTOPUS_STORE_DIR"] = originalStoreDir
   if (originalMe === undefined) delete process.env["OCTOPUS_ME"]
   else process.env["OCTOPUS_ME"] = originalMe
+  for (const [key, value] of Object.entries(originalAiReviewerEnv)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   for (const [key, value] of Object.entries(originalTbEnv)) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
@@ -118,6 +127,75 @@ describe("loadConfig", () => {
     expect(loadConfig(storeDir)).toMatchObject({
       ai: { defaultModel: "sonnet", retries: 3, defaultTimeout: 120_000 },
       workflow: { strictPermissions: true, aiGatingEnabled: false, heinrichThreshold: 3 },
+    })
+  })
+
+  it("从配置文件加载三个代码评审 CLI 路径", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      ai: {
+        ocrPath: "/tools/ocr",
+        commandCodePath: "/tools/commandcode",
+        codexPath: "/tools/codex",
+      },
+    }))
+
+    expect(loadConfig(storeDir).ai).toMatchObject({
+      ocrPath: "/tools/ocr",
+      commandCodePath: "/tools/commandcode",
+      codexPath: "/tools/codex",
+    })
+  })
+
+  it("代码评审 CLI 环境变量覆盖配置文件", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    process.env["OCTOPUS_AI_OCR_PATH"] = "/env/ocr"
+    process.env["OCTOPUS_AI_COMMANDCODE_PATH"] = "/env/commandcode"
+    process.env["OCTOPUS_AI_CODEX_PATH"] = "/env/codex"
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      ai: {
+        ocrPath: "/file/ocr",
+        commandCodePath: "/file/commandcode",
+        codexPath: "/file/codex",
+      },
+    }))
+
+    expect(loadConfig(storeDir).ai).toMatchObject({
+      ocrPath: "/env/ocr",
+      commandCodePath: "/env/commandcode",
+      codexPath: "/env/codex",
+    })
+  })
+
+  it("只覆盖一个 reviewer 路径时保留配置文件中的其他 AI 设置", () => {
+    delete process.env["OCTOPUS_STORE_DIR"]
+    delete process.env["OCTOPUS_AI_OCR_PATH"]
+    delete process.env["OCTOPUS_AI_COMMANDCODE_PATH"]
+    process.env["OCTOPUS_AI_CODEX_PATH"] = "/env/codex"
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({
+      ai: {
+        defaultModel: "sonnet",
+        defaultTimeout: 456_000,
+        claudePath: "/file/claude",
+        ocrPath: "/file/ocr",
+        commandCodePath: "/file/commandcode",
+        codexPath: "/file/codex",
+      },
+    }))
+
+    expect(loadConfig(storeDir).ai).toMatchObject({
+      defaultModel: "sonnet",
+      defaultTimeout: 456_000,
+      claudePath: "/file/claude",
+      ocrPath: "/file/ocr",
+      commandCodePath: "/file/commandcode",
+      codexPath: "/env/codex",
     })
   })
 

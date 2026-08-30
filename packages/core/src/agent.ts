@@ -31,6 +31,11 @@ export interface AIResponse {
   durationMs?: number
 }
 
+/** 可参与交叉代码评审的本地 AI Agent。 */
+export const CODE_REVIEW_AGENTS = ["ocr", "commandcode", "codex"] as const
+
+export type CodeReviewAgent = (typeof CODE_REVIEW_AGENTS)[number]
+
 /** AI 调用记录 */
 export interface AgentCallRecord {
   /** 调用 ID */

@@ -855,15 +855,20 @@ describe("omniplan CLI 命令", () => {
   let program: Command
   let engine: WorkflowEngine
   let rootDir: string
+  let previousOmniPlanRoot: string | undefined
 
   beforeEach(() => {
     program = new Command()
     engine = createEngine()
     rootDir = mkdtempSync(join(tmpdir(), "octopus-cli-omniplan-"))
+    previousOmniPlanRoot = process.env["OCTOPUS_OMNIPLAN_ROOT"]
+    process.env["OCTOPUS_OMNIPLAN_ROOT"] = rootDir
     buildProjectCommands(program, engine)
   })
 
   afterEach(() => {
+    if (previousOmniPlanRoot === undefined) delete process.env["OCTOPUS_OMNIPLAN_ROOT"]
+    else process.env["OCTOPUS_OMNIPLAN_ROOT"] = previousOmniPlanRoot
     rmSync(rootDir, { recursive: true, force: true })
   })
 

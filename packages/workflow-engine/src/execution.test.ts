@@ -38,6 +38,31 @@ function initNamedRequirement(
 }
 
 describe("NodeExecutionService", () => {
+  it("上线检查在发布阶段测试链路未完成时拒绝完成", () => {
+    const engine = new WorkflowEngine({ store: createStateStore({ storeDir: testStoreDir }) })
+    let state = initNamedRequirement(engine, "go_live_test_gate", undefined, testStoreDir)
+
+    while (state.currentPhase !== Phase.RELEASE) {
+      completeAllPhaseTasks(engine, state.requirementId, state.currentPhase)
+      state = engine.advancePhase(state.requirementId)
+    }
+
+    expect(() => engine.completeManualNode(state.requirementId, "go-live-check")).toThrow(
+      /50\.6|50\.7/,
+    )
+
+    for (const stepId of ["50.6", "50.7"]) {
+      const task = engine.getTasks(state.requirementId).find((candidate) => candidate.stageId === stepId)
+      if (!task) throw new Error(`测试依赖节点不存在: ${stepId}`)
+      engine.completeTask(state.requirementId, task.id)
+    }
+
+    const completed = engine.completeManualNode(state.requirementId, "go-live-check")
+    expect(completed.steps.find((candidate) => candidate.id === "50.7a")?.status).toBe(
+      TaskStatus.COMPLETED,
+    )
+  })
+
   it("取消运行后同步把 IN_PROGRESS 节点标记为 BLOCKED", () => {
     const store = createStateStore({ storeDir: testStoreDir })
     const engine = new WorkflowEngine({ store })

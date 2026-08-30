@@ -98,6 +98,9 @@ const configFileSchema = z.object({
       defaultModel: z.string().optional(),
       defaultTimeout: z.number().optional(),
       claudePath: z.string().optional(),
+      ocrPath: z.string().optional(),
+      commandCodePath: z.string().optional(),
+      codexPath: z.string().optional(),
       persistent: z.boolean().optional(),
       retries: z.number().optional(),
       retryDelay: z.number().optional(),
@@ -145,6 +148,9 @@ export const DEFAULT_CONFIG: OctopusConfig = {
     defaultModel: "haiku",
     defaultTimeout: 120_000,
     claudePath: "claude",
+    ocrPath: "ocr",
+    commandCodePath: "commandcode",
+    codexPath: "codex",
     persistent: false,
     retries: 2,
     retryDelay: 1000,
@@ -159,18 +165,30 @@ export const DEFAULT_CONFIG: OctopusConfig = {
 }
 
 /** 从环境变量加载配置 */
-function loadFromEnv(): Partial<OctopusConfig> {
+function loadFromEnv(aiBase: AIClientConfig = DEFAULT_CONFIG.ai): Partial<OctopusConfig> {
   const config: Partial<OctopusConfig> = {}
 
   if (process.env["OCTOPUS_STORE_DIR"]) {
     config.storeDir = process.env["OCTOPUS_STORE_DIR"]
   }
 
-  if (process.env["OCTOPUS_AI_MODEL"] || process.env["OCTOPUS_AI_TIMEOUT"] || process.env["OCTOPUS_AI_CLAUDE_PATH"]) {
-    config.ai = { ...DEFAULT_CONFIG.ai }
+  if (
+    process.env["OCTOPUS_AI_MODEL"] ||
+    process.env["OCTOPUS_AI_TIMEOUT"] ||
+    process.env["OCTOPUS_AI_CLAUDE_PATH"] ||
+    process.env["OCTOPUS_AI_OCR_PATH"] ||
+    process.env["OCTOPUS_AI_COMMANDCODE_PATH"] ||
+    process.env["OCTOPUS_AI_CODEX_PATH"]
+  ) {
+    config.ai = { ...aiBase }
     if (process.env["OCTOPUS_AI_MODEL"]) config.ai.defaultModel = process.env["OCTOPUS_AI_MODEL"]
     if (process.env["OCTOPUS_AI_TIMEOUT"]) config.ai.defaultTimeout = Number(process.env["OCTOPUS_AI_TIMEOUT"])
     if (process.env["OCTOPUS_AI_CLAUDE_PATH"]) config.ai.claudePath = process.env["OCTOPUS_AI_CLAUDE_PATH"]
+    if (process.env["OCTOPUS_AI_OCR_PATH"]) config.ai.ocrPath = process.env["OCTOPUS_AI_OCR_PATH"]
+    if (process.env["OCTOPUS_AI_COMMANDCODE_PATH"]) {
+      config.ai.commandCodePath = process.env["OCTOPUS_AI_COMMANDCODE_PATH"]
+    }
+    if (process.env["OCTOPUS_AI_CODEX_PATH"]) config.ai.codexPath = process.env["OCTOPUS_AI_CODEX_PATH"]
   }
 
   const teambition: TeambitionConfig = {}
@@ -283,9 +301,10 @@ function mergeConfigs(...configs: Partial<OctopusConfig>[]): OctopusConfig {
 /** 加载完整配置 */
 export function loadConfig(storeDir?: string): OctopusConfig {
   const fileConfig = loadFromFile(storeDir ?? DEFAULT_CONFIG.storeDir)
-  const envConfig = loadFromEnv()
   const explicitStoreConfig = storeDir === undefined ? {} : { storeDir }
-  return mergeConfigs(fileConfig, explicitStoreConfig, envConfig)
+  const baseConfig = mergeConfigs(fileConfig, explicitStoreConfig)
+  const envConfig = loadFromEnv(baseConfig.ai)
+  return mergeConfigs(baseConfig, envConfig)
 }
 
 /** 读取本机身份：OCTOPUS_ME 环境变量优先，其次配置文件 identity.name；无则 undefined。 */

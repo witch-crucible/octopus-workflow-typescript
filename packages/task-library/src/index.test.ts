@@ -82,6 +82,39 @@ describe("createStepsFromDefinition", () => {
     const step = createStepsFromDefinition("proj_test", definition, Phase.IMPLEMENTATION)[0]!
     expect(step.capabilities).toBeUndefined()
   })
+
+  it("交叉评审配置在 action 与 capability 之间完整保留", () => {
+    const node: WorkflowNodeSpec = {
+      key: "cross-review-node",
+      phase: Phase.RELEASE,
+      name: "Cross Review Node",
+      description: "Runs independent reviewers",
+      responsibleRoles: [Role.AI],
+      dependsOn: [],
+      actions: [{
+        type: "ai",
+        assistant: AIAssistantType.CODE_REVIEW,
+        reviewers: ["ocr", "commandcode", "codex"],
+        minimumSuccessfulReviewers: 2,
+        outputFile: "cross-review.md",
+        reviewOutputDir: "reviews",
+      }],
+    }
+    const definition: WorkflowDefinition = {
+      version: 2,
+      name: "Cross Review Test",
+      nodeIdMapping: { [node.key]: "node-cross-review" },
+      nodes: [node],
+    }
+
+    const step = createStepsFromDefinition("proj_test", definition, Phase.RELEASE)[0]!
+
+    expect(step.capabilities?.[0]).toMatchObject({
+      reviewers: ["ocr", "commandcode", "codex"],
+      minimumSuccessfulReviewers: 2,
+      reviewOutputDir: "reviews",
+    })
+  })
 })
 
 describe("createStepsForPhase", () => {

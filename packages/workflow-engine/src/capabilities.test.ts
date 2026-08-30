@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStateStore } from "@octopus/context/index.js"
@@ -125,6 +125,161 @@ describe("runStepCapabilities", () => {
     const after = await engine.runStepCapabilities(state.requirementId, "10.6")
     const step = after.steps.find((s) => s.id === "10.6")!
     expect(step.capabilityRuns?.[0]?.ok).toBe(false)
+  })
+
+  it("CODE_REVIEW capability 使用三个 reviewer 并以两个成功通过", async () => {
+    const calls: unknown[][] = []
+    const client = {
+      crossReviewCode: async (...args: unknown[]) => {
+        calls.push(args)
+        return {
+          result: "# Cross review\n\n2/3 succeeded",
+          successCount: 2,
+          durationMs: 10,
+          reviews: [
+            { agent: "ocr", ok: true, output: "OCR finding", durationMs: 3 },
+            { agent: "commandcode", ok: true, output: "Command Code finding", durationMs: 4 },
+            { agent: "codex", ok: false, output: "", error: "codex failed", durationMs: 5 },
+          ],
+        }
+      },
+    } as unknown as AIClient
+    const engine = new WorkflowEngine({
+      store: createStateStore({ storeDir: testStoreDir }),
+      aiClient: client,
+    })
+    const state = initNamedRequirement(engine, "cap_cross_review", undefined, testStoreDir)
+    advanceToPhase(engine, state.requirementId, Phase.RELEASE)
+
+    const after = await engine.runStepCapabilities(state.requirementId, "50.5", "审查当前变更")
+
+    expect(calls).toEqual([[
+      "审查当前变更",
+      testStoreDir,
+      ["ocr", "commandcode", "codex"],
+      {
+        excludedPaths: [
+          "workflow/nodes/ai-code-review/cross-review.md",
+          "workflow/nodes/ai-code-review/reviews/**",
+        ],
+      },
+    ]])
+    expect(after.steps.find((step) => step.id === "50.5")?.capabilityRuns?.[0]?.ok).toBe(true)
+    expect(after.artifacts.some((artifact) => artifact.content === "OCR finding")).toBe(true)
+    expect(after.artifacts.some((artifact) => artifact.content === "# Cross review\n\n2/3 succeeded")).toBe(true)
+    const nodePath = join(testStoreDir, "workflow/nodes/ai-code-review")
+    expect(readFileSync(join(nodePath, `reviews/${state.requirementId}/ocr.md`), "utf8")).toBe("OCR finding")
+    expect(readFileSync(join(nodePath, "cross-review.md"), "utf8")).toContain("2/3 succeeded")
+  })
+
+  it("CODE_REVIEW capability 成功数不足时记录失败但保留报告", async () => {
+    const client = {
+      crossReviewCode: async () => ({
+        result: "# Cross review\n\n1/3 succeeded",
+        successCount: 1,
+        durationMs: 10,
+        reviews: [
+          { agent: "ocr", ok: true, output: "Only finding", durationMs: 3 },
+          { agent: "commandcode", ok: false, output: "", error: "failed", durationMs: 4 },
+          { agent: "codex", ok: false, output: "", error: "failed", durationMs: 5 },
+        ],
+      }),
+    } as unknown as AIClient
+    const engine = new WorkflowEngine({
+      store: createStateStore({ storeDir: testStoreDir }),
+      aiClient: client,
+    })
+    const state = initNamedRequirement(engine, "cap_cross_review_quorum", undefined, testStoreDir)
+    advanceToPhase(engine, state.requirementId, Phase.RELEASE)
+
+    const after = await engine.runStepCapabilities(state.requirementId, "50.5")
+
+    const run = after.steps.find((step) => step.id === "50.5")?.capabilityRuns?.[0]
+    expect(run?.ok).toBe(false)
+    expect(run?.summary).toContain("至少需要 2 个成功，实际 1 个")
+    expect(after.steps.find((step) => step.id === "50.5")?.status).toBe(TaskStatus.BLOCKED)
+    expect(after.artifacts.some((artifact) => artifact.content === "Only finding")).toBe(true)
+    const nodePath = join(testStoreDir, "workflow/nodes/ai-code-review")
+    expect(readFileSync(join(nodePath, `reviews/${state.requirementId}/ocr.md`), "utf8")).toBe("Only finding")
+    expect(readFileSync(join(nodePath, "cross-review.md"), "utf8")).toContain("1/3 succeeded")
+  })
+
+  it("CODE_REVIEW capability 失败后成功重跑会解除自身 BLOCKED 状态", async () => {
+    let attempt = 0
+    const client = {
+      crossReviewCode: async () => {
+        attempt++
+        const successCount = attempt === 1 ? 1 : 3
+        return {
+          result: `# Cross review\n\n${successCount}/3 succeeded`,
+          successCount,
+          durationMs: 10,
+          reviews: [
+            { agent: "ocr", ok: true, output: "OCR", durationMs: 1 },
+            { agent: "commandcode", ok: successCount > 1, output: "Command Code", durationMs: 1 },
+            { agent: "codex", ok: successCount > 1, output: "Codex", durationMs: 1 },
+          ],
+        }
+      },
+    } as unknown as AIClient
+    const engine = new WorkflowEngine({
+      store: createStateStore({ storeDir: testStoreDir }),
+      aiClient: client,
+    })
+    const state = initNamedRequirement(engine, "cap_cross_review_retry", undefined, testStoreDir)
+    advanceToPhase(engine, state.requirementId, Phase.RELEASE)
+
+    const failed = await engine.runStepCapabilities(state.requirementId, "50.5")
+    expect(failed.steps.find((step) => step.id === "50.5")?.status).toBe(TaskStatus.BLOCKED)
+
+    const recovered = await engine.runStepCapabilities(state.requirementId, "50.5")
+    const step = recovered.steps.find((candidate) => candidate.id === "50.5")
+    expect(step?.status).toBe(TaskStatus.PENDING)
+    expect(step?.notes).toBeUndefined()
+    expect(step?.capabilityRuns?.map((run) => run.ok)).toEqual([false, true])
+  })
+
+  it("CODE_REVIEW capability 把取消信号传给 reviewer 且取消后不落盘", async () => {
+    const controller = new AbortController()
+    let receivedSignal: AbortSignal | undefined
+    const client = {
+      crossReviewCode: async (
+        _input: string,
+        _root: string,
+        _reviewers: unknown,
+        options?: { signal?: AbortSignal },
+      ) => {
+        receivedSignal = options?.signal
+        await new Promise<void>((resolve) => options?.signal?.addEventListener("abort", () => resolve(), { once: true }))
+        return {
+          result: "canceled",
+          successCount: 0,
+          durationMs: 1,
+          reviews: [
+            { agent: "ocr", ok: false, output: "", error: "ocr 调用已取消", durationMs: 1 },
+          ],
+        }
+      },
+    } as unknown as AIClient
+    const engine = new WorkflowEngine({
+      store: createStateStore({ storeDir: testStoreDir }),
+      aiClient: client,
+    })
+    const state = initNamedRequirement(engine, "cap_cross_review_abort", undefined, testStoreDir)
+    advanceToPhase(engine, state.requirementId, Phase.RELEASE)
+
+    const pending = engine.runStepCapabilities(
+      state.requirementId,
+      "50.5",
+      undefined,
+      controller.signal,
+    )
+    controller.abort()
+
+    await expect(pending).rejects.toThrow("交叉代码评审已取消")
+    expect(receivedSignal).toBe(controller.signal)
+    expect(engine.getState(state.requirementId).steps.find((step) => step.id === "50.5")?.status)
+      .toBe(TaskStatus.PENDING)
   })
 
   it("AI 等待期间的并发更新应保留并明确报告冲突", async () => {
