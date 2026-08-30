@@ -12,7 +12,10 @@ import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import { getIdentity, loadConfig, saveIdentity } from "@octopus/context/config.js"
 import { getWorkflowWorkspace } from "@octopus/context/workflow.js"
-import { createWorkflowEngineFromConfig } from "@octopus/workflow-engine/index.js"
+import {
+  createWorkflowEngineFromConfig,
+  type WorkflowEngine,
+} from "@octopus/workflow-engine/index.js"
 
 const execFileAsync = promisify(execFile)
 
@@ -30,6 +33,8 @@ export interface OctopusWebServerOptions {
   readonly storeDir?: string
   readonly rendererDir?: string
   readonly projectRoot?: string
+  /** 测试可注入已连接的 PGlite 引擎；服务关闭时同样负责关闭它。 */
+  readonly engine?: WorkflowEngine
 }
 
 export interface OctopusWebServer {
@@ -195,7 +200,9 @@ export async function createOctopusWebServer(
   const rendererDir = resolve(options.rendererDir ?? join(moduleDirectory, "renderer"))
   const defaultProjectRoot = resolve(options.projectRoot ?? repositoryRoot)
   const config = { ...loadConfig(storeDir), storeDir }
-  const engine = await createWorkflowEngineFromConfig(config, { projectRoot: defaultProjectRoot })
+  const engine =
+    options.engine ??
+    (await createWorkflowEngineFromConfig(config, { projectRoot: defaultProjectRoot }))
 
   const invoke = async (method: string, args: unknown[]): Promise<unknown> => {
     const projectId = (): string => requiredString(args[0], "projectId")
@@ -224,7 +231,7 @@ export async function createOctopusWebServer(
       case "listProjectSummaries":
         return engine.listProjectSummaries()
       case "createProject": {
-        const project = engine.createProject(
+        const project = await engine.createProject(
           requiredString(args[0], "name"),
           optionalString(args[1]),
         )
@@ -239,7 +246,7 @@ export async function createOctopusWebServer(
         return engine.getProject(projectId())
       case "updateProjectMeta": {
         const patch = asObject(args[1])
-        const project = engine.updateProjectMeta(projectId(), {
+        const project = await engine.updateProjectMeta(projectId(), {
           ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
           ...(typeof patch["description"] === "string"
             ? { description: patch["description"] }
@@ -252,7 +259,7 @@ export async function createOctopusWebServer(
         }
       }
       case "deleteProject":
-        engine.deleteProject(projectId())
+        await engine.deleteProject(projectId())
         return { deleted: true, projectId: projectId() }
       case "bindProjectTeambition": {
         const opts = asObject(args[1])
@@ -272,7 +279,7 @@ export async function createOctopusWebServer(
       case "listRequirementSummaries":
         return engine.listRequirementSummaries(optionalString(args[0]))
       case "initRequirement": {
-        const state = engine.initRequirement(
+        const state = await engine.initRequirement(
           requiredString(args[0], "projectId"),
           requiredString(args[1], "name"),
           optionalString(args[2]),
@@ -288,7 +295,7 @@ export async function createOctopusWebServer(
       }
       case "updateRequirement": {
         const patch = asObject(args[1])
-        const state = engine.updateRequirement(requirementId(), {
+        const state = await engine.updateRequirement(requirementId(), {
           ...(typeof patch["name"] === "string" ? { name: patch["name"] } : {}),
           ...(typeof patch["description"] === "string"
             ? { description: patch["description"] }
@@ -305,7 +312,7 @@ export async function createOctopusWebServer(
         }
       }
       case "deleteRequirement":
-        engine.deleteRequirement(requirementId())
+        await engine.deleteRequirement(requirementId())
         return { deleted: true, requirementId: requirementId() }
       case "getRequirementStatus":
         return engine.getRequirementStatus(requirementId())
@@ -317,7 +324,11 @@ export async function createOctopusWebServer(
         return engine.getExecutionSnapshot(requirementId())
       case "updateNodeSchedule": {
         const nodeId = requiredString(args[1], "nodeId")
-        const state = engine.updateNodeSchedule(requirementId(), nodeId, schedulePatch(args[2]))
+        const state = await engine.updateNodeSchedule(
+          requirementId(),
+          nodeId,
+          schedulePatch(args[2]),
+        )
         const step = state.steps.find((item) => item.id === nodeId)
         return {
           requirementId: state.requirementId,
@@ -327,7 +338,10 @@ export async function createOctopusWebServer(
         }
       }
       case "updateRequirementSchedule": {
-        const state = engine.updateRequirementSchedule(requirementId(), schedulePatch(args[1]))
+        const state = await engine.updateRequirementSchedule(
+          requirementId(),
+          schedulePatch(args[1]),
+        )
         return {
           requirementId: state.requirementId,
           plannedStart: state.plannedStart ?? null,
@@ -336,7 +350,7 @@ export async function createOctopusWebServer(
       }
       case "moveRequirementPhase": {
         const toPhase = requiredString(args[1], "toPhase")
-        const state = engine.moveRequirementPhase(requirementId(), toPhase as never)
+        const state = await engine.moveRequirementPhase(requirementId(), toPhase as never)
         return {
           requirementId: state.requirementId,
           currentPhase: state.currentPhase,
@@ -380,7 +394,7 @@ export async function createOctopusWebServer(
       case "unreachMilestone":
         return engine.unreachMilestone(requirementId(), requiredString(args[1], "milestoneId"))
       case "deleteMilestone":
-        engine.deleteMilestone(requirementId(), requiredString(args[1], "milestoneId"))
+        await engine.deleteMilestone(requirementId(), requiredString(args[1], "milestoneId"))
         return { deleted: true, milestoneId: requiredString(args[1], "milestoneId") }
       case "runNode":
         return engine.execution.runNode(
@@ -444,14 +458,17 @@ export async function createOctopusWebServer(
       case "health":
         return engine.checkIntegrationHealth()
       case "resolveNodeWorkspace": {
-        const state = engine.getState(requirementId())
+        const state = await engine.getState(requirementId())
         if (!state.projectRoot) throw new WebError(400, "需求没有源码根目录")
-        const nodeKey = engine.resolveNodeKey(requirementId(), requiredString(args[1], "nodeId"))
+        const nodeKey = await engine.resolveNodeKey(
+          requirementId(),
+          requiredString(args[1], "nodeId"),
+        )
         const path = getWorkflowWorkspace(state.projectRoot).nodePath(nodeKey)
         return { nodeKey, path, exists: existsSync(path) }
       }
       case "exportTasks": {
-        const document = engine.exportTasks(requirementId())
+        const document = await engine.exportTasks(requirementId())
         return { document, taskCount: document.tasks.length }
       }
       case "importTasks":
@@ -580,6 +597,13 @@ export async function createOctopusWebServer(
                   ...(typeof sources["websiteUrl"] === "string"
                     ? { websiteUrl: sources["websiteUrl"] }
                     : {}),
+                  ...(Array.isArray(sources["historicalBrdPaths"])
+                    ? {
+                        historicalBrdPaths: sources["historicalBrdPaths"].filter(
+                          (item): item is string => typeof item === "string",
+                        ),
+                      }
+                    : {}),
                 },
               }
             : {}),
@@ -603,7 +627,7 @@ export async function createOctopusWebServer(
         const nodeId = requiredString(args[1], "nodeId")
         const assignedTo =
           args[2] === null || typeof args[2] === "string" ? (args[2] as string | null) : null
-        const state = engine.assignNode(requirementId(), nodeId, assignedTo)
+        const state = await engine.assignNode(requirementId(), nodeId, assignedTo)
         const step = state.steps.find((item) => item.id === nodeId)
         return { requirementId: state.requirementId, nodeId, assignedTo: step?.assignedTo ?? null }
       }
@@ -712,14 +736,19 @@ export async function createOctopusWebServer(
           resolveListen(currentUrl)
         })
       }),
-    close: () =>
-      new Promise((resolveClose, reject) => {
-        if (!server.listening) {
-          resolveClose()
-          return
-        }
-        server.close((error) => (error ? reject(error) : resolveClose()))
-      }),
+    close: async () => {
+      try {
+        await new Promise<void>((resolveClose, reject) => {
+          if (!server.listening) {
+            resolveClose()
+            return
+          }
+          server.close((error) => (error ? reject(error) : resolveClose()))
+        })
+      } finally {
+        await engine.close()
+      }
+    },
   }
 }
 

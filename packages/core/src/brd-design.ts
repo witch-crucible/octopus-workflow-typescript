@@ -27,6 +27,8 @@ export interface BrdDesignSources {
   miniprogramBuildArtifact?: string
   /** 官网展示域名 */
   websiteUrl?: string
+  /** 历史 BRD 文件或目录；每次生成时重新采集，用作结构与表达参考 */
+  historicalBrdPaths?: string[]
 }
 
 /** 项目级 BRD 设计配置 */
@@ -57,6 +59,7 @@ export interface BrdPromptVars {
   existingBrd?: string
   websiteUrl?: string
   miniprogramBuildArtifact?: string
+  historicalBrds?: string
 }
 
 /** 默认 BRD 产出路径（相对项目根） */
@@ -122,6 +125,11 @@ export function buildDefaultBrdPrompts(): Record<BrdPromptId, BrdPromptTemplate>
 
 ## 已有 BRD（可为空；若有则在其基础上完善，不要无故删除仍有效的内容）
 {{existingBrd}}
+
+## 历史 BRD 参考
+{{historicalBrds}}
+
+历史 BRD 只用于学习结构、术语与表达习惯；其中的旧项目事实不得直接套用到当前需求。
 
 请输出完整 BRD Markdown。`,
     },
@@ -198,12 +206,29 @@ function parseSources(value: unknown): BrdDesignSources {
     "sources.miniprogramBuildArtifact",
   )
   const websiteUrl = optionalNonEmptyString(value["websiteUrl"], "sources.websiteUrl")
+  const historicalBrdPathsRaw = value["historicalBrdPaths"]
+  let historicalBrdPaths: string[] | undefined
+  if (historicalBrdPathsRaw !== undefined && historicalBrdPathsRaw !== null) {
+    if (!Array.isArray(historicalBrdPathsRaw)) {
+      throw new Error("sources.historicalBrdPaths 必须是字符串数组")
+    }
+    historicalBrdPaths = historicalBrdPathsRaw.map((item, index) => {
+      if (typeof item !== "string" || item.trim() === "") {
+        throw new Error(`sources.historicalBrdPaths[${index}] 必须是非空字符串`)
+      }
+      return item.trim()
+    })
+    historicalBrdPaths = [...new Set(historicalBrdPaths)]
+  }
   if (miniprogramCodePath !== undefined) sources.miniprogramCodePath = miniprogramCodePath
   if (websiteCodePath !== undefined) sources.websiteCodePath = websiteCodePath
   if (frontendCodePath !== undefined) sources.frontendCodePath = frontendCodePath
   if (backendCodePath !== undefined) sources.backendCodePath = backendCodePath
   if (miniprogramBuildArtifact !== undefined) sources.miniprogramBuildArtifact = miniprogramBuildArtifact
   if (websiteUrl !== undefined) sources.websiteUrl = websiteUrl
+  if (historicalBrdPaths && historicalBrdPaths.length > 0) {
+    sources.historicalBrdPaths = historicalBrdPaths
+  }
   return sources
 }
 
@@ -306,6 +331,16 @@ export function mergeBrdDesignConfig(
         } else {
           next.sources[key] = value
         }
+      }
+    }
+    if (patch.sources.historicalBrdPaths !== undefined) {
+      const paths = patch.sources.historicalBrdPaths
+        .map((item) => item.trim())
+        .filter((item) => item !== "")
+      if (paths.length === 0) {
+        delete next.sources.historicalBrdPaths
+      } else {
+        next.sources.historicalBrdPaths = [...new Set(paths)]
       }
     }
   }

@@ -6,6 +6,10 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r exec tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:import:sqlite": "tsx scripts/import-sqlite.ts",
+    "db:verify": "tsx scripts/verify-database.ts",
     "web": "pnpm --filter @octopus/desktop web",
     "lint": "biome lint --diagnostic-level=error packages/ workflow/nodes/*/src/ workflow/nodes/*/test/",
     "lint:fix": "biome lint --write --diagnostic-level=error packages/ workflow/nodes/*/src/ workflow/nodes/*/test/",
@@ -20,6 +24,8 @@
   "packageManager": "pnpm@9.15.0",
   "devDependencies": {
     "@biomejs/biome": "2.0.6",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.23.12",
     "vitest": "^4.1.10"
   }
 }

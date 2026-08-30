@@ -18,7 +18,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 let engine: WorkflowEngine
 
-function listRequirements(): string[] {
+async function listRequirements(): Promise<string[]> {
   return engine.listRequirements()
 }
 
@@ -27,8 +27,8 @@ function registerIpc(): void {
 
   ipcMain.handle("octopus:listProjects", () => engine.listProjects())
   ipcMain.handle("octopus:listProjectSummaries", () => engine.listProjectSummaries())
-  ipcMain.handle("octopus:createProject", (_e, name: string, description?: string) => {
-    const project = engine.createProject(name, description)
+  ipcMain.handle("octopus:createProject", async (_e, name: string, description?: string) => {
+    const project = await engine.createProject(name, description)
     return {
       projectId: project.projectId,
       name: project.name,
@@ -39,8 +39,8 @@ function registerIpc(): void {
   ipcMain.handle("octopus:getProject", (_e, projectId: string) => engine.getProject(projectId))
   ipcMain.handle(
     "octopus:updateProjectMeta",
-    (_e, projectId: string, patch: { name?: string; description?: string }) => {
-      const project = engine.updateProjectMeta(projectId, patch ?? {})
+    async (_e, projectId: string, patch: { name?: string; description?: string }) => {
+      const project = await engine.updateProjectMeta(projectId, patch ?? {})
       return {
         projectId: project.projectId,
         name: project.name,
@@ -48,8 +48,8 @@ function registerIpc(): void {
       }
     },
   )
-  ipcMain.handle("octopus:deleteProject", (_e, projectId: string) => {
-    engine.deleteProject(projectId)
+  ipcMain.handle("octopus:deleteProject", async (_e, projectId: string) => {
+    await engine.deleteProject(projectId)
     return { deleted: true, projectId }
   })
   ipcMain.handle(
@@ -72,8 +72,8 @@ function registerIpc(): void {
   )
   ipcMain.handle(
     "octopus:initRequirement",
-    (_e, projectId: string, name: string, description?: string, projectRoot?: string) => {
-      const state = engine.initRequirement(
+    async (_e, projectId: string, name: string, description?: string, projectRoot?: string) => {
+      const state = await engine.initRequirement(
         projectId,
         name,
         description,
@@ -90,12 +90,12 @@ function registerIpc(): void {
   )
   ipcMain.handle(
     "octopus:updateRequirement",
-    (
+    async (
       _e,
       requirementId: string,
       patch: { name?: string; description?: string; owner?: string | null },
     ) => {
-      const state = engine.updateRequirement(requirementId, patch ?? {})
+      const state = await engine.updateRequirement(requirementId, patch ?? {})
       return {
         projectId: state.projectId,
         requirementId: state.requirementId,
@@ -104,8 +104,8 @@ function registerIpc(): void {
       }
     },
   )
-  ipcMain.handle("octopus:deleteRequirement", (_e, requirementId: string) => {
-    engine.deleteRequirement(requirementId)
+  ipcMain.handle("octopus:deleteRequirement", async (_e, requirementId: string) => {
+    await engine.deleteRequirement(requirementId)
     return { deleted: true, requirementId }
   })
   ipcMain.handle("octopus:getRequirementStatus", (_e, requirementId: string) =>
@@ -120,13 +120,13 @@ function registerIpc(): void {
   )
   ipcMain.handle(
     "octopus:updateNodeSchedule",
-    (
+    async (
       _e,
       requirementId: string,
       nodeId: string,
       schedule: { plannedStart?: string | null; plannedEnd?: string | null },
     ) => {
-      const state = engine.updateNodeSchedule(requirementId, nodeId, schedule ?? {})
+      const state = await engine.updateNodeSchedule(requirementId, nodeId, schedule ?? {})
       const step = state.steps.find((item) => item.id === nodeId)
       return {
         requirementId: state.requirementId,
@@ -138,12 +138,12 @@ function registerIpc(): void {
   )
   ipcMain.handle(
     "octopus:updateRequirementSchedule",
-    (
+    async (
       _e,
       requirementId: string,
       schedule: { plannedStart?: string | null; plannedEnd?: string | null },
     ) => {
-      const state = engine.updateRequirementSchedule(requirementId, schedule ?? {})
+      const state = await engine.updateRequirementSchedule(requirementId, schedule ?? {})
       return {
         requirementId: state.requirementId,
         plannedStart: state.plannedStart ?? null,
@@ -151,13 +151,16 @@ function registerIpc(): void {
       }
     },
   )
-  ipcMain.handle("octopus:moveRequirementPhase", (_e, requirementId: string, toPhase: string) => {
-    const state = engine.moveRequirementPhase(requirementId, toPhase as never)
-    return {
-      requirementId: state.requirementId,
-      currentPhase: state.currentPhase,
-    }
-  })
+  ipcMain.handle(
+    "octopus:moveRequirementPhase",
+    async (_e, requirementId: string, toPhase: string) => {
+      const state = await engine.moveRequirementPhase(requirementId, toPhase as never)
+      return {
+        requirementId: state.requirementId,
+        currentPhase: state.currentPhase,
+      }
+    },
+  )
   ipcMain.handle("octopus:listMilestones", (_e, requirementId: string) =>
     engine.listMilestones(requirementId),
   )
@@ -193,10 +196,13 @@ function registerIpc(): void {
   ipcMain.handle("octopus:unreachMilestone", (_e, requirementId: string, milestoneId: string) =>
     engine.unreachMilestone(requirementId, milestoneId),
   )
-  ipcMain.handle("octopus:deleteMilestone", (_e, requirementId: string, milestoneId: string) => {
-    engine.deleteMilestone(requirementId, milestoneId)
-    return { deleted: true, milestoneId }
-  })
+  ipcMain.handle(
+    "octopus:deleteMilestone",
+    async (_e, requirementId: string, milestoneId: string) => {
+      await engine.deleteMilestone(requirementId, milestoneId)
+      return { deleted: true, milestoneId }
+    },
+  )
   ipcMain.handle("octopus:runNode", (_e, requirementId: string, nodeId: string, force?: boolean) =>
     engine.execution.runNode(requirementId, nodeId, force === undefined ? {} : { force }),
   )
@@ -252,25 +258,28 @@ function registerIpc(): void {
   )
 
   ipcMain.handle("octopus:health", () => engine.checkIntegrationHealth())
-  ipcMain.handle("octopus:resolveNodeWorkspace", (_e, requirementId: string, nodeId: string) => {
-    const state = engine.getState(requirementId)
-    if (!state.projectRoot) throw new Error("需求没有源码根目录")
-    const nodeKey = engine.resolveNodeKey(requirementId, nodeId)
-    const path = getWorkflowWorkspace(state.projectRoot).nodePath(nodeKey)
-    return { nodeKey, path, exists: existsSync(path) }
-  })
+  ipcMain.handle(
+    "octopus:resolveNodeWorkspace",
+    async (_e, requirementId: string, nodeId: string) => {
+      const state = await engine.getState(requirementId)
+      if (!state.projectRoot) throw new Error("需求没有源码根目录")
+      const nodeKey = await engine.resolveNodeKey(requirementId, nodeId)
+      const path = getWorkflowWorkspace(state.projectRoot).nodePath(nodeKey)
+      return { nodeKey, path, exists: existsSync(path) }
+    },
+  )
 
   ipcMain.handle("octopus:openNodeDirectory", async (_e, requirementId: string, nodeId: string) => {
-    const state = engine.getState(requirementId)
+    const state = await engine.getState(requirementId)
     if (!state.projectRoot) throw new Error("需求没有源码根目录")
     const path = getWorkflowWorkspace(state.projectRoot).nodePath(
-      engine.resolveNodeKey(requirementId, nodeId),
+      await engine.resolveNodeKey(requirementId, nodeId),
     )
     return shell.openPath(path)
   })
 
   ipcMain.handle("octopus:exportTasks", async (_e, requirementId: string) => {
-    const document = engine.exportTasks(requirementId)
+    const document = await engine.exportTasks(requirementId)
     const selected = await dialog.showSaveDialog({
       title: "导出任务",
       defaultPath: `${requirementId}-tasks.json`,
@@ -316,7 +325,7 @@ function registerIpc(): void {
     return {
       canceled: false,
       inputPath,
-      ...engine.importTasks(requirementId, document),
+      ...(await engine.importTasks(requirementId, document)),
     }
   })
 
@@ -422,8 +431,8 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "octopus:assignNode",
-    (_e, requirementId: string, nodeId: string, assignedTo: string | null) => {
-      const state = engine.assignNode(requirementId, nodeId, assignedTo ?? null)
+    async (_e, requirementId: string, nodeId: string, assignedTo: string | null) => {
+      const state = await engine.assignNode(requirementId, nodeId, assignedTo ?? null)
       const step = state.steps.find((item) => item.id === nodeId)
       return { requirementId: state.requirementId, nodeId, assignedTo: step?.assignedTo ?? null }
     },
@@ -468,24 +477,35 @@ app.whenReady().then(async () => {
 
   // 窗口打开期间由主进程轮询失败事件，避免渲染进程自行访问文件系统。
   const notifiedEvents = new Set<number>()
+  let pollingEvents = false
   setInterval(() => {
-    for (const requirementId of listRequirements()) {
-      const events = engine.execution.eventsAfter(requirementId, 0)
-      for (const event of events) {
-        if (
-          event.type === "RUN_FAILED" &&
-          !notifiedEvents.has(event.sequence) &&
-          Notification.isSupported()
-        ) {
-          notifiedEvents.add(event.sequence)
-          new Notification({
-            title: "Octopus 节点执行失败",
-            body: String(event.payload["error"] ?? event.nodeId ?? "未知错误"),
-            icon: join(__dirname, "renderer", "app-icon.png"),
-          }).show()
+    if (pollingEvents) return
+    pollingEvents = true
+    void (async () => {
+      for (const requirementId of await listRequirements()) {
+        const events = await engine.execution.eventsAfter(requirementId, 0)
+        for (const event of events) {
+          if (
+            event.type === "RUN_FAILED" &&
+            !notifiedEvents.has(event.sequence) &&
+            Notification.isSupported()
+          ) {
+            notifiedEvents.add(event.sequence)
+            new Notification({
+              title: "Octopus 节点执行失败",
+              body: String(event.payload["error"] ?? event.nodeId ?? "未知错误"),
+              icon: join(__dirname, "renderer", "app-icon.png"),
+            }).show()
+          }
         }
       }
-    }
+    })()
+      .catch((cause) => {
+        console.error(`事件轮询失败: ${(cause as Error).message}`)
+      })
+      .finally(() => {
+        pollingEvents = false
+      })
   }, 5_000)
 
   app.on("activate", () => {
@@ -496,4 +516,19 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   // macOS 习惯：保留应用直至用户显式退出（Cmd+Q）。
   if (process.platform !== "darwin") app.quit()
+})
+
+let databaseClosed = false
+app.on("before-quit", (event) => {
+  if (!engine || databaseClosed) return
+  event.preventDefault()
+  void engine
+    .close()
+    .catch((cause) => {
+      console.error(`关闭数据库连接失败: ${(cause as Error).message}`)
+    })
+    .finally(() => {
+      databaseClosed = true
+      app.quit()
+    })
 })

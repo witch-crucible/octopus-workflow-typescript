@@ -101,6 +101,7 @@ const configFileSchema = z.object({
       ocrPath: z.string().optional(),
       commandCodePath: z.string().optional(),
       codexPath: z.string().optional(),
+      hermesPath: z.string().optional(),
       persistent: z.boolean().optional(),
       retries: z.number().optional(),
       retryDelay: z.number().optional(),
@@ -151,6 +152,7 @@ export const DEFAULT_CONFIG: OctopusConfig = {
     ocrPath: "ocr",
     commandCodePath: "commandcode",
     codexPath: "codex",
+    hermesPath: "hermes",
     persistent: false,
     retries: 2,
     retryDelay: 1000,
@@ -178,7 +180,8 @@ function loadFromEnv(aiBase: AIClientConfig = DEFAULT_CONFIG.ai): Partial<Octopu
     process.env["OCTOPUS_AI_CLAUDE_PATH"] ||
     process.env["OCTOPUS_AI_OCR_PATH"] ||
     process.env["OCTOPUS_AI_COMMANDCODE_PATH"] ||
-    process.env["OCTOPUS_AI_CODEX_PATH"]
+    process.env["OCTOPUS_AI_CODEX_PATH"] ||
+    process.env["OCTOPUS_AI_HERMES_PATH"]
   ) {
     config.ai = { ...aiBase }
     if (process.env["OCTOPUS_AI_MODEL"]) config.ai.defaultModel = process.env["OCTOPUS_AI_MODEL"]
@@ -189,6 +192,7 @@ function loadFromEnv(aiBase: AIClientConfig = DEFAULT_CONFIG.ai): Partial<Octopu
       config.ai.commandCodePath = process.env["OCTOPUS_AI_COMMANDCODE_PATH"]
     }
     if (process.env["OCTOPUS_AI_CODEX_PATH"]) config.ai.codexPath = process.env["OCTOPUS_AI_CODEX_PATH"]
+    if (process.env["OCTOPUS_AI_HERMES_PATH"]) config.ai.hermesPath = process.env["OCTOPUS_AI_HERMES_PATH"]
   }
 
   const teambition: TeambitionConfig = {}

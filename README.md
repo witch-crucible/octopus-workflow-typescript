@@ -26,12 +26,13 @@ Octopus 是一个 TypeScript 实现的 AI 辅助软件交付工作流引擎，�
 - 支持手动、命令、AI、外部集成和 Heinrich 标记五类动作。
 - 按依赖调度可运行节点，支持并行执行、手动暂停、取消和重试。
 - 通用 AI 辅助能力（含 BRD 生成/检查）通过 Claude CLI 执行；代码评审可并行使用 OCR、Command Code 与 Codex。
+- 通用 AI 辅助能力通过 Claude CLI 执行；BRD 节点另支持 Hermes Agent 无头模式，结合项目代码与历史 BRD 自动生成和优化。
 - 项目可绑定 Teambition 项目，需求可绑定任务卡片并读写状态。版本计划对接（仓库 / 版本 / note）方案见 `docs/plans/teambition-version-plan.md`。
 - 提供 CLI、本地 Web 界面和 macOS Electron 客户端。
 
 ## 快速开始
 
-需要 Node.js 20+ 和 pnpm 9.15.0；通用 AI 节点需要安装并登录 Claude CLI，默认交叉代码评审还需要可用的 `ocr`、`commandcode` 与 `codex` CLI。
+需要 Node.js 20+ 和 pnpm 9.15.0；运行通用 AI 节点需要安装并登录 Claude CLI，运行 `brd optimize` 还需要安装 Hermes Agent CLI；默认交叉代码评审还需要可用的 `ocr`、`commandcode` 与 `codex` CLI。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -43,9 +44,11 @@ node packages/cli/dist/index.js status
 node packages/cli/dist/index.js node list
 ```
 
-先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）并初始化工作流目录。同一状态库可有多个项目，每个项目下可有多个需求。默认状态目录是 `.octo/`，可用 `OCTOPUS_STORE_DIR` 覆盖。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
+默认直接使用本地 SQLite 主库：CLI/Web 为 `.octo/octopus.sqlite`，Electron 为 `userData/store/octopus.sqlite`，目录可用 `OCTOPUS_STORE_DIR` 覆盖。`DATABASE_URL` 仅供用户明确发起的一次快照同步使用；缺少连接串或 Supabase 不可用不影响离线启动、项目操作和 worker。先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
 
-声明：本项目使用 Hermes 作为 JavaScript 运行时。
+BRD 自动优化使用 Hermes Agent CLI 的无头模式；TypeScript/JavaScript 运行时仍为 Node.js 20+。
+
+BRD 优化运行记录与查询方式见 [`requirements-analysis-and-brd-design/README.md`](workflow/nodes/requirements-analysis-and-brd-design/README.md#hermes-运行记录与优化过程)。
 
 ## 核心命令
 
@@ -64,7 +67,7 @@ node packages/cli/dist/index.js node list
 | `octopus workflow validate/sync/run/status` | 校验工作流、同步目录并调度 DAG |
 | `octopus stage` / `octopus step` | 管理阶段步骤并执行步骤能力 |
 | `octopus ai` | 独立调用 AI 助手 |
-| `octopus brd config/prompts/generate/check` | 按项目配置源与提示词，生成或检查 BRD |
+| `octopus brd config/prompts/generate/optimize/check` | 按项目配置代码源、历史 BRD 与提示词，生成、自动优化或检查 BRD |
 | `octopus monitor` | 查看运行事件与集成健康度 |
 
 ## 工作流与数据
@@ -72,7 +75,9 @@ node packages/cli/dist/index.js node list
 - `packages/core/src/spec.ts`：内置工作流规格，也是缺少定义时的回退来源。
 - `workflow.yaml`：需求级、可版本化的 DAG 定义；初始化不会覆盖已有文件。
 - `workflow/nodes/<nodeKey>/`：节点独立工作目录；`workflow/shared/`：节点共享目录。
-- `.octo/state.sqlite`：项目、需求状态、运行记录与事件数据库（旧库会自动迁移为「项目 ⊃ 需求」）。
+- `octopus.sqlite`：项目、需求状态、运行记录、事件与集成健康度的本地核心状态库，使用 WAL、外键和事务。
+- Supabase PostgreSQL：用户明确同意后使用的单机云端快照，不参与普通业务读写，不后台轮询或静默同步。
+- `.octo/`：本地配置、身份、运行日志、worker 文件和 CLI/Web 的 `octopus.sqlite`；旧 `state.sqlite` 只作为迁移备份保留。
 - `.octo/config.json`：可选的本地配置（含 Teambition 凭据）。
 - `workflow.overlay.yaml`：可选的节点叠加（增/禁/改），不必复制整份 DAG。
 - 自定义节点 `key` 必须是英文 kebab-case，`name` / `description` 也必须使用英文；内部运行态 ID 由 `workflow.yaml` 的 `nodeIdMapping` 维护。
@@ -103,9 +108,21 @@ add:
 
 插件导出 `default` 或 `octopusPlugin`，在 `activate(ctx)` 里叠加节点、注册新的 AI 模块 id、集成服务或自定义能力名称；不能覆盖内置 12 类 AI 模块，也不能覆盖 `ai` / `heinrich` 能力处理器。路径相对项目根，包名从该项目的 `node_modules` 解析，加载失败则进程退出。测试夹具 `packages/plugin/fixtures/sample-plugin/` 是一份可复制的最小插件，本仓库默认不启用任何插件。
 
-可用环境变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_OCR_PATH`、`OCTOPUS_AI_COMMANDCODE_PATH`、`OCTOPUS_AI_CODEX_PATH`。
+可用环境变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_OCR_PATH`、`OCTOPUS_AI_COMMANDCODE_PATH`、`OCTOPUS_AI_CODEX_PATH`、`OCTOPUS_AI_HERMES_PATH`。
 
 `AI Code Review` 节点默认并行调用 `ocr`、`commandcode` 与 `codex` 审查当前 Git 变更。三个 reviewer 的原始报告按需求隔离写入节点目录的 `reviews/<requirement-id>/`，最新汇总报告写入 `cross-review.md`；至少两个 reviewer 成功时节点才通过。每次调用都会显式排除这些生成报告，避免被后续 review 再次纳入；本仓库的内置节点目录另有 `.gitignore` 作为补充。
+数据库环境变量：运行时必填 `DATABASE_URL`；迁移可选 `DATABASE_MIGRATION_URL`（推荐 direct 或 5432 session pooler）。开发态读取仓库根 `.env`；打包 Electron 读取进程环境或 `userData/store/.env`。其他变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_HERMES_PATH`。
+
+数据库首次切换命令：
+
+```bash
+pnpm db:migrate
+pnpm db:import:sqlite -- --source .octo/state.sqlite --source "/path/to/Electron/userData/store/state.sqlite"
+pnpm db:import:sqlite -- --source .octo/state.sqlite --source "/path/to/Electron/userData/store/state.sqlite" --apply
+pnpm db:verify
+```
+
+导入默认只 dry-run；相同主键内容不同会中止，`--apply` 在单个远端事务中执行。旧 SQLite 文件不会被删除、改名或写入。
 
 Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
 
@@ -121,7 +138,7 @@ Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
 pnpm web
 ```
 
-访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，默认与 CLI 共享仓库根目录的 `.octo/state.sqlite`；可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 日志 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/archive/teambition-kanban-gantt-omniplan.md`、`docs/archive/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
+访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，通过后端进程使用 `DATABASE_URL` 与 CLI/Electron/worker 共享 Supabase 状态；连接串不会传给渲染器。可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 日志 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/archive/teambition-kanban-gantt-omniplan.md`、`docs/archive/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
 
 ### 需求泳道图（Node Swimlane）
 
@@ -139,7 +156,7 @@ pnpm web
 pnpm --filter @octopus/desktop start
 ```
 
-Electron 默认使用系统 `userData/store/state.sqlite`，不会自动与 CLI/Web 共享状态；如需共享，请为它们设置相同的 `OCTOPUS_STORE_DIR`。
+Electron、CLI 和 Web 各自使用本地 `octopus.sqlite`；Electron 的默认位置是 `userData/store/`，CLI/Web 的默认位置是仓库 `.octo/`。显式同步时才读取 `DATABASE_URL`，本地未同步修订以本地快照为准。
 
 ## 开发验证
 

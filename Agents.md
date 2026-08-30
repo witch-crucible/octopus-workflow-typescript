@@ -9,7 +9,7 @@ Octopus Workflow 是一个基于 TypeScript 的 AI 辅助软件交付工作流�
 ## 目录结构
 
 - `packages/core`：领域模型、类型、错误和基础规格。
-- `packages/context`：项目/需求上下文、SQLite 状态库和配置加载。
+- `packages/context`：项目/需求上下文、Supabase PostgreSQL 状态库和配置加载。
 - `packages/workflow-engine`：工作流解析、同步、调度和运行状态管理。
 - `packages/executor`：动作执行和运行时编排。
 - `packages/agent-layer`：AI agent 能力和模块注册。
@@ -21,7 +21,7 @@ Octopus Workflow 是一个基于 TypeScript 的 AI 辅助软件交付工作流�
 - `workflow.yaml`：默认的、可版本化的工作流 DAG。
 - `workflow/nodes/<nodeKey>/`：节点业务目录，标准结构为 `README.md`、`src/` 和 `test/`；`workflow/shared/`：节点共享目录。
 - `docs/`：设计文档、计划和归档资料。
-- `.octo/`：本地运行时状态，通常包含 SQLite 数据库和配置，不应提交凭据或运行时数据。
+- `.octo/`：本地配置、身份、日志和 worker 运行文件；核心状态只存于 Supabase，不应提交凭据或运行时数据。
 
 包之间通过 `workspace:*` 依赖连接。修改共享类型或 `core` 时，要检查下游包的类型检查和测试。
 
@@ -75,7 +75,7 @@ pnpm web                       # 构建并启动本地 Web 界面
 - 默认状态目录为 `.octo/`，可通过 `OCTOPUS_STORE_DIR` 覆盖。
 - 不要把 Teambition、AI 或其他集成的密钥写入源码、测试快照或文档示例。
 - AI 节点依赖本机已安装并登录的 Claude CLI；集成测试应优先使用 fixtures 或 mock，避免依赖真实外部服务。
-- Web 默认监听 `127.0.0.1:4173`；Electron 默认使用独立的 userData 状态库，除非显式配置共享目录。
+- Web 默认监听 `127.0.0.1:4173`；CLI、Web、Electron 和 worker 共享 `DATABASE_URL` 指向的核心状态库。
 
 ## 修改流程
 

@@ -5,7 +5,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { basename, isAbsolute, join, relative, resolve } from "node:path"
+import { basename, extname, isAbsolute, join, relative, resolve } from "node:path"
 import {
   DEFAULT_BRD_SPEC,
   hasBrdSourcesConfigured,
@@ -19,6 +19,9 @@ import {
 
 const PER_SOURCE_CHAR_LIMIT = 10_000
 const GLOBAL_CHAR_LIMIT = 50_000
+const HISTORICAL_BRD_CHAR_LIMIT = 60_000
+const PER_HISTORICAL_BRD_CHAR_LIMIT = 12_000
+const MAX_HISTORICAL_BRD_FILES = 20
 const MAX_DEPTH = 2
 const MAX_ENTRIES_PER_DIR = 40
 const HIGH_SIGNAL_NAMES = new Set([
@@ -40,6 +43,7 @@ const HIGH_SIGNAL_NAMES = new Set([
   "app.js",
   "app.tsx",
 ])
+const HISTORICAL_BRD_EXTENSIONS = new Set([".md", ".markdown", ".txt", ".adoc"])
 
 export interface BrdSourceSnippet {
   label: string
@@ -56,6 +60,7 @@ export interface BrdGatheredContext {
   absoluteOutputPath: string
   brdSpec: string
   existingBrd: string
+  historicalBrds: string
 }
 
 export interface BrdRenderedPrompt {
@@ -207,6 +212,103 @@ function readTextFile(pathValue: string | undefined, projectRoot: string): strin
   }
 }
 
+function listHistoricalBrdFiles(pathValue: string, projectRoot: string): string[] {
+  const absolute = resolvePath(projectRoot, pathValue)
+  if (!existsSync(absolute)) return []
+  try {
+    if (statSync(absolute).isFile()) return [absolute]
+  } catch {
+    return []
+  }
+
+  const files: string[] = []
+  const visit = (directory: string, depth: number): void => {
+    if (depth > MAX_DEPTH || files.length > MAX_HISTORICAL_BRD_FILES) return
+    let entries: string[]
+    try {
+      entries = readdirSync(directory).sort((a, b) => a.localeCompare(b))
+    } catch {
+      return
+    }
+    for (const name of entries) {
+      if (files.length > MAX_HISTORICAL_BRD_FILES) return
+      if (name === ".git" || name === "node_modules" || name === "dist" || name === ".octo") continue
+      const full = join(directory, name)
+      try {
+        if (statSync(full).isDirectory()) visit(full, depth + 1)
+        else if (HISTORICAL_BRD_EXTENSIONS.has(extname(name).toLowerCase())) files.push(full)
+      } catch {
+        // skip unreadable
+      }
+    }
+  }
+  visit(absolute, 0)
+  return files
+}
+
+function gatherHistoricalBrds(
+  paths: readonly string[] | undefined,
+  projectRoot: string,
+  absoluteOutputPath: string,
+  warnings: string[],
+): string {
+  if (!paths || paths.length === 0) return "（未配置历史 BRD）"
+
+  const files: string[] = []
+  for (const pathValue of paths) {
+    const absolute = resolvePath(projectRoot, pathValue)
+    if (!existsSync(absolute)) {
+      warnings.push(`历史 BRD 路径不存在: ${pathValue}`)
+      continue
+    }
+    try {
+      if (statSync(absolute).isFile() && !HISTORICAL_BRD_EXTENSIONS.has(extname(absolute).toLowerCase())) {
+        warnings.push(`历史 BRD 暂不支持该文件格式（仅支持 md/markdown/txt/adoc）: ${pathValue}`)
+        continue
+      }
+    } catch {
+      warnings.push(`历史 BRD 路径不可读: ${pathValue}`)
+      continue
+    }
+    files.push(...listHistoricalBrdFiles(pathValue, projectRoot))
+  }
+
+  const uniqueFiles = [...new Set(files)]
+    .filter((file) => resolve(file) !== resolve(absoluteOutputPath))
+    .slice(0, MAX_HISTORICAL_BRD_FILES)
+  if (files.length > MAX_HISTORICAL_BRD_FILES) {
+    warnings.push(`历史 BRD 超过 ${MAX_HISTORICAL_BRD_FILES} 个文件，仅采集前 ${MAX_HISTORICAL_BRD_FILES} 个`)
+  }
+  if (uniqueFiles.length === 0) {
+    warnings.push("未采集到可读的历史 BRD 文本")
+    return "（未采集到可读的历史 BRD）"
+  }
+
+  const chunks: string[] = []
+  let total = 0
+  for (const file of uniqueFiles) {
+    try {
+      const content = readFileSync(file, "utf8")
+      const clipped = content.length > PER_HISTORICAL_BRD_CHAR_LIMIT
+        ? `${content.slice(0, PER_HISTORICAL_BRD_CHAR_LIMIT)}\n…(截断)`
+        : content
+      const projectRelative = relative(projectRoot, file)
+      const label = projectRelative.startsWith("..") || isAbsolute(projectRelative)
+        ? file
+        : projectRelative
+      const chunk = `## 历史 BRD: ${label}\n${clipped}`
+      const remaining = HISTORICAL_BRD_CHAR_LIMIT - total
+      if (remaining <= 0) break
+      chunks.push(chunk.length > remaining ? `${chunk.slice(0, remaining)}\n…(全局截断)` : chunk)
+      total += Math.min(chunk.length, remaining)
+    } catch {
+      warnings.push(`历史 BRD 文件不可读: ${file}`)
+    }
+  }
+  if (total >= HISTORICAL_BRD_CHAR_LIMIT) warnings.push("历史 BRD 内容超过全局上限，已截断")
+  return chunks.join("\n\n") || "（未采集到可读的历史 BRD）"
+}
+
 /** 采集项目 BRD 上下文 */
 export function gatherBrdSourceContext(
   config: ProjectBrdDesignConfig,
@@ -267,6 +369,12 @@ export function gatherBrdSourceContext(
   const outputPath = resolveBrdOutputPath(config)
   const absoluteOutputPath = resolvePath(projectRoot, outputPath)
   const existingBrd = readTextFile(outputPath, projectRoot) ?? ""
+  const historicalBrds = gatherHistoricalBrds(
+    s.historicalBrdPaths,
+    projectRoot,
+    absoluteOutputPath,
+    warnings,
+  )
 
   const vars: BrdPromptVars = {
     requirementName: requirement.name,
@@ -276,6 +384,7 @@ export function gatherBrdSourceContext(
     existingBrd: existingBrd || "（尚无 BRD）",
     websiteUrl: s.websiteUrl ?? "（未配置）",
     miniprogramBuildArtifact: s.miniprogramBuildArtifact ?? "（未配置）",
+    historicalBrds,
   }
 
   return {
@@ -286,6 +395,7 @@ export function gatherBrdSourceContext(
     absoluteOutputPath,
     brdSpec,
     existingBrd,
+    historicalBrds,
   }
 }
 

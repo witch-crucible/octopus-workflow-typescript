@@ -4,12 +4,12 @@
 
 import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 
-export function resolveRequirementId(
+export async function resolveRequirementId(
   engine: WorkflowEngine,
   requirementId?: string,
-): string | null {
+): Promise<string | null> {
   if (requirementId) return requirementId
-  const requirements = engine.listRequirements()
+  const requirements = await engine.listRequirements()
   if (requirements.length === 0) {
     console.error(
       "⚠️  没有找到需求。使用 `octopus requirement init <name> --project <projectId>` 创建。",

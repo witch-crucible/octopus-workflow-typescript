@@ -54,6 +54,26 @@ describe("gatherBrdSourceContext", () => {
     expect(context.warnings.some((w) => w.includes("后端"))).toBe(true)
   })
 
+  it("每次采集历史 BRD 文本并排除当前输出文件", () => {
+    const history = join(root, "docs", "history")
+    mkdirSync(history, { recursive: true })
+    writeFileSync(join(history, "approved.md"), "# 历史支付 BRD\n稳定结构")
+    writeFileSync(join(history, "ignored.pdf"), "binary")
+    writeFileSync(join(history, "current.md"), "# 不应作为历史重复读取")
+
+    const context = gatherBrdSourceContext(
+      {
+        sources: { historicalBrdPaths: ["docs/history"] },
+        brdOutputPath: "docs/history/current.md",
+      },
+      root,
+      { name: "当前需求", description: "desc" },
+    )
+    expect(context.historicalBrds).toContain("历史支付 BRD")
+    expect(context.historicalBrds).not.toContain("不应作为历史重复读取")
+    expect(context.vars.historicalBrds).toBe(context.historicalBrds)
+  })
+
   it("renderBrdPromptsForContext 按 mode 过滤", () => {
     const context = gatherBrdSourceContext(createEmptyBrdDesignConfig(), root, {
       name: "N",

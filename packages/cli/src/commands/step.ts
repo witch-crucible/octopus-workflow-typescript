@@ -12,9 +12,7 @@ import type { WorkflowState } from "@octopus/core/workflow.js"
 import { resolveRequirementId } from "../resolve-requirement.js"
 
 export function buildStepCommands(program: Command, engine: WorkflowEngine): void {
-  const stepCmd = program
-    .command("step")
-    .description("步骤能力调度")
+  const stepCmd = program.command("step").description("步骤能力调度")
 
   stepCmd
     .command("run")
@@ -24,7 +22,7 @@ export function buildStepCommands(program: Command, engine: WorkflowEngine): voi
     .option("--json", "以 JSON 格式输出")
     .action(async (stageId: string, requirementId?: string, options?: { json?: boolean }) => {
       try {
-        const pid = resolveRequirementId(engine, requirementId)
+        const pid = await resolveRequirementId(engine, requirementId)
         if (!pid) return
 
         const previousRunCount = engine.getState(pid).steps
@@ -59,7 +57,9 @@ export function buildStepCommands(program: Command, engine: WorkflowEngine): voi
         console.log(`\n⚙️  步骤 ${stageId} 能力分发结果:`)
         for (const run of runs) {
           const icon = run.ok ? "✅" : "⚠️"
-          console.log(`   ${icon} [${run.kind}] ${run.ref}${run.summary ? ` — ${run.summary}` : ""}`)
+          console.log(
+            `   ${icon} [${run.kind}] ${run.ref}${run.summary ? ` — ${run.summary}` : ""}`,
+          )
         }
         console.log()
       } catch (err) {

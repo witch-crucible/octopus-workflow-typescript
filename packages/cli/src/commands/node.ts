@@ -12,10 +12,7 @@ import { Phase } from "@octopus/core/phase.js"
 import { Role } from "@octopus/core/role.js"
 import { AIAssistantType } from "@octopus/core/agent.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
-import {
-  resolveWorkflowNodeId,
-  resolveWorkflowNodeKey,
-} from "@octopus/context/workflow.js"
+import { resolveWorkflowNodeId, resolveWorkflowNodeKey } from "@octopus/context/workflow.js"
 
 interface CreateNodeOptions {
   description?: string
@@ -43,7 +40,8 @@ function collect(value: string, previous: string[]): string[] {
 export function buildNodeCommands(program: Command, engine: WorkflowEngine): void {
   const node = program.command("node").description("工作流节点执行与运行监控")
 
-  node.command("create")
+  node
+    .command("create")
     .description("创建任务节点并写入项目工作流")
     .argument("<nodeKey>", "英文节点 key（kebab-case）")
     .argument("<name>", "节点名称")
@@ -64,48 +62,57 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
     .option("--delta <count>", "Heinrich 计数增量")
     .option("--level <level>", "Heinrich 等级：MAJOR、MINOR、TRIVIAL")
     .option("--json", "以 JSON 输出")
-    .action((nodeKey: string, name: string, requirementId: string | undefined, options: CreateNodeOptions) => {
-      try {
-        const pid = resolveRequirementId(engine, requirementId)
-        if (!pid) return
-        const state = engine.getState(pid)
-        const phase = parseEnumValue(Phase, options.phase ?? state.currentPhase, "阶段")
-        const roles = options.role.length > 0
-          ? options.role.map((role) => parseEnumValue(Role, role, "角色"))
-          : [Role.DEV]
-        const spec: WorkflowNodeSpec = {
-          key: nodeKey,
-          phase,
-          name,
-          description: options.description ?? "",
-          responsibleRoles: roles,
-          dependsOn: options.dependsOn,
-          actions: [createNodeAction(options)],
+    .action(
+      async (
+        nodeKey: string,
+        name: string,
+        requirementId: string | undefined,
+        options: CreateNodeOptions,
+      ) => {
+        try {
+          const pid = await resolveRequirementId(engine, requirementId)
+          if (!pid) return
+          const state = await engine.getState(pid)
+          const phase = parseEnumValue(Phase, options.phase ?? state.currentPhase, "阶段")
+          const roles =
+            options.role.length > 0
+              ? options.role.map((role) => parseEnumValue(Role, role, "角色"))
+              : [Role.DEV]
+          const spec: WorkflowNodeSpec = {
+            key: nodeKey,
+            phase,
+            name,
+            description: options.description ?? "",
+            responsibleRoles: roles,
+            dependsOn: options.dependsOn,
+            actions: [createNodeAction(options)],
+          }
+          const result = await engine.createNode(pid, spec)
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2))
+            return
+          }
+          const activation = result.activated ? "已加入当前阶段" : "将在对应阶段激活"
+          console.log(`✅ 节点 ${nodeKey} 已创建（${activation}）`)
+          console.log(`   工作目录: ${result.workspacePath}`)
+        } catch (error) {
+          console.error(`❌ 创建节点失败: ${(error as Error).message}`)
+          process.exitCode = 1
         }
-        const result = engine.createNode(pid, spec)
-        if (options.json) {
-          console.log(JSON.stringify(result, null, 2))
-          return
-        }
-        const activation = result.activated ? "已加入当前阶段" : "将在对应阶段激活"
-        console.log(`✅ 节点 ${nodeKey} 已创建（${activation}）`)
-        console.log(`   工作目录: ${result.workspacePath}`)
-      } catch (error) {
-        console.error(`❌ 创建节点失败: ${(error as Error).message}`)
-        process.exitCode = 1
-      }
-    })
+      },
+    )
 
-  node.command("list")
+  node
+    .command("list")
     .description("列出节点及当前/可运行节点")
     .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 输出")
-    .action((requirementId: string | undefined, options: { json?: boolean }) => {
-      const pid = resolveRequirementId(engine, requirementId)
+    .action(async (requirementId: string | undefined, options: { json?: boolean }) => {
+      const pid = await resolveRequirementId(engine, requirementId)
       if (!pid) return
-      const state = engine.getState(pid)
-      const snapshot = engine.getExecutionSnapshot(pid)
-      const definition = engine.getWorkflowDefinition(pid)
+      const state = await engine.getState(pid)
+      const snapshot = await engine.getExecutionSnapshot(pid)
+      const definition = await engine.getWorkflowDefinition(pid)
       const keyForId = (nodeId: string): string => resolveWorkflowNodeKey(definition, nodeId)
       const rows = state.steps.map((step) => ({
         key: keyForId(step.id),
@@ -115,23 +122,33 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
         statusLabel: TASK_STATUS_LABELS[step.status],
         current: snapshot.currentNodeIds.includes(step.id),
         ready: snapshot.readyNodeIds.includes(step.id),
-        workspace: state.projectRoot ? `${state.projectRoot}/workflow/nodes/${keyForId(step.id)}` : undefined,
+        workspace: state.projectRoot
+          ? `${state.projectRoot}/workflow/nodes/${keyForId(step.id)}`
+          : undefined,
       }))
       if (options.json) {
-        console.log(JSON.stringify({
-          requirementId: pid,
-          snapshot: {
-            currentNodeKeys: snapshot.currentNodeIds.map(keyForId),
-            readyNodeKeys: snapshot.readyNodeIds.map(keyForId),
-            waitingNodeKeys: snapshot.waitingNodeIds.map(keyForId),
-            schedulerStatus: snapshot.schedulerStatus,
-            updatedAt: snapshot.updatedAt,
-          },
-          nodes: rows,
-        }, null, 2))
+        console.log(
+          JSON.stringify(
+            {
+              requirementId: pid,
+              snapshot: {
+                currentNodeKeys: snapshot.currentNodeIds.map(keyForId),
+                readyNodeKeys: snapshot.readyNodeIds.map(keyForId),
+                waitingNodeKeys: snapshot.waitingNodeIds.map(keyForId),
+                schedulerStatus: snapshot.schedulerStatus,
+                updatedAt: snapshot.updatedAt,
+              },
+              nodes: rows,
+            },
+            null,
+            2,
+          ),
+        )
         return
       }
-      console.log(`\n📍 节点 (${rows.length}) · 当前: ${snapshot.currentNodeIds.map(keyForId).join(", ") || "无"}`)
+      console.log(
+        `\n📍 节点 (${rows.length}) · 当前: ${snapshot.currentNodeIds.map(keyForId).join(", ") || "无"}`,
+      )
       for (const row of rows) {
         const marker = row.current ? "▶" : row.ready ? "◇" : " "
         console.log(` ${marker} ${row.key.padEnd(40)} [${row.statusLabel}] ${row.name}`)
@@ -139,98 +156,121 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
       console.log()
     })
 
-  node.command("show")
+  node
+    .command("show")
     .description("查看节点详情和运行历史")
     .argument("<nodeKey>", "英文节点 key")
     .argument("[requirementId]", "需求 ID")
     .option("--json", "以 JSON 输出")
-    .action((nodeKey: string, requirementId: string | undefined, options: { json?: boolean }) => {
-      const pid = resolveRequirementId(engine, requirementId)
-      if (!pid) return
-      const state = engine.getState(pid)
-      const definition = engine.getWorkflowDefinition(pid)
-      const nodeId = resolveWorkflowNodeId(definition, nodeKey)
-      const step = state.steps.find((candidate) => candidate.id === nodeId)
-      if (!step) throw new Error(`节点尚未激活: ${nodeKey}`)
-      const data = {
-        requirementId: pid,
-        node: {
-          key: nodeKey,
-          phase: step.phase,
-          name: step.name,
-          description: step.description,
-          responsibleRole: step.responsibleRole,
-          status: step.status,
-          dependsOn: step.dependsOn.map((dependencyId) => resolveWorkflowNodeKey(definition, dependencyId)),
-          actions: step.actions,
-          artifactIds: step.artifactIds,
-          assignedTo: step.assignedTo,
-          createdAt: step.createdAt,
-          updatedAt: step.updatedAt,
-          completedAt: step.completedAt,
-          notes: step.notes,
-          capabilityRuns: step.capabilityRuns,
-        },
-        runs: engine.execution.listRuns(pid, nodeId).map(({ nodeId: _nodeId, ...run }) => ({ ...run, nodeKey })),
-      }
-      if (options.json) {
-        console.log(JSON.stringify(data, null, 2))
-        return
-      }
-      console.log(`\n📌 ${nodeKey} ${step.name}`)
-      console.log(`   状态: ${TASK_STATUS_LABELS[step.status]}`)
-      console.log(`   依赖: ${data.node.dependsOn.join(", ") || "无"}`)
-      console.log(`   运行次数: ${data.runs.length}`)
-      if (state.projectRoot) console.log(`   工作目录: ${state.projectRoot}/workflow/nodes/${nodeKey}`)
-      console.log()
-    })
+    .action(
+      async (nodeKey: string, requirementId: string | undefined, options: { json?: boolean }) => {
+        const pid = await resolveRequirementId(engine, requirementId)
+        if (!pid) return
+        const state = await engine.getState(pid)
+        const definition = await engine.getWorkflowDefinition(pid)
+        const nodeId = resolveWorkflowNodeId(definition, nodeKey)
+        const step = state.steps.find((candidate) => candidate.id === nodeId)
+        if (!step) throw new Error(`节点尚未激活: ${nodeKey}`)
+        const data = {
+          requirementId: pid,
+          node: {
+            key: nodeKey,
+            phase: step.phase,
+            name: step.name,
+            description: step.description,
+            responsibleRole: step.responsibleRole,
+            status: step.status,
+            dependsOn: step.dependsOn.map((dependencyId) =>
+              resolveWorkflowNodeKey(definition, dependencyId),
+            ),
+            actions: step.actions,
+            artifactIds: step.artifactIds,
+            assignedTo: step.assignedTo,
+            createdAt: step.createdAt,
+            updatedAt: step.updatedAt,
+            completedAt: step.completedAt,
+            notes: step.notes,
+            capabilityRuns: step.capabilityRuns,
+          },
+          runs: (await engine.execution.listRuns(pid, nodeId)).map(
+            ({ nodeId: _nodeId, ...run }) => ({ ...run, nodeKey }),
+          ),
+        }
+        if (options.json) {
+          console.log(JSON.stringify(data, null, 2))
+          return
+        }
+        console.log(`\n📌 ${nodeKey} ${step.name}`)
+        console.log(`   状态: ${TASK_STATUS_LABELS[step.status]}`)
+        console.log(`   依赖: ${data.node.dependsOn.join(", ") || "无"}`)
+        console.log(`   运行次数: ${data.runs.length}`)
+        if (state.projectRoot)
+          console.log(`   工作目录: ${state.projectRoot}/workflow/nodes/${nodeKey}`)
+        console.log()
+      },
+    )
 
-  node.command("run")
+  node
+    .command("run")
     .description("独立运行一个节点")
     .argument("<nodeKey>", "英文节点 key")
     .argument("[requirementId]", "需求 ID")
     .option("--force", "忽略未完成依赖并记录审计")
     .option("--json", "以 JSON 输出")
-    .action((nodeKey: string, requirementId: string | undefined, options: { force?: boolean; json?: boolean }) => {
-      try {
-        const pid = resolveRequirementId(engine, requirementId)
-        if (!pid) return
-        const run = engine.runNode(pid, nodeKey, options.force === undefined ? {} : { force: options.force })
-        const { nodeId: _nodeId, ...publicRun } = run
-        if (options.json) console.log(JSON.stringify({ ...publicRun, nodeKey }, null, 2))
-        else console.log(`✅ 节点 ${nodeKey} 已启动: ${run.id} (PID ${run.pid ?? "pending"})`)
-      } catch (error) {
-        console.error(`❌ 节点运行失败: ${(error as Error).message}`)
-        process.exitCode = 1
-      }
-    })
+    .action(
+      async (
+        nodeKey: string,
+        requirementId: string | undefined,
+        options: { force?: boolean; json?: boolean },
+      ) => {
+        try {
+          const pid = await resolveRequirementId(engine, requirementId)
+          if (!pid) return
+          const run = await engine.runNode(
+            pid,
+            nodeKey,
+            options.force === undefined ? {} : { force: options.force },
+          )
+          const { nodeId: _nodeId, ...publicRun } = run
+          if (options.json) console.log(JSON.stringify({ ...publicRun, nodeKey }, null, 2))
+          else console.log(`✅ 节点 ${nodeKey} 已启动: ${run.id} (PID ${run.pid ?? "pending"})`)
+        } catch (error) {
+          console.error(`❌ 节点运行失败: ${(error as Error).message}`)
+          process.exitCode = 1
+        }
+      },
+    )
 
-  node.command("complete")
+  node
+    .command("complete")
     .description("完成手动节点")
     .argument("<nodeKey>", "英文节点 key")
     .argument("[requirementId]", "需求 ID")
     .option("--force", "忽略未完成依赖")
-    .action((nodeKey: string, requirementId: string | undefined, options: { force?: boolean }) => {
-      try {
-        const pid = resolveRequirementId(engine, requirementId)
-        if (!pid) return
-        engine.completeManualNode(pid, nodeKey, options.force === true)
-        console.log(`✅ 手动节点 ${nodeKey} 已完成`)
-      } catch (error) {
-        console.error(`❌ 节点完成失败: ${(error as Error).message}`)
-        process.exitCode = 1
-      }
-    })
+    .action(
+      async (nodeKey: string, requirementId: string | undefined, options: { force?: boolean }) => {
+        try {
+          const pid = await resolveRequirementId(engine, requirementId)
+          if (!pid) return
+          await engine.completeManualNode(pid, nodeKey, options.force === true)
+          console.log(`✅ 手动节点 ${nodeKey} 已完成`)
+        } catch (error) {
+          console.error(`❌ 节点完成失败: ${(error as Error).message}`)
+          process.exitCode = 1
+        }
+      },
+    )
 
-  node.command("cancel")
+  node
+    .command("cancel")
     .description("取消活动运行")
     .argument("<runId>", "运行 ID")
     .argument("[requirementId]", "需求 ID")
-    .action((runId: string, requirementId: string | undefined) => {
+    .action(async (runId: string, requirementId: string | undefined) => {
       try {
-        const pid = resolveRequirementId(engine, requirementId)
+        const pid = await resolveRequirementId(engine, requirementId)
         if (!pid) return
-        const run = engine.execution.cancelRun(pid, runId)
+        const run = await engine.execution.cancelRun(pid, runId)
         console.log(`✅ 运行 ${run.id} 已取消`)
       } catch (error) {
         console.error(`❌ 取消运行失败: ${(error as Error).message}`)
@@ -238,61 +278,92 @@ export function buildNodeCommands(program: Command, engine: WorkflowEngine): voi
       }
     })
 
-  node.command("retry")
+  node
+    .command("retry")
     .description("重试失败运行")
     .argument("<runId>", "运行 ID")
     .argument("[requirementId]", "需求 ID")
     .option("--force", "忽略未完成依赖")
-    .action((runId: string, requirementId: string | undefined, options: { force?: boolean }) => {
-      try {
-        const pid = resolveRequirementId(engine, requirementId)
-        if (!pid) return
-        const run = engine.execution.retryRun(pid, runId, options.force === undefined ? {} : { force: options.force })
-        console.log(`✅ 已创建重试运行: ${run.id}`)
-      } catch (error) {
-        console.error(`❌ 重试运行失败: ${(error as Error).message}`)
-        process.exitCode = 1
-      }
-    })
+    .action(
+      async (runId: string, requirementId: string | undefined, options: { force?: boolean }) => {
+        try {
+          const pid = await resolveRequirementId(engine, requirementId)
+          if (!pid) return
+          const run = await engine.execution.retryRun(
+            pid,
+            runId,
+            options.force === undefined ? {} : { force: options.force },
+          )
+          console.log(`✅ 已创建重试运行: ${run.id}`)
+        } catch (error) {
+          console.error(`❌ 重试运行失败: ${(error as Error).message}`)
+          process.exitCode = 1
+        }
+      },
+    )
 
-  node.command("assign")
+  node
+    .command("assign")
     .description("设置或清除节点负责人")
     .argument("<nodeId>", "节点 ID（内部 id，如 node show 输出）")
     .argument("[name]", "负责人姓名；不传则清除")
     .requiredOption("--requirement <requirementId>", "需求 ID")
     .option("--json", "以 JSON 输出")
-    .action((nodeId: string, name: string | undefined, options: { requirement: string; json?: boolean }) => {
-      try {
-        const state = engine.assignNode(options.requirement, nodeId, name ?? null)
-        const step = state.steps.find((s) => s.id === nodeId)
-        if (options.json) {
-          console.log(JSON.stringify({ requirementId: options.requirement, nodeId, assignedTo: step?.assignedTo ?? null }, null, 2))
-          return
+    .action(
+      async (
+        nodeId: string,
+        name: string | undefined,
+        options: { requirement: string; json?: boolean },
+      ) => {
+        try {
+          const state = await engine.assignNode(options.requirement, nodeId, name ?? null)
+          const step = state.steps.find((s) => s.id === nodeId)
+          if (options.json) {
+            console.log(
+              JSON.stringify(
+                {
+                  requirementId: options.requirement,
+                  nodeId,
+                  assignedTo: step?.assignedTo ?? null,
+                },
+                null,
+                2,
+              ),
+            )
+            return
+          }
+          console.log(
+            `✅ 已${step?.assignedTo ? `设置负责人 ${step.assignedTo}` : "清除负责人"}（节点 ${nodeId}）`,
+          )
+        } catch (error) {
+          console.error(`❌ 节点指派失败: ${(error as Error).message}`)
+          process.exitCode = 1
         }
-        console.log(`✅ 已${step?.assignedTo ? `设置负责人 ${step.assignedTo}` : "清除负责人"}（节点 ${nodeId}）`)
-      } catch (error) {
-        console.error(`❌ 节点指派失败: ${(error as Error).message}`)
-        process.exitCode = 1
-      }
-    })
+      },
+    )
 
-  node.command("logs")
+  node
+    .command("logs")
     .description("查看运行日志")
     .argument("<runId>", "运行 ID")
     .argument("[requirementId]", "需求 ID")
     .option("--stderr", "查看 stderr")
-    .action((runId: string, requirementId: string | undefined, options: { stderr?: boolean }) => {
-      const pid = resolveRequirementId(engine, requirementId)
-      if (!pid) return
-      const run = engine.execution.listRuns(pid).find((candidate) => candidate.id === runId)
-      if (!run) throw new Error(`运行不存在: ${runId}`)
-      const path = options.stderr ? run.stderrPath : run.stdoutPath
-      try {
-        console.log(readFileSync(path, "utf8"))
-      } catch {
-        console.log("（日志尚未产生）")
-      }
-    })
+    .action(
+      async (runId: string, requirementId: string | undefined, options: { stderr?: boolean }) => {
+        const pid = await resolveRequirementId(engine, requirementId)
+        if (!pid) return
+        const run = (await engine.execution.listRuns(pid)).find(
+          (candidate) => candidate.id === runId,
+        )
+        if (!run) throw new Error(`运行不存在: ${runId}`)
+        const path = options.stderr ? run.stderrPath : run.stdoutPath
+        try {
+          console.log(readFileSync(path, "utf8"))
+        } catch {
+          console.log("（日志尚未产生）")
+        }
+      },
+    )
 }
 
 function createNodeAction(options: CreateNodeOptions): NodeAction {
@@ -308,7 +379,8 @@ function createNodeAction(options: CreateNodeOptions): NodeAction {
   }
   if (type === "command") {
     if (!options.executable) throw new Error("command 动作必须提供 --executable")
-    const timeoutMs = options.timeout === undefined ? undefined : parsePositiveInteger(options.timeout, "timeout")
+    const timeoutMs =
+      options.timeout === undefined ? undefined : parsePositiveInteger(options.timeout, "timeout")
     return {
       type: "command",
       executable: options.executable,
@@ -333,9 +405,10 @@ function createNodeAction(options: CreateNodeOptions): NodeAction {
   }
 
   const delta = options.delta === undefined ? 1 : parsePositiveInteger(options.delta, "delta")
-  const level = options.level === undefined
-    ? undefined
-    : parseEnumValue(HeinrichLevel, options.level, "Heinrich 等级")
+  const level =
+    options.level === undefined
+      ? undefined
+      : parseEnumValue(HeinrichLevel, options.level, "Heinrich 等级")
   return {
     type: "heinrich",
     delta,
@@ -349,7 +422,8 @@ function parseEnumValue<T extends string>(
   label: string,
 ): T {
   const allowed = Object.values(values)
-  if (!allowed.includes(value as T)) throw new Error(`${label}无效: ${value}；可选值: ${allowed.join(", ")}`)
+  if (!allowed.includes(value as T))
+    throw new Error(`${label}无效: ${value}；可选值: ${allowed.join(", ")}`)
   return value as T
 }
 
@@ -358,4 +432,3 @@ function parsePositiveInteger(value: string, label: string): number {
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${label} 必须是正整数`)
   return parsed
 }
-

@@ -4,6 +4,8 @@ import { createServer, request } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
+import { createTestPersistenceStore } from "@octopus/context/testing.js"
+import { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 import { collectBrdPromptPatch } from "./renderer/lib/brd.ts"
 import { buildWorkflowGraphNodes } from "./renderer/lib/graph-model.ts"
 import { canonicalizeHash, routeFromHash } from "./renderer/lib/hash-route.ts"
@@ -24,10 +26,18 @@ const temporaryDirectories: string[] = []
 const childProcesses: ChildProcess[] = []
 const rendererDir = join(process.cwd(), "packages/desktop/dist/renderer")
 
+async function createTestEngine(): Promise<WorkflowEngine> {
+  const { store } = await createTestPersistenceStore()
+  const engine = new WorkflowEngine({ store })
+  await engine.initialize()
+  return engine
+}
+
 function assertRendererBuild(): void {
-  expect(existsSync(join(rendererDir, "index.html")), "missing dist/renderer; run pnpm --filter @octopus/desktop build:renderer").toBe(
-    true,
-  )
+  expect(
+    existsSync(join(rendererDir, "index.html")),
+    "missing dist/renderer; run pnpm --filter @octopus/desktop build:renderer",
+  ).toBe(true)
 }
 
 async function reservedPort(): Promise<number> {
@@ -137,6 +147,7 @@ describe("Octopus Web", () => {
       storeDir: join(root, "store"),
       projectRoot: join(root, "project"),
       rendererDir,
+      engine: await createTestEngine(),
     })
     const url = await server.listen()
 
@@ -161,11 +172,12 @@ describe("Octopus Web", () => {
       expect(Buffer.byteLength(await appIcon.arrayBuffer())).toBeGreaterThan(1000)
 
       const assetNames = readdirSync(join(rendererDir, "assets"))
-      expect(assetNames.some((name) => /logo.*\.png$/i.test(name) || name === "logo.png")).toBe(true)
+      expect(assetNames.some((name) => /logo.*\.png$/i.test(name) || name === "logo.png")).toBe(
+        true,
+      )
       expect(assetNames.some((name) => /mascot.*\.jpe?g$/i.test(name))).toBe(true)
       expect(
-        existsSync(join(rendererDir, "logo.png")) ||
-          assetNames.some((name) => /logo/i.test(name)),
+        existsSync(join(rendererDir, "logo.png")) || assetNames.some((name) => /logo/i.test(name)),
       ).toBe(true)
       expect(
         existsSync(join(rendererDir, "mascot.jpg")) ||
@@ -365,7 +377,7 @@ describe("Octopus Web", () => {
       projectRoot: join(root, "project"),
       rendererDir,
     }
-    const first = await createOctopusWebServer(options)
+    const first = await createOctopusWebServer({ ...options, engine: await createTestEngine() })
     const firstUrl = await first.listen()
     try {
       expect(await (await invoke(firstUrl, "canInit")).json()).toEqual({ result: true })
@@ -373,7 +385,7 @@ describe("Octopus Web", () => {
       await first.close()
     }
 
-    const restarted = await createOctopusWebServer(options)
+    const restarted = await createOctopusWebServer({ ...options, engine: await createTestEngine() })
     const restartedUrl = await restarted.listen()
     try {
       expect(await (await invoke(restartedUrl, "canInit")).json()).toEqual({ result: true })
@@ -403,6 +415,7 @@ describe("Octopus Web", () => {
       port: 0,
       storeDir: join(root, "store"),
       rendererDir,
+      engine: await createTestEngine(),
     })
     const url = await server.listen()
     const allowedUrl = new URL(url)
@@ -481,6 +494,7 @@ describe("Octopus Web", () => {
       storeDir: join(root, "store"),
       projectRoot: join(root, "project"),
       rendererDir,
+      engine: await createTestEngine(),
     })
     const url = await server.listen()
 
@@ -529,9 +543,9 @@ describe("Octopus Web", () => {
           expect(card?.displayName).toBe(item.name)
           expect(card?.teambitionBound).toBe(Boolean(item.teambitionProjectId))
         }
-        expect(built.items.find((entry) => entry.projectId === firstBody.result.projectId)?.highlight).toBe(
-          true,
-        )
+        expect(
+          built.items.find((entry) => entry.projectId === firstBody.result.projectId)?.highlight,
+        ).toBe(true)
       }
     } finally {
       await server.close()
@@ -857,6 +871,10 @@ describe("BRD 设计 RPC 注册", () => {
     expect(api).toContain("setProjectBrdDesignConfig:")
     expect(settings).toContain("collectBrdPromptPatch")
     expect(settings).toContain("brdPromptDrafts")
+    expect(settings).toContain("brdHistoryPaths")
+    expect(readFileSync(join(process.cwd(), "packages/desktop/src/web.ts"), "utf-8")).toContain(
+      "historicalBrdPaths",
+    )
     expect(settings).toContain("BRD")
   })
 
@@ -875,7 +893,9 @@ describe("BRD 设计 RPC 注册", () => {
         "summarize-sources": null,
       },
     })
-    expect(collectBrdPromptPatch({ generate: { system: "仅 system", user: "" } }, []).invalid).toMatchObject({
+    expect(
+      collectBrdPromptPatch({ generate: { system: "仅 system", user: "" } }, []).invalid,
+    ).toMatchObject({
       id: "generate",
     })
   })

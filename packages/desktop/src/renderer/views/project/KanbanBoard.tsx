@@ -1,3 +1,4 @@
+import { CalendarDays, CheckSquare2, CircleDot } from "lucide-react"
 import { useRef, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
@@ -14,13 +15,10 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { navigateRequirement } from "@/hooks/useHashRoute"
 import { confirmAction, showError, showSuccess } from "@/lib/feedback"
-import { getOctopus, type RequirementSummary, type TbStatus } from "@/lib/octopus"
-import {
-  buildKanbanModel,
-  type KanbanCardView,
-} from "@/lib/view-models"
 import { phaseLabel } from "@/lib/labels"
+import { getOctopus, type RequirementSummary, type TbStatus } from "@/lib/octopus"
 import { cn } from "@/lib/utils"
+import { buildKanbanModel, type KanbanCardView } from "@/lib/view-models"
 
 export type KanbanBoardProps = {
   items: RequirementSummary[]
@@ -101,13 +99,13 @@ export function KanbanBoard({
 
   return (
     <>
-      <div className="kanban-board flex gap-3 overflow-x-auto pb-2">
-        {model.columns.map((column) => (
+      <div className="kanban-board flex min-h-[calc(100dvh-190px)] items-start gap-3 overflow-x-auto px-1 pb-4">
+        {model.columns.map((column, columnIndex) => (
           <div
             key={column.phase}
             data-phase={column.phase}
             className={cn(
-              "kanban-column flex w-64 shrink-0 flex-col rounded-lg border bg-muted/30",
+              "kanban-column flex w-[282px] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100/75 dark:border-white/10 dark:bg-white/[0.035]",
               dragOverPhase === column.phase && "ring-2 ring-primary",
             )}
             onDragOver={(event) => {
@@ -125,11 +123,20 @@ export function KanbanBoard({
               void handleDrop(column.phase)
             }}
           >
-            <div className="flex items-center justify-between border-b px-3 py-2 text-sm font-medium">
-              <span>{column.label}</span>
-              <Badge variant="secondary">{column.cards.length}</Badge>
+            <div
+              className={cn(
+                "flex items-center justify-between border-b border-slate-200/70 px-3 py-2.5 text-sm font-semibold dark:border-white/10",
+                columnIndex === 0 && "bg-slate-200/70 dark:bg-white/[0.06]",
+                columnIndex > 0 &&
+                  "bg-sky-100/85 text-sky-700 dark:bg-sky-900/25 dark:text-sky-300",
+              )}
+            >
+              <span className="truncate">{column.label}</span>
+              <span className="ml-2 rounded-full bg-white/75 px-2 py-0.5 text-[11px] font-medium text-muted-foreground shadow-xs dark:bg-black/15">
+                {column.cards.length}
+              </span>
             </div>
-            <div className="flex flex-1 flex-col gap-2 p-2">
+            <div className="flex flex-1 flex-col gap-2.5 p-2.5">
               {column.cards.map((card) => (
                 <KanbanCard
                   key={card.requirementId}
@@ -259,7 +266,7 @@ function KanbanCard({
       data-requirement-id={card.requirementId}
       data-phase={card.phase}
       className={cn(
-        "kanban-card cursor-grab rounded-md border bg-card p-3 shadow-xs active:cursor-grabbing",
+        "kanban-card group cursor-grab rounded-lg border border-slate-200/90 bg-card p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition-[box-shadow,transform] hover:-translate-y-px hover:shadow-md active:cursor-grabbing dark:border-white/10",
         card.highlight && "ring-2 ring-primary",
       )}
       onClick={onOpen}
@@ -274,14 +281,21 @@ function KanbanCard({
       }}
       onDragEnd={onDragEnd}
     >
-      <div className="mb-1 flex flex-wrap items-start gap-1">
-        <span className="font-medium leading-snug">{card.displayName}</span>
+      <div className="mb-2 flex flex-wrap items-start gap-1.5">
+        <span className="min-w-0 flex-1 text-sm font-semibold leading-5 text-foreground">
+          {card.displayName}
+        </span>
         {card.teambitionBound ? (
-          <Badge variant="secondary">
+          <Badge
+            className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
+            variant="outline"
+          >
             TB{card.teambitionStatusName ? ` · ${card.teambitionStatusName}` : ""}
           </Badge>
         ) : (
-          <Badge variant="outline">未绑定任务</Badge>
+          <Badge className="text-[10px] font-normal text-muted-foreground" variant="outline">
+            未绑定任务
+          </Badge>
         )}
         {card.versionBadge ? (
           <Badge variant={card.versionBadge.stale ? "destructive" : "secondary"}>
@@ -291,18 +305,29 @@ function KanbanCard({
         ) : null}
       </div>
       {card.displayDescription ? (
-        <p className="mb-2 line-clamp-3 text-xs text-muted-foreground">{card.displayDescription}</p>
+        <p className="mb-3 line-clamp-2 text-xs leading-5 text-muted-foreground">
+          {card.displayDescription}
+        </p>
       ) : null}
-      <div className="mb-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-        <span>
+      <div className="mb-3 grid gap-1.5 text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <CheckSquare2 className="size-3.5" />
           节点 {card.completedTasks}/{card.totalTasks}
         </span>
-        <span>{card.scheduleText}</span>
-        {card.updatedAtLabel ? <span>{card.updatedAtLabel}</span> : null}
+        <span className="flex items-center gap-1.5">
+          <CalendarDays className="size-3.5" />
+          {card.scheduleText}
+        </span>
+        {card.updatedAtLabel ? (
+          <span className="flex items-center gap-1.5">
+            <CircleDot className="size-3.5" />
+            {card.updatedAtLabel}
+          </span>
+        ) : null}
       </div>
       {card.teambitionTaskId ? (
         <select
-          className="kanban-tb-status mb-2 w-full rounded-md border bg-background px-2 py-1 text-xs"
+          className="kanban-tb-status mb-3 w-full rounded-md border bg-background px-2 py-1.5 text-xs"
           value={card.teambitionStatusId || ""}
           onClick={(event) => event.stopPropagation()}
           onMouseDown={(event) => event.stopPropagation()}
@@ -322,14 +347,23 @@ function KanbanCard({
           })}
         </select>
       ) : null}
-      <div className="flex gap-1" onClick={(event) => event.stopPropagation()}>
-        <Button type="button" size="xs" onClick={onOpen}>
+      <div
+        className="flex gap-1 border-t border-border/60 pt-2.5"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <Button type="button" size="xs" variant="ghost" className="text-primary" onClick={onOpen}>
           打开
         </Button>
-        <Button type="button" size="xs" variant="secondary" onClick={onEdit}>
+        <Button type="button" size="xs" variant="ghost" onClick={onEdit}>
           编辑
         </Button>
-        <Button type="button" size="xs" variant="destructive" onClick={onDelete}>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          className="text-destructive hover:text-destructive"
+          onClick={onDelete}
+        >
           删除
         </Button>
       </div>

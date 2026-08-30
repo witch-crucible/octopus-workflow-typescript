@@ -20,15 +20,18 @@ function fmtDate(value: string | undefined): string {
   return value ?? "-"
 }
 
-function countRequirementsByVersion(engine: WorkflowEngine, projectId: string): Map<string, number> {
+async function countRequirementsByVersion(
+  engine: WorkflowEngine,
+  projectId: string,
+): Promise<Map<string, number>> {
   const counts = new Map<string, number>()
-  for (const item of engine.listVersionRequirements(projectId)) {
+  for (const item of await engine.listVersionRequirements(projectId)) {
     counts.set(item.versionId, (counts.get(item.versionId) ?? 0) + 1)
   }
   return counts
 }
 
-function printVersionRows(
+async function printVersionRows(
   engine: WorkflowEngine,
   projectId: string,
   versions: Array<{
@@ -38,9 +41,9 @@ function printVersionRows(
     startDate?: string
     endDate?: string
   }>,
-): void {
-  const counts = countRequirementsByVersion(engine, projectId)
-  const repoId = engine.getProject(projectId).teambitionVersion?.repoId ?? ""
+): Promise<void> {
+  const counts = await countRequirementsByVersion(engine, projectId)
+  const repoId = (await engine.getProject(projectId)).teambitionVersion?.repoId ?? ""
   console.log(`📌 版本（${versions.length}）  仓库 ${repoId}`)
   console.log()
   for (const v of versions) {
@@ -74,7 +77,7 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
           console.log("该仓库暂无版本。")
           return
         }
-        printVersionRows(engine, projectId, versions)
+        await printVersionRows(engine, projectId, versions)
       } catch (err) {
         console.error(`❌ 列出版本失败: ${(err as Error).message}`)
         process.exit(1)
@@ -119,7 +122,7 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
           return
         }
         console.log(`✅ 已同步版本（${versions.length}）`)
-        if (versions.length > 0) printVersionRows(engine, projectId, versions)
+        if (versions.length > 0) await printVersionRows(engine, projectId, versions)
       } catch (err) {
         console.error(`❌ 同步版本失败: ${(err as Error).message}`)
         process.exit(1)
@@ -133,39 +136,41 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
     .option("--set <versionId>", "设置默认版本")
     .option("--clear", "清除默认版本")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { set?: string; clear?: boolean; json?: boolean }) => {
-      try {
-        const project = engine.getProject(projectId)
-        if (options.clear) {
-          engine.setProjectDefaultVersion(projectId, null)
-          if (options.json) {
-            console.log(JSON.stringify({ projectId, defaultVersionId: null }, null, 2))
+    .action(
+      async (projectId: string, options: { set?: string; clear?: boolean; json?: boolean }) => {
+        try {
+          const project = await engine.getProject(projectId)
+          if (options.clear) {
+            await engine.setProjectDefaultVersion(projectId, null)
+            if (options.json) {
+              console.log(JSON.stringify({ projectId, defaultVersionId: null }, null, 2))
+              return
+            }
+            console.log(`✅ 已清除默认版本: ${projectId}`)
             return
           }
-          console.log(`✅ 已清除默认版本: ${projectId}`)
-          return
-        }
-        if (options.set !== undefined) {
-          const updated = engine.setProjectDefaultVersion(projectId, options.set)
-          const current = updated.teambitionVersion?.defaultVersionId ?? null
+          if (options.set !== undefined) {
+            const updated = await engine.setProjectDefaultVersion(projectId, options.set)
+            const current = updated.teambitionVersion?.defaultVersionId ?? null
+            if (options.json) {
+              console.log(JSON.stringify({ projectId, defaultVersionId: current }, null, 2))
+              return
+            }
+            console.log(`✅ 已设置默认版本: ${current}`)
+            return
+          }
+          const current = project.teambitionVersion?.defaultVersionId ?? null
           if (options.json) {
             console.log(JSON.stringify({ projectId, defaultVersionId: current }, null, 2))
             return
           }
-          console.log(`✅ 已设置默认版本: ${current}`)
-          return
+          console.log(current === null ? "📌 默认版本: 未设置" : `📌 默认版本: ${current}`)
+        } catch (err) {
+          console.error(`❌ 设置默认版本失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        const current = project.teambitionVersion?.defaultVersionId ?? null
-        if (options.json) {
-          console.log(JSON.stringify({ projectId, defaultVersionId: current }, null, 2))
-          return
-        }
-        console.log(current === null ? "📌 默认版本: 未设置" : `📌 默认版本: ${current}`)
-      } catch (err) {
-        console.error(`❌ 设置默认版本失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 
   version
     .command("bind")
@@ -193,9 +198,9 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
     .description("解除需求的版本绑定")
     .argument("<requirementId>", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((requirementId: string, options: { json?: boolean }) => {
+    .action(async (requirementId: string, options: { json?: boolean }) => {
       try {
-        const state = engine.unbindRequirementVersion(requirementId)
+        const state = await engine.unbindRequirementVersion(requirementId)
         if (options.json) {
           console.log(JSON.stringify(state, null, 2))
           return
@@ -214,32 +219,36 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
     .argument("<versionId>", "版本 ID")
     .option("--set <text>", "设置版本说明（空串可清空）")
     .option("--json", "以 JSON 格式输出")
-    .action(async (projectId: string, versionId: string, options: { set?: string; json?: boolean }) => {
-      try {
-        if (options.set !== undefined) {
-          const result = await engine.updateVersionNote(projectId, versionId, options.set)
-          if (options.json) {
-            console.log(JSON.stringify(result, null, 2))
+    .action(
+      async (projectId: string, versionId: string, options: { set?: string; json?: boolean }) => {
+        try {
+          if (options.set !== undefined) {
+            const result = await engine.updateVersionNote(projectId, versionId, options.set)
+            if (options.json) {
+              console.log(JSON.stringify(result, null, 2))
+              return
+            }
+            console.log("✅ 版本说明已更新")
+            console.log(`   版本: ${result.versionId}`)
+            console.log(`   说明: ${result.note === "" ? "（空）" : result.note}`)
             return
           }
-          console.log("✅ 版本说明已更新")
-          console.log(`   版本: ${result.versionId}`)
-          console.log(`   说明: ${result.note === "" ? "（空）" : result.note}`)
-          return
+          const project = await engine.getProject(projectId)
+          const cached = project.teambitionVersion?.versionsCache?.find(
+            (v) => v.versionId === versionId,
+          )
+          const note = cached?.note
+          if (options.json) {
+            console.log(JSON.stringify({ projectId, versionId, note: note ?? null }, null, 2))
+            return
+          }
+          console.log(note === undefined ? "📌 版本说明: （空）" : `📌 版本说明: ${note}`)
+        } catch (err) {
+          console.error(`❌ 版本说明失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        const project = engine.getProject(projectId)
-        const cached = project.teambitionVersion?.versionsCache?.find((v) => v.versionId === versionId)
-        const note = cached?.note
-        if (options.json) {
-          console.log(JSON.stringify({ projectId, versionId, note: note ?? null }, null, 2))
-          return
-        }
-        console.log(note === undefined ? "📌 版本说明: （空）" : `📌 版本说明: ${note}`)
-      } catch (err) {
-        console.error(`❌ 版本说明失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 
   version
     .command("members")
@@ -247,9 +256,9 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
     .argument("<projectId>", "项目 ID")
     .option("--version <versionId>", "按版本过滤")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { version?: string; json?: boolean }) => {
+    .action(async (projectId: string, options: { version?: string; json?: boolean }) => {
       try {
-        const members = engine.listVersionRequirements(projectId, options.version)
+        const members = await engine.listVersionRequirements(projectId, options.version)
         if (options.json) {
           console.log(JSON.stringify(members, null, 2))
           return
@@ -260,7 +269,9 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
         }
         console.log(`\n📋 挂版本需求（${members.length}）\n`)
         for (const m of members) {
-          console.log(`   ${m.requirementName}   ${m.requirementId}   ${m.versionName ?? m.versionId}`)
+          console.log(
+            `   ${m.requirementName}   ${m.requirementId}   ${m.versionName ?? m.versionId}`,
+          )
         }
         console.log()
       } catch (err) {
@@ -274,9 +285,9 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
     .description("查看需求的版本绑定")
     .argument("<requirementId>", "需求 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((requirementId: string, options: { json?: boolean }) => {
+    .action(async (requirementId: string, options: { json?: boolean }) => {
       try {
-        const binding = engine.getRequirementVersionBinding(requirementId)
+        const binding = await engine.getRequirementVersionBinding(requirementId)
         if (options.json) {
           console.log(JSON.stringify(binding ?? null, null, 2))
           return
@@ -285,7 +296,9 @@ export function buildVersionCommands(program: Command, engine: WorkflowEngine): 
           console.log("未绑定")
           return
         }
-        console.log(`版本: ${binding.versionId}${binding.versionName ? `   ${binding.versionName}` : ""}`)
+        console.log(
+          `版本: ${binding.versionId}${binding.versionName ? `   ${binding.versionName}` : ""}`,
+        )
         if (binding.repoId) console.log(`   仓库: ${binding.repoId}`)
         if (binding.url) console.log(`   URL: ${binding.url}`)
       } catch (err) {

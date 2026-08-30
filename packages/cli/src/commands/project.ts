@@ -28,9 +28,9 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .argument("<name>", "项目名称")
     .option("-d, --desc <desc>", "项目描述")
     .option("--json", "以 JSON 格式输出")
-    .action((name: string, options: { desc?: string; json?: boolean }) => {
+    .action(async (name: string, options: { desc?: string; json?: boolean }) => {
       try {
-        const created = engine.createProject(name, options.desc)
+        const created = await engine.createProject(name, options.desc)
         if (options.json) {
           console.log(JSON.stringify(created, null, 2))
           return
@@ -48,9 +48,9 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .command("list")
     .description("列出全部项目")
     .option("--json", "以 JSON 格式输出")
-    .action((options: { json?: boolean }) => {
+    .action(async (options: { json?: boolean }) => {
       try {
-        const summaries = engine.listProjectSummaries()
+        const summaries = await engine.listProjectSummaries()
         if (options.json) {
           console.log(JSON.stringify(summaries, null, 2))
           return
@@ -87,43 +87,40 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .option("--name <name>", "新名称")
     .option("-d, --desc <desc>", "新描述")
     .option("--json", "以 JSON 格式输出")
-    .action((
-      projectId: string,
-      options: { name?: string; desc?: string; json?: boolean },
-    ) => {
-      try {
-        if (options.name === undefined && options.desc === undefined) {
-          throw new Error("请至少提供 --name 或 --desc")
+    .action(
+      async (projectId: string, options: { name?: string; desc?: string; json?: boolean }) => {
+        try {
+          if (options.name === undefined && options.desc === undefined) {
+            throw new Error("请至少提供 --name 或 --desc")
+          }
+          const patch: { name?: string; description?: string } = {}
+          if (options.name !== undefined) patch.name = options.name
+          if (options.desc !== undefined) patch.description = options.desc
+          const updated = await engine.updateProjectMeta(projectId, patch)
+          if (options.json) {
+            console.log(JSON.stringify(updated, null, 2))
+            return
+          }
+          console.log(`✅ 项目已更新: ${updated.name}`)
+          console.log(`   项目 ID: ${updated.projectId}`)
+        } catch (err) {
+          console.error(`❌ 更新项目失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        const patch: { name?: string; description?: string } = {}
-        if (options.name !== undefined) patch.name = options.name
-        if (options.desc !== undefined) patch.description = options.desc
-        const updated = engine.updateProjectMeta(projectId, patch)
-        if (options.json) {
-          console.log(JSON.stringify(updated, null, 2))
-          return
-        }
-        console.log(`✅ 项目已更新: ${updated.name}`)
-        console.log(`   项目 ID: ${updated.projectId}`)
-      } catch (err) {
-        console.error(`❌ 更新项目失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 
   project
     .command("delete")
     .description("删除项目及其下需求状态（不删除源码目录）")
     .argument("<projectId>", "项目 ID")
     .option("--yes", "确认删除")
-    .action((projectId: string, options: { yes?: boolean }) => {
+    .action(async (projectId: string, options: { yes?: boolean }) => {
       try {
         if (!options.yes) {
-          throw new Error(
-            "删除不可恢复，请加 --yes 确认。只会删除状态库记录，不会删除源码目录。",
-          )
+          throw new Error("删除不可恢复，请加 --yes 确认。只会删除状态库记录，不会删除源码目录。")
         }
-        engine.deleteProject(projectId)
+        await engine.deleteProject(projectId)
         console.log(`✅ 已删除项目: ${projectId}`)
       } catch (err) {
         console.error(`❌ 删除项目失败: ${(err as Error).message}`)
@@ -138,41 +135,43 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .option("--tb-project <id>", "Teambition 项目 ID")
     .option("--prefix <PREFIX>", "Teambition 项目前缀")
     .option("--json", "以 JSON 格式输出")
-    .action(async (
-      projectId: string,
-      options: { tbProject?: string; prefix?: string; json?: boolean },
-    ) => {
-      try {
-        if (!options.tbProject && !options.prefix) {
-          throw new Error("请提供 --tb-project <id> 或 --prefix <PREFIX>")
+    .action(
+      async (
+        projectId: string,
+        options: { tbProject?: string; prefix?: string; json?: boolean },
+      ) => {
+        try {
+          if (!options.tbProject && !options.prefix) {
+            throw new Error("请提供 --tb-project <id> 或 --prefix <PREFIX>")
+          }
+          const updated = await engine.bindProjectTeambition(projectId, {
+            ...(options.tbProject !== undefined ? { projectId: options.tbProject } : {}),
+            ...(options.prefix !== undefined ? { prefix: options.prefix } : {}),
+          })
+          if (options.json) {
+            console.log(JSON.stringify(updated, null, 2))
+            return
+          }
+          console.log(`✅ 已绑定 Teambition 项目: ${updated.teambition?.projectId}`)
+          if (updated.teambition?.name) console.log(`   名称: ${updated.teambition.name}`)
+          if (updated.teambition?.uniqueIdPrefix) {
+            console.log(`   前缀: ${updated.teambition.uniqueIdPrefix}`)
+          }
+        } catch (err) {
+          console.error(`❌ 绑定 Teambition 失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        const updated = await engine.bindProjectTeambition(projectId, {
-          ...(options.tbProject !== undefined ? { projectId: options.tbProject } : {}),
-          ...(options.prefix !== undefined ? { prefix: options.prefix } : {}),
-        })
-        if (options.json) {
-          console.log(JSON.stringify(updated, null, 2))
-          return
-        }
-        console.log(`✅ 已绑定 Teambition 项目: ${updated.teambition?.projectId}`)
-        if (updated.teambition?.name) console.log(`   名称: ${updated.teambition.name}`)
-        if (updated.teambition?.uniqueIdPrefix) {
-          console.log(`   前缀: ${updated.teambition.uniqueIdPrefix}`)
-        }
-      } catch (err) {
-        console.error(`❌ 绑定 Teambition 失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 
   project
     .command("unbind-tb")
     .description("解除 Teambition 项目绑定")
     .argument("<projectId>", "项目 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { json?: boolean }) => {
+    .action(async (projectId: string, options: { json?: boolean }) => {
       try {
-        const updated = engine.unbindProjectTeambition(projectId)
+        const updated = await engine.unbindProjectTeambition(projectId)
         if (options.json) {
           console.log(JSON.stringify(updated, null, 2))
           return
@@ -193,42 +192,50 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .option("--tb-project <tbProjectId>", "Teambition 项目 ID")
     .option("--name <name>", "版本仓库名称")
     .option("--json", "以 JSON 格式输出")
-    .action(async (
-      projectId: string,
-      options: { repo: string; plugin?: string; tbProject?: string; name?: string; json?: boolean },
-    ) => {
-      try {
-        const updated = await engine.bindProjectTeambitionRepo(projectId, {
-          repoId: options.repo,
-          ...(options.plugin !== undefined ? { pluginId: options.plugin } : {}),
-          ...(options.tbProject !== undefined ? { tbProjectId: options.tbProject } : {}),
-          ...(options.name !== undefined ? { name: options.name } : {}),
-        })
-        if (options.json) {
-          console.log(JSON.stringify(updated, null, 2))
-          return
+    .action(
+      async (
+        projectId: string,
+        options: {
+          repo: string
+          plugin?: string
+          tbProject?: string
+          name?: string
+          json?: boolean
+        },
+      ) => {
+        try {
+          const updated = await engine.bindProjectTeambitionRepo(projectId, {
+            repoId: options.repo,
+            ...(options.plugin !== undefined ? { pluginId: options.plugin } : {}),
+            ...(options.tbProject !== undefined ? { tbProjectId: options.tbProject } : {}),
+            ...(options.name !== undefined ? { name: options.name } : {}),
+          })
+          if (options.json) {
+            console.log(JSON.stringify(updated, null, 2))
+            return
+          }
+          console.log(`✅ 已绑定 Teambition 版本仓库: ${updated.teambitionVersion?.repoId}`)
+          if (updated.teambitionVersion?.pluginId) {
+            console.log(`   插件: ${updated.teambitionVersion.pluginId}`)
+          }
+          if (updated.teambitionVersion?.tbProjectId) {
+            console.log(`   TB 项目: ${updated.teambitionVersion.tbProjectId}`)
+          }
+        } catch (err) {
+          console.error(`❌ 绑定版本仓库失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        console.log(`✅ 已绑定 Teambition 版本仓库: ${updated.teambitionVersion?.repoId}`)
-        if (updated.teambitionVersion?.pluginId) {
-          console.log(`   插件: ${updated.teambitionVersion.pluginId}`)
-        }
-        if (updated.teambitionVersion?.tbProjectId) {
-          console.log(`   TB 项目: ${updated.teambitionVersion.tbProjectId}`)
-        }
-      } catch (err) {
-        console.error(`❌ 绑定版本仓库失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 
   project
     .command("unbind-tb-repo")
     .description("解除 Teambition 版本仓库绑定")
     .argument("<projectId>", "项目 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { json?: boolean }) => {
+    .action(async (projectId: string, options: { json?: boolean }) => {
       try {
-        const updated = engine.unbindProjectTeambitionRepo(projectId)
+        const updated = await engine.unbindProjectTeambitionRepo(projectId)
         if (options.json) {
           console.log(JSON.stringify(updated, null, 2))
           return
@@ -272,18 +279,26 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .description("查看项目只读概览")
     .argument("<projectId>", "项目 ID")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { json?: boolean }) => {
+    .action(async (projectId: string, options: { json?: boolean }) => {
       try {
-        const overview = engine.getProjectOverview(projectId)
+        const overview = await engine.getProjectOverview(projectId)
         if (options.json) {
           console.log(JSON.stringify(overview, null, 2))
           return
         }
         console.log(`\n📊 项目概览：${overview.projectName}\n`)
-        console.log(`   需求数: ${overview.requirementCount} · 未排期: ${overview.unscheduledCount} · 未绑 TB: ${overview.unboundTbCount} · 无负责人: ${overview.ownerlessCount}`)
-        console.log(`   里程碑: 计划 ${overview.milestonePlanned} / 达成 ${overview.milestoneReached} / 逾期 ${overview.milestoneOverdue}`)
-        console.log(`   海因里希: 重大 ${overview.heinrich.major} / 轻微 ${overview.heinrich.minor} / 未遂 ${overview.heinrich.trivial}`)
-        console.log(`   节点: 可运行 ${overview.readyNodeCount} / 等待 ${overview.waitingNodeCount}`)
+        console.log(
+          `   需求数: ${overview.requirementCount} · 未排期: ${overview.unscheduledCount} · 未绑 TB: ${overview.unboundTbCount} · 无负责人: ${overview.ownerlessCount}`,
+        )
+        console.log(
+          `   里程碑: 计划 ${overview.milestonePlanned} / 达成 ${overview.milestoneReached} / 逾期 ${overview.milestoneOverdue}`,
+        )
+        console.log(
+          `   海因里希: 重大 ${overview.heinrich.major} / 轻微 ${overview.heinrich.minor} / 未遂 ${overview.heinrich.trivial}`,
+        )
+        console.log(
+          `   节点: 可运行 ${overview.readyNodeCount} / 等待 ${overview.waitingNodeCount}`,
+        )
         console.log(`   阶段分布:`)
         for (const item of overview.byPhase) {
           console.log(`     ${item.phase}: ${item.count}`)
@@ -303,24 +318,26 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .option("--file <name>", "文件名（不含 .oplx 后缀）")
     .option("--yes", "跳过覆盖确认")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { file?: string; yes?: boolean; json?: boolean }) => {
-      try {
-        const result = engine.exportProjectOmniPlan(projectId, {
-          ...(options.file !== undefined ? { fileName: options.file } : {}),
-        })
-        if (options.json) {
-          console.log(JSON.stringify(result, null, 2))
-          return
+    .action(
+      async (projectId: string, options: { file?: string; yes?: boolean; json?: boolean }) => {
+        try {
+          const result = await engine.exportProjectOmniPlan(projectId, {
+            ...(options.file !== undefined ? { fileName: options.file } : {}),
+          })
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2))
+            return
+          }
+          console.log(`✅ 已导出 OmniPlan 文件`)
+          console.log(`   路径: ${result.path}`)
+          console.log(`   需求数: ${result.taskCount}`)
+          console.log(`   文件夹: ${result.folder}`)
+        } catch (err) {
+          console.error(`❌ 导出 OmniPlan 失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        console.log(`✅ 已导出 OmniPlan 文件`)
-        console.log(`   路径: ${result.path}`)
-        console.log(`   需求数: ${result.taskCount}`)
-        console.log(`   文件夹: ${result.folder}`)
-      } catch (err) {
-        console.error(`❌ 导出 OmniPlan 失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 
   project
     .command("omniplan-import")
@@ -328,14 +345,14 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .argument("<projectId>", "项目 ID")
     .option("--file <pathOrName>", "文件路径或名称")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { file?: string; json?: boolean }) => {
+    .action(async (projectId: string, options: { file?: string; json?: boolean }) => {
       try {
         const file = options.file
         const isAbsolute = file !== undefined && (file.startsWith("/") || file.startsWith("~"))
         const importOpts: { fileName?: string | undefined; path?: string | undefined } = isAbsolute
           ? { path: file }
           : { fileName: file }
-        const result = engine.importProjectOmniPlan(projectId, importOpts)
+        const result = await engine.importProjectOmniPlan(projectId, importOpts)
         if (options.json) {
           console.log(JSON.stringify(result, null, 2))
           return
@@ -363,44 +380,58 @@ export function buildProjectCommands(program: Command, engine: WorkflowEngine): 
     .option("--set <folder>", "设置 OmniPlan 文件夹名")
     .option("--file-name <name>", "设置目标文件名")
     .option("--json", "以 JSON 格式输出")
-    .action((projectId: string, options: { set?: string; fileName?: string; json?: boolean }) => {
-      try {
-        if (options.set === undefined && options.fileName === undefined) {
-          // Show current settings
-          const project = engine.getProject(projectId)
-          if (options.json) {
-            console.log(JSON.stringify({
-              projectId,
-              omniplanFolder: project.metadata?.["omniplanFolder"],
-              omniplanFileName: project.metadata?.["omniplanFileName"],
-            }, null, 2))
+    .action(
+      async (projectId: string, options: { set?: string; fileName?: string; json?: boolean }) => {
+        try {
+          if (options.set === undefined && options.fileName === undefined) {
+            // Show current settings
+            const project = await engine.getProject(projectId)
+            if (options.json) {
+              console.log(
+                JSON.stringify(
+                  {
+                    projectId,
+                    omniplanFolder: project.metadata?.["omniplanFolder"],
+                    omniplanFileName: project.metadata?.["omniplanFileName"],
+                  },
+                  null,
+                  2,
+                ),
+              )
+              return
+            }
+            console.log(`📌 OmniPlan 设置`)
+            console.log(`   文件夹: ${project.metadata?.["omniplanFolder"] ?? "（未设置）"}`)
+            console.log(`   文件名: ${project.metadata?.["omniplanFileName"] ?? "（未设置）"}`)
             return
           }
-          console.log(`📌 OmniPlan 设置`)
-          console.log(`   文件夹: ${project.metadata?.["omniplanFolder"] ?? "（未设置）"}`)
-          console.log(`   文件名: ${project.metadata?.["omniplanFileName"] ?? "（未设置）"}`)
-          return
-        }
 
-        const patch: { omniplanFolder?: string; omniplanFileName?: string } = {}
-        if (options.set !== undefined) patch.omniplanFolder = options.set
-        if (options.fileName !== undefined) patch.omniplanFileName = options.fileName
+          const patch: { omniplanFolder?: string; omniplanFileName?: string } = {}
+          if (options.set !== undefined) patch.omniplanFolder = options.set
+          if (options.fileName !== undefined) patch.omniplanFileName = options.fileName
 
-        const updated = engine.setProjectOmniPlanMeta(projectId, patch)
-        if (options.json) {
-          console.log(JSON.stringify({
-            projectId,
-            omniplanFolder: updated.metadata?.["omniplanFolder"],
-            omniplanFileName: updated.metadata?.["omniplanFileName"],
-          }, null, 2))
-          return
+          const updated = await engine.setProjectOmniPlanMeta(projectId, patch)
+          if (options.json) {
+            console.log(
+              JSON.stringify(
+                {
+                  projectId,
+                  omniplanFolder: updated.metadata?.["omniplanFolder"],
+                  omniplanFileName: updated.metadata?.["omniplanFileName"],
+                },
+                null,
+                2,
+              ),
+            )
+            return
+          }
+          console.log(`✅ 已更新 OmniPlan 设置`)
+          console.log(`   文件夹: ${updated.metadata?.["omniplanFolder"] ?? "（未设置）"}`)
+          console.log(`   文件名: ${updated.metadata?.["omniplanFileName"] ?? "（未设置）"}`)
+        } catch (err) {
+          console.error(`❌ 设置 OmniPlan 失败: ${(err as Error).message}`)
+          process.exit(1)
         }
-        console.log(`✅ 已更新 OmniPlan 设置`)
-        console.log(`   文件夹: ${updated.metadata?.["omniplanFolder"] ?? "（未设置）"}`)
-        console.log(`   文件名: ${updated.metadata?.["omniplanFileName"] ?? "（未设置）"}`)
-      } catch (err) {
-        console.error(`❌ 设置 OmniPlan 失败: ${(err as Error).message}`)
-        process.exit(1)
-      }
-    })
+      },
+    )
 }

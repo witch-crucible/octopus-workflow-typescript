@@ -13,6 +13,7 @@ const originalAiReviewerEnv: Record<string, string | undefined> = {
   OCTOPUS_AI_COMMANDCODE_PATH: process.env["OCTOPUS_AI_COMMANDCODE_PATH"],
   OCTOPUS_AI_CODEX_PATH: process.env["OCTOPUS_AI_CODEX_PATH"],
 }
+const originalHermesPath = process.env["OCTOPUS_AI_HERMES_PATH"]
 const originalTbEnv: Record<string, string | undefined> = {
   OCTOPUS_TB_APP_ID: process.env["OCTOPUS_TB_APP_ID"],
   OCTOPUS_TB_APP_SECRET: process.env["OCTOPUS_TB_APP_SECRET"],
@@ -35,6 +36,8 @@ afterEach(() => {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
+  if (originalHermesPath === undefined) delete process.env["OCTOPUS_AI_HERMES_PATH"]
+  else process.env["OCTOPUS_AI_HERMES_PATH"] = originalHermesPath
   for (const [key, value] of Object.entries(originalTbEnv)) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
@@ -197,6 +200,14 @@ describe("loadConfig", () => {
       commandCodePath: "/file/commandcode",
       codexPath: "/env/codex",
     })
+  })
+  it("Hermes CLI 路径可由配置或环境变量覆盖", () => {
+    const storeDir = mkdtempSync(join(tmpdir(), "octopus-config-hermes-"))
+    temporaryDirectories.push(storeDir)
+    writeFileSync(join(storeDir, "config.json"), JSON.stringify({ ai: { hermesPath: "/file/hermes" } }))
+    expect(loadConfig(storeDir).ai.hermesPath).toBe("/file/hermes")
+    process.env["OCTOPUS_AI_HERMES_PATH"] = "/env/hermes"
+    expect(loadConfig(storeDir).ai.hermesPath).toBe("/env/hermes")
   })
 
   it("未知额外字段不应导致校验失败", () => {

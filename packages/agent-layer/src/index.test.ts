@@ -128,6 +128,28 @@ describe("createAIClient", () => {
 
     await expect(client.ask({ prompt: "会超时" })).rejects.toThrow("claude 调用超时（50ms）")
   })
+
+  it("以 Hermes 无头模式预加载 Skill，且只启用 skills toolset", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "octopus-hermes-headless-"))
+    temporaryDirectories.push(directory)
+    const fakeHermesPath = join(directory, "fake-hermes.mjs")
+    writeFileSync(
+      fakeHermesPath,
+      ["#!/usr/bin/env node", "process.stdout.write(JSON.stringify(process.argv.slice(2)))"].join("\n"),
+    )
+    chmodSync(fakeHermesPath, 0o755)
+    const client = createAIClient({ hermesPath: fakeHermesPath, defaultTimeout: 0 })
+
+    const response = await client.runHermesSkill("brd-generator", "生成 BRD", {
+      projectRoot: directory,
+    })
+    expect(JSON.parse(response.result)).toEqual([
+      "--in", directory,
+      "--skills", "brd-generator",
+      "--toolsets", "skills",
+      "--oneshot", "生成 BRD",
+    ])
+  })
 })
 
 describe("AIClient.crossReviewCode", () => {
