@@ -25,6 +25,16 @@ describe("brd-design", () => {
     }
   })
 
+  it("默认 BRD 检查提示词要求前后变化与需求追踪链路", () => {
+    const check = buildDefaultBrdPrompts().check
+    expect(check.system).toContain("前后变化对比")
+    expect(check.system).toContain("需求追踪链路")
+    expect(check.system).toContain("不得把建议描述成已完成变更")
+    expect(check.user).toContain("问题编号、优先级、BRD 位置、前、后、变更依据与影响")
+    expect(check.user).toContain("需求/源证据、证据类型、BRD 条款或需求编号、验收标准")
+    expect(check.user).toContain("待确认")
+  })
+
   it("空 metadata 解析为空配置", () => {
     expect(parseBrdDesignConfigFromMetadata(undefined)).toEqual(createEmptyBrdDesignConfig())
     expect(parseBrdDesignConfigFromMetadata({})).toEqual(createEmptyBrdDesignConfig())

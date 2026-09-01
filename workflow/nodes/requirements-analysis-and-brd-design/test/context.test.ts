@@ -92,6 +92,20 @@ describe("gatherBrdSourceContext", () => {
     expect(withSummarize.map((p) => p.id)).toEqual(["summarize-sources", "generate"])
   })
 
+  it("默认 check 提示词渲染前后变化与追踪链路输出约束", () => {
+    const context = gatherBrdSourceContext(createEmptyBrdDesignConfig(), root, {
+      name: "支付改版",
+      description: "缩短支付流程",
+    })
+    const prompts = renderBrdPromptsForContext(createEmptyBrdDesignConfig(), context, "check")
+
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]!.system).toContain("前后变化对比")
+    expect(prompts[0]!.system).toContain("需求追踪链路")
+    expect(prompts[0]!.prompt).toContain("BRD 条款或需求编号")
+    expect(prompts[0]!.prompt).toContain("「后」仅表示建议文本或目标状态")
+  })
+
   it("encodeBrdPromptEnvelope 输出合法 JSON", () => {
     const encoded = encodeBrdPromptEnvelope("sys", "user")
     expect(JSON.parse(encoded)).toEqual({ system: "sys", prompt: "user" })

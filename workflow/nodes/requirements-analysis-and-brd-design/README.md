@@ -76,7 +76,10 @@ octopus brd check [requirementId] [--dry-run] [--json]
 
 - `generate`：写入配置的 BRD 产出路径，并登记 `ArtifactType.BRD`
 - `optimize`：以 `hermes --oneshot` 无头模式预加载 `brd-generator` Skill；基于最新历史 BRD 与当前代码完成起草、审查和自动修订，只将最终 Markdown 写入产出路径并登记 `ArtifactType.BRD`
-- `check`：要求已有 BRD；报告写到同目录 `brd-check-report.md`，**不覆盖** BRD 正文
+- `check`：要求已有 BRD；报告写到同目录 `brd-check-report.md`，**不覆盖** BRD 正文。内置评审提示词要求报告包含：
+  - 前后变化对比：以现有 BRD 原文或现状为「前」，建议文本或目标状态为「后」，并标明依据与影响；「后」不表示修改已经完成。
+  - 需求追踪链路：从需求描述或项目源证据，追踪到 BRD 条款/需求编号、验收标准、风险或待确认项，并用稳定问题编号关联缺口与修改建议。
+  - 证据边界：区分明确事实、代码现状、推断与待确认内容；证据不足时保留为待确认，不编造链路。
 - `--dry-run`：只渲染提示词，不调用 AI/Hermes
 
 ## Hermes 无头模式准备
