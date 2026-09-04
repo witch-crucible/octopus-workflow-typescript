@@ -247,7 +247,7 @@ export function buildKanbanModel(
   const query = filter.trim().toLowerCase()
   const filteredItems = items.filter((item) => {
     if (!query) return true
-    return [item.requirementName, item.requirementId, item.description].some((field) =>
+    return [item.requirementName, item.requirementId, item.description, item.owner].some((field) =>
       String(field || "")
         .toLowerCase()
         .includes(query),

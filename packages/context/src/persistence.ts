@@ -1,13 +1,5 @@
 import { isAbsolute, resolve } from "node:path"
-import postgres, { type Sql } from "postgres"
-import { and, desc, eq, inArray, isNotNull, lt, sql } from "drizzle-orm"
-import { drizzle } from "drizzle-orm/postgres-js"
-import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core"
-import type { WorkflowState } from "@octopus/core/workflow.js"
-import type { Project } from "@octopus/core/project.js"
 import { ProjectId, RequirementId } from "@octopus/core/branded-ids.js"
-import { createEmptyState, migrateWorkflowState } from "@octopus/core/workflow.js"
-import { createEmptyProject } from "@octopus/core/project.js"
 import { PersistenceError, StoreError } from "@octopus/core/errors.js"
 import type {
   IntegrationHealth,
@@ -15,6 +7,14 @@ import type {
   NodeRunStatus,
   WorkflowEvent,
 } from "@octopus/core/execution.js"
+import type { Project } from "@octopus/core/project.js"
+import { createEmptyProject } from "@octopus/core/project.js"
+import type { WorkflowState } from "@octopus/core/workflow.js"
+import { createEmptyState, migrateWorkflowState } from "@octopus/core/workflow.js"
+import { and, desc, eq, inArray, isNotNull, lt, sql } from "drizzle-orm"
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core"
+import { drizzle } from "drizzle-orm/postgres-js"
+import postgres, { type Sql } from "postgres"
 import { describeDatabaseUrl, resolveDatabaseUrl } from "./database-config.js"
 import {
   integrationHealth,
@@ -40,6 +40,8 @@ export interface PersistenceStoreOptions extends Partial<StoreConfig> {
 export interface PersistenceStore extends StateStore, ExecutionStore {
   close(): Promise<void>
   getSyncStatus(): Promise<SyncStatus>
+  syncWithRemote(): Promise<SyncStatus>
+  /** @deprecated 使用 syncWithRemote；保留用于兼容现有调用方。 */
   syncWithSupabase(): Promise<SyncStatus>
 }
 
@@ -66,7 +68,7 @@ export async function createPostgresPersistenceStore(
   } catch {
     throw new PersistenceError(
       "DATABASE_UNAVAILABLE",
-      `DATABASE_URL 无效（${target}）；请检查 PostgreSQL 连接串格式`,
+      `远端数据库连接串无效（${target}）；请检查 PostgreSQL 连接串格式`,
     )
   }
   const database = drizzle(client, { schema: persistenceSchema }) as unknown as PersistenceDatabase
@@ -76,7 +78,7 @@ export async function createPostgresPersistenceStore(
     await client.end({ timeout: 1 }).catch(() => undefined)
     throw new PersistenceError(
       "DATABASE_UNAVAILABLE",
-      `无法连接 PostgreSQL ${target}；请检查 DATABASE_URL、网络和 Supabase 项目状态`,
+      `无法连接 PostgreSQL ${target}；请检查 CloudBase 连接串、网络和数据库状态`,
     )
   }
 
@@ -152,11 +154,21 @@ class PostgresPersistenceStore implements PersistenceStore {
   }
 
   async getSyncStatus(): Promise<SyncStatus> {
-    return { state: "never-synced", localRevision: 0, lastSyncedLocalRevision: 0 }
+    return {
+      state: "never-synced",
+      localRevision: 0,
+      lastSyncedLocalRevision: 0,
+      remoteDataRevision: 0,
+      lastSyncedRemoteDataRevision: 0,
+    }
+  }
+
+  async syncWithRemote(): Promise<SyncStatus> {
+    throw new Error("PostgreSQL repository 不支持本地快照同步；请使用本地主库")
   }
 
   async syncWithSupabase(): Promise<SyncStatus> {
-    throw new Error("PostgreSQL repository 不支持本地快照同步；请使用本地主库")
+    return this.syncWithRemote()
   }
 
   async load(requirementId: string): Promise<WorkflowState> {

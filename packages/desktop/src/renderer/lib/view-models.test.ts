@@ -117,6 +117,7 @@ describe("buildKanbanModel", () => {
       requirementId: "r2",
       requirementName: "Two",
       description: "d2",
+      owner: "李四",
       currentPhase: "Design",
       completedTasks: 1,
       totalTasks: 2,
@@ -139,6 +140,17 @@ describe("buildKanbanModel", () => {
       expect(intention?.cards[0]?.scheduleText).toBe("01-10 → 01-20")
       expect(design?.cards[0]?.highlight).toBe(true)
       expect(model.filtered).toHaveLength(2)
+    }
+  })
+
+  it("filters by owner as well as requirement text", () => {
+    const model = buildKanbanModel(items, { filter: "李四" })
+
+    expect(model.kind).toBe("columns")
+    if (model.kind === "columns") {
+      expect(model.filtered.map((card) => card.requirementId)).toEqual(["r2"])
+      expect(model.columns.find((column) => column.phase === "Design")?.cards).toHaveLength(1)
+      expect(model.columns.find((column) => column.phase === "Intention")?.cards).toHaveLength(0)
     }
   })
 })

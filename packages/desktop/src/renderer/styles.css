@@ -319,6 +319,36 @@
   stroke-width: 1.5;
 }
 
+.node.is-collapsed {
+  opacity: 0.58;
+}
+.node.is-collapsed:hover,
+.node.is-collapsed:focus-visible,
+.node.is-collapsed.selected {
+  opacity: 0.9;
+}
+.node.is-collapsed .card {
+  stroke-dasharray: 4 3;
+  filter: none;
+}
+.node.is-collapsed .role-bar {
+  opacity: 0.55;
+}
+.node .collapsed-label {
+  fill: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+.node .collapsed-meta,
+.node .collapsed-mark {
+  fill: var(--node-meta);
+  font-size: 10.5px;
+}
+.node .collapsed-mark {
+  font-size: 16px;
+  font-weight: 700;
+}
+
 .node.current .card {
   stroke: var(--primary);
   stroke-width: 3;

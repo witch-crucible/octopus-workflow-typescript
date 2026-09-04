@@ -280,6 +280,13 @@ export class TeambitionClient {
   }
 
   private async resolveTaskInternal(ref: string, _projectId?: string): Promise<TbTask | null> {
+    if (/^[0-9a-f]{24}$/i.test(ref)) {
+      const detail = await this.tbGet(`/v3/task/query?taskId=${encodeURIComponent(ref)}`)
+      const task = detail.result?.[0] ?? null
+      if (!task) return null
+      return this.withStatusName(this.mapTask(task, ref), task)
+    }
+
     const n = numericRef(ref)
 
     if (this.refStrategy === "prefix") {

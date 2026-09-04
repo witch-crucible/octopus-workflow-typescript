@@ -1,18 +1,32 @@
-import { afterEach, describe, expect, it } from "vitest"
-import { PersistenceError } from "@octopus/core/errors.js"
 import { PGlite } from "@electric-sql/pglite"
+import { PersistenceError } from "@octopus/core/errors.js"
 import { drizzle } from "drizzle-orm/pglite"
-import { describeDatabaseUrl, resolveDatabaseUrl } from "./database-config.js"
+import { afterEach, describe, expect, it } from "vitest"
+import {
+  describeDatabaseUrl,
+  resolveCloudBaseDatabaseUrl,
+  resolveCloudBasePgRestConfig,
+  resolveDatabaseUrl,
+} from "./database-config.js"
 import { persistenceSchema } from "./db/schema.js"
 import { createPersistenceStoreFromDatabase, type PersistenceDatabase } from "./persistence.js"
 import { createTestPersistenceStore } from "./testing.js"
 
 const originalDatabaseUrl = process.env["DATABASE_URL"]
+const originalCloudBaseDatabaseUrl = process.env["CLOUDBASE_DATABASE_URL"]
+const originalCloudBaseEnvId = process.env["CLOUDBASE_ENV_ID"]
+const originalCloudBaseApiKey = process.env["CLOUDBASE_APIKEY"]
 const originalNodeEnv = process.env["NODE_ENV"]
 
 afterEach(() => {
   if (originalDatabaseUrl === undefined) delete process.env["DATABASE_URL"]
   else process.env["DATABASE_URL"] = originalDatabaseUrl
+  if (originalCloudBaseDatabaseUrl === undefined) delete process.env["CLOUDBASE_DATABASE_URL"]
+  else process.env["CLOUDBASE_DATABASE_URL"] = originalCloudBaseDatabaseUrl
+  if (originalCloudBaseEnvId === undefined) delete process.env["CLOUDBASE_ENV_ID"]
+  else process.env["CLOUDBASE_ENV_ID"] = originalCloudBaseEnvId
+  if (originalCloudBaseApiKey === undefined) delete process.env["CLOUDBASE_APIKEY"]
+  else process.env["CLOUDBASE_APIKEY"] = originalCloudBaseApiKey
   if (originalNodeEnv === undefined) delete process.env["NODE_ENV"]
   else process.env["NODE_ENV"] = originalNodeEnv
 })
@@ -59,8 +73,9 @@ describe("PostgreSQL schema", () => {
     }
   })
 
-  it("缺失 DATABASE_URL 使用明确错误码且不包含凭据", () => {
+  it("缺失远端数据库连接串使用明确错误码且不包含凭据", () => {
     delete process.env["DATABASE_URL"]
+    delete process.env["CLOUDBASE_DATABASE_URL"]
     process.env["NODE_ENV"] = "production"
     expect(() => resolveDatabaseUrl({ storeDir: "/path/that/does/not/exist" })).toThrowError(
       expect.objectContaining({ code: "DATABASE_UNAVAILABLE" }),
@@ -71,6 +86,43 @@ describe("PostgreSQL schema", () => {
       expect(cause).toBeInstanceOf(PersistenceError)
       expect((cause as Error).message).not.toContain("password")
     }
+  })
+
+  it("CloudBase 专用连接串优先于兼容的 DATABASE_URL", () => {
+    process.env["CLOUDBASE_DATABASE_URL"] =
+      "postgresql://cloudbase:secret@cloudbase.example.test:5432/octopus"
+    process.env["DATABASE_URL"] = "postgresql://legacy:secret@legacy.example.test:6543/postgres"
+    process.env["NODE_ENV"] = "production"
+
+    expect(resolveDatabaseUrl()).toContain("cloudbase.example.test")
+  })
+
+  it("CloudBase 专用解析不回退到旧 DATABASE_URL", () => {
+    delete process.env["CLOUDBASE_DATABASE_URL"]
+    process.env["DATABASE_URL"] = "postgresql://legacy:secret@legacy.example.test:6543/postgres"
+    process.env["NODE_ENV"] = "production"
+
+    expect(() => resolveCloudBaseDatabaseUrl()).toThrow("不会回退到 DATABASE_URL")
+  })
+
+  it("根据 CloudBase PG 环境 ID 构造 PostgREST 地址", () => {
+    process.env["CLOUDBASE_ENV_ID"] = "octopus-test-123"
+    process.env["CLOUDBASE_APIKEY"] = "service-role-key"
+    process.env["NODE_ENV"] = "production"
+
+    expect(resolveCloudBasePgRestConfig()).toEqual({
+      envId: "octopus-test-123",
+      apiKey: "service-role-key",
+      baseUrl: "https://octopus-test-123.api.tcloudbasegateway.com/v1/rdb/rest",
+    })
+  })
+
+  it("拒绝可改变 CloudBase 网关主机名的环境 ID", () => {
+    process.env["CLOUDBASE_ENV_ID"] = "invalid.example.com"
+    process.env["CLOUDBASE_APIKEY"] = "service-role-key"
+    process.env["NODE_ENV"] = "production"
+
+    expect(() => resolveCloudBasePgRestConfig()).toThrow("CLOUDBASE_ENV_ID 格式无效")
   })
 
   it("连接目标描述只保留主机、端口和数据库名", () => {

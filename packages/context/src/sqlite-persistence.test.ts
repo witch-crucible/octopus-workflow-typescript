@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
-import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterEach, describe, expect, it } from "vitest"
 import { createSqlitePersistenceStore } from "./sqlite-persistence.js"
 
 const roots: string[] = []
@@ -39,8 +39,46 @@ describe("本地 octopus.sqlite 主库", () => {
     expect(event.sequence).toBe(1)
     expect(await store.listProjects()).toEqual([project.projectId])
     expect(await store.listRequirements(project.projectId)).toEqual([requirement.requirementId])
-    expect((await store.getSyncStatus()).state).toBe("pending")
-    expect((await store.getSyncStatus()).localRevision).toBeGreaterThanOrEqual(4)
+    const status = await store.getSyncStatus()
+    expect(status.state).toBe("pending")
+    expect(status.localRevision).toBeGreaterThanOrEqual(4)
+    expect(status.remoteDataRevision).toBe(2)
+    expect(status.lastSyncedRemoteDataRevision).toBe(0)
+    await store.close()
+  })
+
+  it("运行、事件和健康状态仅增加本地修订，不增加远端必要数据修订", async () => {
+    const root = mkdtempSync(join(tmpdir(), "octopus-local-only-"))
+    roots.push(root)
+    const store = await createSqlitePersistenceStore({ storeDir: root })
+    const project = await store.createProject("项目")
+    const requirement = await store.createRequirement(project.projectId, "需求")
+    const before = await store.getSyncStatus()
+    const run = await store.createRun({
+      requirementId: requirement.requirementId,
+      nodeId: "plan",
+      forced: false,
+      stdoutPath: "",
+      stderrPath: "",
+    })
+    await store.appendEvent({
+      requirementId: requirement.requirementId,
+      runId: run.id,
+      type: "RUN_QUEUED",
+      payload: {},
+      createdAt: new Date().toISOString(),
+    })
+    await store.saveIntegrationHealth({
+      service: "local",
+      healthy: true,
+      latencyMs: 1,
+      message: "ok",
+      checkedAt: new Date().toISOString(),
+    })
+    const after = await store.getSyncStatus()
+
+    expect(after.localRevision).toBe(before.localRevision + 3)
+    expect(after.remoteDataRevision).toBe(before.remoteDataRevision)
     await store.close()
   })
 

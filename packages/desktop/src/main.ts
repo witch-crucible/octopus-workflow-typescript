@@ -112,6 +112,18 @@ function registerIpc(): void {
     engine.getRequirementStatus(requirementId),
   )
   ipcMain.handle("octopus:getState", (_e, requirementId: string) => engine.getState(requirementId))
+  ipcMain.handle("octopus:listSubtasks", (_e, requirementId: string) =>
+    engine.listSubtasks(requirementId),
+  )
+  ipcMain.handle("octopus:addSubtask", (_e, requirementId: string, input: Record<string, unknown>) =>
+    engine.addSubtask(requirementId, input as never),
+  )
+  ipcMain.handle("octopus:setSubtaskStatus", (_e, requirementId: string, subtaskId: string, status: string) =>
+    engine.setSubtaskStatus(requirementId, subtaskId, status as never),
+  )
+  ipcMain.handle("octopus:deleteSubtask", (_e, requirementId: string, subtaskId: string) =>
+    engine.deleteSubtask(requirementId, subtaskId),
+  )
   ipcMain.handle("octopus:getWorkflowDefinition", (_e, requirementId: string) =>
     engine.getWorkflowDefinition(requirementId),
   )

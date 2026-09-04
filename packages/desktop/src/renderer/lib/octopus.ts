@@ -42,6 +42,10 @@ export type OctopusApi = {
   deleteRequirement: (requirementId: string) => Promise<unknown>
   getRequirementStatus: (requirementId: string) => Promise<unknown>
   getState: (requirementId: string) => Promise<RequirementState>
+  listSubtasks: (requirementId: string) => Promise<Subtask[]>
+  addSubtask: (requirementId: string, input: { title: string; description?: string; assignedTo?: string }) => Promise<Subtask>
+  setSubtaskStatus: (requirementId: string, subtaskId: string, status: string) => Promise<Subtask>
+  deleteSubtask: (requirementId: string, subtaskId: string) => Promise<unknown>
   getWorkflowDefinition?: (requirementId: string) => Promise<WorkflowDefinition | undefined>
   getExecutionSnapshot: (requirementId: string) => Promise<ExecutionSnapshot>
   updateNodeSchedule: (
@@ -153,6 +157,17 @@ export type RequirementState = {
   currentPhase?: string
   steps?: GraphNode[]
   [key: string]: unknown
+}
+
+export type Subtask = {
+  id: string
+  requirementId: string
+  title: string
+  description: string
+  status: string
+  assignedTo?: string
+  createdAt: string
+  completedAt?: string
 }
 
 export type WorkflowDefinition = {

@@ -1,4 +1,4 @@
-/** Context 包：PostgreSQL 核心状态与执行记录持久化。 */
+/** Context 包：本地 SQLite 核心状态，以及显式 CloudBase PostgreSQL 必要数据同步。 */
 
 import type { Project } from "@octopus/core/project.js"
 import type { WorkflowState } from "@octopus/core/workflow.js"

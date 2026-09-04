@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld("octopus", {
   getRequirementStatus: (requirementId) =>
     ipcRenderer.invoke("octopus:getRequirementStatus", requirementId),
   getState: (requirementId) => ipcRenderer.invoke("octopus:getState", requirementId),
+  listSubtasks: (requirementId) => ipcRenderer.invoke("octopus:listSubtasks", requirementId),
+  addSubtask: (requirementId, input) => ipcRenderer.invoke("octopus:addSubtask", requirementId, input),
+  setSubtaskStatus: (requirementId, subtaskId, status) =>
+    ipcRenderer.invoke("octopus:setSubtaskStatus", requirementId, subtaskId, status),
+  deleteSubtask: (requirementId, subtaskId) =>
+    ipcRenderer.invoke("octopus:deleteSubtask", requirementId, subtaskId),
   getWorkflowDefinition: (requirementId) =>
     ipcRenderer.invoke("octopus:getWorkflowDefinition", requirementId),
   getExecutionSnapshot: (requirementId) =>

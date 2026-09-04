@@ -88,6 +88,24 @@ export interface CreateTaskParams {
   notes?: string
 }
 
+/** 需求下由用户维护的子任务，不参与工作流阶段门控。 */
+export interface Subtask {
+  id: TaskId
+  requirementId: RequirementId
+  title: string
+  description: string
+  status: TaskStatus
+  assignedTo?: string
+  createdAt: string
+  completedAt?: string
+}
+
+export interface CreateSubtaskParams {
+  title: string
+  description?: string
+  assignedTo?: string
+}
+
 /** 任务过滤条件 */
 export interface TaskFilter {
   phase?: Phase

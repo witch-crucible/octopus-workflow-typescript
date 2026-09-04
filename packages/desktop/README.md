@@ -4,7 +4,7 @@ Octopus 工作流引擎的 **macOS 桌面外壳**（Electron）与本机 Web 界
 
 复用与 CLI 相同的引擎入口（`@octopus/context` 的 `loadConfig` +
 `createWorkflowEngineFromConfig`），通过 IPC / HTTP API 向渲染进程暴露项目和任务能力。
-核心项目状态持久化到 Electron `userData/store/octopus.sqlite`；Supabase PostgreSQL 仅作为用户明确发起的云端快照同步目标。
+核心项目状态持久化到 Electron `userData/store/octopus.sqlite`；CloudBase PG 模式仅通过后端 PostgREST RPC 接收用户明确同步的项目、需求及工作流状态。运行记录、审计事件和集成健康状态只保留在本地。
 
 ## 界面技术栈
 
@@ -27,7 +27,7 @@ pnpm web
 ```
 
 然后访问 `http://127.0.0.1:4173`。默认进入项目管理中心。服务只监听 `127.0.0.1`；
-使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改配置、日志和 SQLite 所在目录；`DATABASE_URL` 只在显式快照同步时需要。
+使用 `OCTOPUS_WEB_PORT` 修改端口，使用 `OCTOPUS_STORE_DIR` 修改配置、日志和 SQLite 所在目录；`CLOUDBASE_ENV_ID` 与仅限后端的 `CLOUDBASE_APIKEY` 只在显式远端同步时需要。
 
 Hash 路由：
 

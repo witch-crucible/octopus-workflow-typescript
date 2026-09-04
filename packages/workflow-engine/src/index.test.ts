@@ -98,6 +98,27 @@ describe("WorkflowEngine 异步持久化", () => {
     expect(engine.getPhaseProgress(loaded, task.phase).completed).toBeGreaterThan(0)
   })
 
+  it("子任务归属需求且不影响工作流阶段进度", async () => {
+    const engine = await createEngine()
+    const { state } = await seed(engine)
+    const subtask = await engine.addSubtask(state.requirementId, {
+      title: "补充接口文档",
+      description: "记录请求和响应示例",
+      assignedTo: "Alice",
+    })
+    expect(subtask).toMatchObject({
+      requirementId: state.requirementId,
+      title: "补充接口文档",
+      status: TaskStatus.PENDING,
+    })
+    expect((await engine.listSubtasks(state.requirementId))).toHaveLength(1)
+    expect((await engine.getTasks(state.requirementId)).some((task) => task.id === subtask.id)).toBe(false)
+    const completed = await engine.completeSubtask(state.requirementId, subtask.id)
+    expect(completed.status).toBe(TaskStatus.COMPLETED)
+    await engine.deleteSubtask(state.requirementId, subtask.id)
+    expect(await engine.listSubtasks(state.requirementId)).toEqual([])
+  })
+
   it("任务导入按 stageId 幂等合并", async () => {
     const engine = await createEngine()
     const first = await seed(engine)

@@ -93,7 +93,7 @@ export function ProjectView({ projectId, projectTab }: ProjectViewProps) {
 
   const wideLayout = tab === "logs" || tab === "table"
   const canCreateRequirement = !["settings", "versions", "logs", "table", "overview"].includes(tab)
-  const showFilter = tab !== "logs"
+  const showFilter = tab === "board" || tab === "table"
 
   const reload = useCallback(async () => {
     const api = getOctopus()
@@ -276,18 +276,20 @@ export function ProjectView({ projectId, projectTab }: ProjectViewProps) {
 
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-60 shrink-0 flex-col border-r bg-card lg:flex">
-          <div className="border-b p-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="search"
-                className="h-8 bg-muted/45 pl-8 text-xs"
-                placeholder="搜索需求或 ID"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-              />
+          {showFilter ? (
+            <div className="border-b p-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="search"
+                  className="h-8 bg-muted/45 pl-8 text-xs"
+                  placeholder="搜索名称、ID、描述或负责人"
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value)}
+                />
+              </div>
             </div>
-          </div>
+          ) : null}
           <nav className="flex-1 p-3">
             <div className="mb-2 flex items-center justify-between px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               <span>项目视图</span>
@@ -342,7 +344,7 @@ export function ProjectView({ projectId, projectTab }: ProjectViewProps) {
                   <Input
                     type="search"
                     className="h-8 pl-8 text-xs"
-                    placeholder="按需求名称或 ID 筛选"
+                    placeholder="按名称、ID、描述或负责人筛选"
                     value={filter}
                     onChange={(event) => setFilter(event.target.value)}
                   />

@@ -84,6 +84,7 @@ describe("migrateWorkflowState", () => {
     const migrated = migrateWorkflowState(v2)
     expect(migrated.schemaVersion).toBe(CURRENT_SCHEMA_VERSION)
     expect(migrated.steps).toEqual([])
+    expect(migrated.subtasks).toEqual([])
   })
 
   it("v4 旧项目字段下沉为需求，并接受所属 projectId", () => {

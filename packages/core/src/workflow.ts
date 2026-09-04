@@ -8,7 +8,7 @@
 
 import type { ProjectId, RequirementId, TaskId } from "./branded-ids.js"
 import { Phase, PhaseLock } from "./phase.js"
-import type { Task, TaskFilter, TaskProgress, StageInfo } from "./task.js"
+import type { Task, TaskFilter, TaskProgress, StageInfo, Subtask } from "./task.js"
 import { TaskStatus, StageStatus } from "./task.js"
 import type { StepRuntime } from "./step.js"
 import type { Checklist, ChecklistItem } from "./checklist.js"
@@ -20,9 +20,9 @@ import type { MilestoneSummary, RequirementMilestone } from "./milestone.js"
 
 /**
  * 当前状态结构版本。
- * v8 需求负责人 owner；v9 需求级 teambitionVersion 绑定（缺省保持 undefined）。
+ * v8 需求负责人 owner；v9 需求级 teambitionVersion 绑定；v10 需求子任务。
  */
-export const CURRENT_SCHEMA_VERSION = 9
+export const CURRENT_SCHEMA_VERSION = 10
 
 /** 需求级 Teambition 任务绑定 */
 export interface RequirementTeambitionBinding {
@@ -67,6 +67,8 @@ export interface WorkflowState {
   phaseStatus: Record<Phase, PhaseLock>
   /** 所有步骤（唯一真相源） */
   steps: StepRuntime[]
+  /** 需求下用户维护的子任务；不参与工作流阶段门控。 */
+  subtasks: Subtask[]
   /** 各阶段清单 */
   checklists: Partial<Record<Phase, Checklist>>
   /** 海因里希三角记录 */
@@ -217,6 +219,7 @@ export function createEmptyState(
     currentPhase: Phase.INTENTION,
     phaseStatus,
     steps: [],
+    subtasks: [],
     checklists: {},
     heinrich: createEmptyHeinrichRecord(),
     artifacts: [],
@@ -407,7 +410,7 @@ function remapHeinrichPhases<T extends { triggerCounts?: Partial<Record<string, 
  * v4 将旧六段 Phase 映射为九段生命周期。
  * v5 将旧「项目」字段下沉为「需求」，并要求所属 projectId。
  * v7 补齐 milestones[]。
- * v9 需求级 teambitionVersion 绑定；缺字段保持 undefined。
+ * v9 需求级 teambitionVersion 绑定；v10 补齐 subtasks[]。
  */
 export function migrateWorkflowState(
   raw: unknown,
@@ -506,6 +509,9 @@ export function migrateWorkflowState(
     currentPhase,
     phaseStatus,
     steps,
+    subtasks: Array.isArray((state as { subtasks?: unknown }).subtasks)
+      ? ((state as { subtasks: Subtask[] }).subtasks ?? [])
+      : [],
     checklists,
     heinrich,
     aiGateResults,

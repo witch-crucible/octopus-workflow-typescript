@@ -69,6 +69,30 @@ describe("TeambitionClient", () => {
   })
 
   describe("resolveTask", () => {
+    it("24 位 taskId 直接按 taskId 查询，不按任务编号解析", async () => {
+      const calls: string[] = []
+      const taskId = "6a97fda18a90111ad46a3f18"
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        calls.push(url)
+        if (url.includes(`task/query?taskId=${taskId}`)) {
+          return Promise.resolve(
+            mockResponse({
+              result: [{ taskId, content: "Object ID Task", projectId: "proj-1", isDone: false }],
+            }),
+          )
+        }
+        return Promise.resolve(mockResponse({ result: [] }))
+      })
+
+      const client = new TeambitionClient({ appId: "a", appSecret: "s", orgId: "o" })
+      const result = await client.resolveTask(taskId)
+
+      expect(result.success).toBe(true)
+      expect((result.data as any).taskId).toBe(taskId)
+      expect(calls.some((call) => call.includes("all-task/search"))).toBe(false)
+      expect(calls.some((call) => call.includes("shortIds="))).toBe(false)
+    })
+
     it("prefix strategy: DIOR-123 -> project -> TQL -> detail", async () => {
       const calls: string[] = []
       globalThis.fetch = vi.fn().mockImplementation((url: string) => {

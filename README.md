@@ -41,9 +41,11 @@ node packages/cli/dist/index.js project create "Acme"
 node packages/cli/dist/index.js init "Feature X" --project <projectId> --root .
 node packages/cli/dist/index.js status
 node packages/cli/dist/index.js node list
+node packages/cli/dist/index.js storage status
+node packages/cli/dist/index.js storage sync
 ```
 
-默认直接使用本地 SQLite 主库：CLI/Web 为 `.octo/octopus.sqlite`，Electron 为 `userData/store/octopus.sqlite`，目录可用 `OCTOPUS_STORE_DIR` 覆盖。`DATABASE_URL` 仅供用户明确发起的一次快照同步使用；缺少连接串或 Supabase 不可用不影响离线启动、项目操作和 worker。先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
+默认直接使用本地 SQLite 主库：CLI/Web 为 `.octo/octopus.sqlite`，Electron 为 `userData/store/octopus.sqlite`，目录可用 `OCTOPUS_STORE_DIR` 覆盖。项目、需求及工作流状态属于必要数据，只在用户明确发起同步时通过 CloudBase PG 模式写入远端；运行记录、审计事件和集成健康状态仅保留在本地。缺少 CloudBase 配置或远端不可用不影响离线启动、项目操作和 worker。先创建**项目**，再在项目下 `init` / `requirement init` 创建**需求**（工作流实例）。下文用 `octopus` 代表 `node packages/cli/dist/index.js`（仓库不会自动安装全局命令）；多数命令在只有一个需求时可省略 `requirementId`。
 
 BRD 自动优化使用 Hermes Agent CLI 的无头模式；TypeScript/JavaScript 运行时仍为 Node.js 20+。
 
@@ -75,7 +77,7 @@ BRD 优化运行记录与查询方式见 [`requirements-analysis-and-brd-design/
 - `workflow.yaml`：需求级、可版本化的 DAG 定义；初始化不会覆盖已有文件。
 - `workflow/nodes/<nodeKey>/`：节点独立工作目录；`workflow/shared/`：节点共享目录。
 - `octopus.sqlite`：项目、需求状态、运行记录、事件与集成健康度的本地核心状态库，使用 WAL、外键和事务。
-- Supabase PostgreSQL：用户明确同意后使用的单机云端快照，不参与普通业务读写，不后台轮询或静默同步。
+- CloudBase PG 模式：用户明确同意后，由后端通过 CloudBase 网关的 PostgREST RPC 原子同步项目和需求必要数据；不接收运行记录、审计事件或集成健康状态，不参与普通业务读写，不后台轮询或静默同步。
 - `.octo/`：本地配置、身份、运行日志、worker 文件和 CLI/Web 的 `octopus.sqlite`；旧 `state.sqlite` 只作为迁移备份保留。
 - `.octo/config.json`：可选的本地配置（含 Teambition 凭据）。
 - `workflow.overlay.yaml`：可选的节点叠加（增/禁/改），不必复制整份 DAG。
@@ -107,7 +109,7 @@ add:
 
 插件导出 `default` 或 `octopusPlugin`，在 `activate(ctx)` 里叠加节点、注册新的 AI 模块 id、集成服务或自定义能力名称；不能覆盖内置 12 类 AI 模块，也不能覆盖 `ai` / `heinrich` 能力处理器。路径相对项目根，包名从该项目的 `node_modules` 解析，加载失败则进程退出。测试夹具 `packages/plugin/fixtures/sample-plugin/` 是一份可复制的最小插件，本仓库默认不启用任何插件。
 
-数据库环境变量：运行时必填 `DATABASE_URL`；迁移可选 `DATABASE_MIGRATION_URL`（推荐 direct 或 5432 session pooler）。开发态读取仓库根 `.env`；打包 Electron 读取进程环境或 `userData/store/.env`。其他变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_HERMES_PATH`。
+CloudBase PG 模式环境变量：`storage sync` 必须读取 `CLOUDBASE_ENV_ID` 和 `CLOUDBASE_APIKEY`，通过 `https://<envId>.api.tcloudbasegateway.com/v1/rdb/rest/rpc/capy_replace_octopus_snapshot` 调用 PostgREST RPC。`CLOUDBASE_APIKEY` 对应 `service_role`，只能注入后端进程，不能传给渲染器或提交到仓库。数据库直连仅用于部署迁移：`pnpm db:migrate` 依次读取 `CLOUDBASE_MIGRATION_URL`、`CLOUDBASE_DATABASE_URL`、`DATABASE_MIGRATION_URL` 和 `DATABASE_URL`；废弃的 Supabase 兼容同步接口仍读取 `DATABASE_URL`。开发态读取仓库根 `.env`；打包 Electron 读取进程环境或 `userData/store/.env`。其他变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_HERMES_PATH`。
 
 数据库首次切换命令：
 
@@ -134,7 +136,7 @@ Teambition（写入 `.octo/config.json` 的 `teambition` 或环境变量）：
 pnpm web
 ```
 
-访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，通过后端进程使用 `DATABASE_URL` 与 CLI/Electron/worker 共享 Supabase 状态；连接串不会传给渲染器。可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 日志 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/archive/teambition-kanban-gantt-omniplan.md`、`docs/archive/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
+访问 `http://127.0.0.1:4173`。服务只监听本机回环地址，普通业务读写本地 SQLite；只有显式远端同步才由后端进程调用 CloudBase PG 模式 PostgREST RPC，环境 API Key 不会传给渲染器。可用 `OCTOPUS_WEB_PORT` 修改端口。界面层级：项目管理中心（含“我的工作”）→ 项目（看板 / 列表 / 表格 / 甘特 / 版本 / 日志 / 概览 / 设置，可绑定 Teambition）→ 需求工作区（泳道图、任务和版本绑定）。需求可挂单日里程碑（工作区顶栏、卡片徽章、甘特菱形）。项目甘特支持导入导出 OmniPlan `.oplx`，默认目录 `/Users/ben/Documents/OmniPlan/Projects/<项目文件夹>/`。设计见 `docs/archive/teambition-kanban-gantt-omniplan.md`、`docs/archive/requirement-milestones.md`。Teambition 版本列表端点仍需契约探针确认，未确认时 UI 会显示失败原因，详见 `docs/plans/teambition-version-plan.md`。工作台收口设计见 `docs/plans/workbench-table-mywork-overview.md`。
 
 ### 需求泳道图（Node Swimlane）
 
@@ -152,7 +154,9 @@ pnpm web
 pnpm --filter @octopus/desktop start
 ```
 
-Electron、CLI 和 Web 各自使用本地 `octopus.sqlite`；Electron 的默认位置是 `userData/store/`，CLI/Web 的默认位置是仓库 `.octo/`。显式同步时才读取 `DATABASE_URL`，本地未同步修订以本地快照为准。
+Electron、CLI 和 Web 各自使用本地 `octopus.sqlite`；Electron 的默认位置是 `userData/store/`，CLI/Web 的默认位置是仓库 `.octo/`。显式同步时才读取 `CLOUDBASE_ENV_ID` 和 `CLOUDBASE_APIKEY`，只有项目或需求变化会产生远端待同步修订；本地运行、事件和健康状态变化不会触发远端同步。
+
+使用 `octopus storage status` 在不访问网络的情况下查看同步状态；使用 `octopus storage sync` 显式调用 CloudBase PG REST RPC，并以一个数据库事务替换远端的项目和需求快照。同步失败不会改变本地 SQLite。首次使用前先通过 CloudBase PostgreSQL 直连迁移、控制台 SQL 编辑器或 DMC 执行 `drizzle/` 迁移，创建表、RLS、`service_role` 权限和 `capy_replace_octopus_snapshot` 函数。
 
 ## 开发验证
 

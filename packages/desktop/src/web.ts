@@ -318,6 +318,25 @@ export async function createOctopusWebServer(
         return engine.getRequirementStatus(requirementId())
       case "getState":
         return engine.getState(requirementId())
+      case "listSubtasks":
+        return engine.listSubtasks(requirementId())
+      case "addSubtask": {
+        const input = asObject(args[1])
+        return engine.addSubtask(requirementId(), {
+          title: requiredString(input["title"], "title"),
+          ...(typeof input["description"] === "string" ? { description: input["description"] } : {}),
+          ...(typeof input["assignedTo"] === "string" ? { assignedTo: input["assignedTo"] } : {}),
+        })
+      }
+      case "setSubtaskStatus":
+        return engine.setSubtaskStatus(
+          requirementId(),
+          requiredString(args[1], "subtaskId"),
+          requiredString(args[2], "status") as never,
+        )
+      case "deleteSubtask":
+        await engine.deleteSubtask(requirementId(), requiredString(args[1], "subtaskId"))
+        return { deleted: true }
       case "getWorkflowDefinition":
         return engine.getWorkflowDefinition(requirementId())
       case "getExecutionSnapshot":

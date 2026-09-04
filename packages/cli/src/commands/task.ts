@@ -2,6 +2,7 @@
  * `octopus task` —— 任务管理命令。
  *
  * 子命令:
+ *   add <title> [requirementId]        — 在需求下增加子任务
  *   list [phase] [requirementId]       — 列出任务
  *   complete <taskId> [requirementId]  — 完成任务
  *   export [requirementId]             — 导出任务 JSON 文件
@@ -19,6 +20,35 @@ import { TaskStatus } from "@octopus/core/task.js"
 
 export function buildTaskCommands(program: Command, engine: WorkflowEngine): void {
   const taskCmd = program.command("task").description("任务管理")
+
+  taskCmd
+    .command("add")
+    .description("在需求下增加子任务")
+    .argument("<title>", "子任务标题")
+    .argument("[requirementId]", "需求 ID")
+    .option("-d, --desc <desc>", "子任务描述")
+    .option("--assigned-to <identity>", "指派给")
+    .option("--json", "以 JSON 格式输出")
+    .action(async (title: string, requirementId: string | undefined, options: { desc?: string; assignedTo?: string; json?: boolean }) => {
+      try {
+        const pid = await resolveRequirementId(engine, requirementId)
+        if (!pid) return
+        const subtask = await engine.addSubtask(pid, {
+          title,
+          ...(options.desc !== undefined ? { description: options.desc } : {}),
+          ...(options.assignedTo !== undefined ? { assignedTo: options.assignedTo } : {}),
+        })
+        if (options.json) console.log(JSON.stringify(subtask, null, 2))
+        else {
+          console.log(`✅ 子任务已创建: ${subtask.title}`)
+          console.log(`   子任务 ID: ${subtask.id}`)
+          console.log(`   所属需求: ${subtask.requirementId}`)
+        }
+      } catch (err) {
+        console.error(`❌ 增加子任务失败: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    })
 
   // ── task list ──
   taskCmd
@@ -40,6 +70,7 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
 
           const state = await engine.getState(pid)
           let tasks = await engine.getTasks(pid)
+          const subtasks = await engine.listSubtasks(pid)
 
           if (phaseName) {
             const phase = Object.values(Phase).find(
@@ -56,7 +87,7 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
             tasks = tasks.filter((t) => t.phase === state.currentPhase)
           }
 
-          if (tasks.length === 0) {
+          if (tasks.length === 0 && subtasks.length === 0) {
             console.log("📋 没有找到任务。")
             return
           }
@@ -69,6 +100,7 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
                   requirementId: state.requirementId,
                   requirementName: state.requirementName,
                   currentPhase: state.currentPhase,
+                  subtasks,
                   tasks: tasks.map((t) => ({
                     id: t.id,
                     stageId: t.stageId,
@@ -106,6 +138,21 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
             if (task.assignedTo) console.log(`       指派: ${task.assignedTo}`)
             console.log()
           }
+          if (subtasks.length > 0) {
+            console.log(`📎 子任务 (${subtasks.length} 项):`)
+            for (const subtask of subtasks) {
+              const statusIcon: Record<string, string> = {
+                PENDING: "⬜",
+                IN_PROGRESS: "🔄",
+                COMPLETED: "✅",
+                BLOCKED: "🚫",
+                SKIPPED: "⏭",
+              }
+              console.log(`   ${statusIcon[subtask.status] ?? "⬜"} ${subtask.id}`)
+              console.log(`       ${subtask.title}  状态: ${subtask.status}`)
+              if (subtask.assignedTo) console.log(`       指派: ${subtask.assignedTo}`)
+            }
+          }
         } catch (err) {
           console.error(`❌ 获取任务列表失败: ${(err as Error).message}`)
           process.exit(1)
@@ -136,6 +183,13 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
                 | Role
                 | undefined)
             : undefined
+          const subtask = (await engine.listSubtasks(pid)).find((item) => item.id === taskId)
+          if (subtask) {
+            const completed = await engine.completeSubtask(pid, taskId)
+            if (options?.json) console.log(JSON.stringify(completed, null, 2))
+            else console.log(`✅ 子任务已完成: ${completed.title}`)
+            return
+          }
           const state = await engine.completeTask(pid, taskId, role)
           const task = (await engine.getTasks(pid)).find((t) => t.id === taskId)
 
@@ -192,6 +246,13 @@ export function buildTaskCommands(program: Command, engine: WorkflowEngine): voi
             return
           }
 
+          const subtask = (await engine.listSubtasks(pid)).find((item) => item.id === taskId)
+          if (subtask) {
+            const updated = await engine.setSubtaskStatus(pid, taskId, taskStatus)
+            if (options?.json) console.log(JSON.stringify(updated, null, 2))
+            else console.log(`✅ 子任务状态已更新: ${taskId} → ${taskStatus}`)
+            return
+          }
           const state = await engine.setTaskStatus(pid, taskId, taskStatus)
           const task = (await engine.getTasks(pid)).find((t) => t.id === taskId)
 

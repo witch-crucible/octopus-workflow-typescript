@@ -44,6 +44,38 @@ export type GraphDisplayNode = RuntimeGraphNode & {
   activated: boolean
 }
 
+export type WorkflowFocusSnapshot = {
+  currentNodeIds?: readonly string[]
+  readyNodeIds?: readonly string[]
+}
+
+/** 返回当前执行上下文及其一跳前置/后续节点。 */
+export function getWorkflowFocusNodeIds(
+  nodes: readonly GraphDisplayNode[],
+  snapshot: WorkflowFocusSnapshot,
+): ReadonlySet<string> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  const currentIds = (snapshot.currentNodeIds || []).filter((nodeId) => nodeById.has(nodeId))
+  const anchorIds = new Set(
+    currentIds.length
+      ? currentIds
+      : (snapshot.readyNodeIds || []).filter((nodeId) => nodeById.has(nodeId)),
+  )
+  const focused = new Set(anchorIds)
+
+  for (const node of nodes) {
+    if (anchorIds.has(node.id)) {
+      for (const dependencyId of node.dependsOn || []) focused.add(dependencyId)
+      continue
+    }
+    if ((node.dependsOn || []).some((dependencyId) => anchorIds.has(dependencyId))) {
+      focused.add(node.id)
+    }
+  }
+
+  return new Set([...focused].filter((nodeId) => nodeById.has(nodeId)))
+}
+
 export function nodeRoles(node: RoleBearingNode): string[] {
   const roles =
     Array.isArray(node?.responsibleRoles) && node.responsibleRoles.length

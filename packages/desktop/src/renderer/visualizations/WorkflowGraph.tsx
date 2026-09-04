@@ -1,15 +1,23 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import {
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 
 import type { GraphDisplayNode } from "@/lib/graph-model"
-import { nodeRoles } from "@/lib/graph-model"
+import { getWorkflowFocusNodeIds, nodeRoles } from "@/lib/graph-model"
 import {
   ACCENT,
+  nodeNameZh,
   PHASE_HINTS,
   PHASE_ORDER,
+  phaseLabel,
   ROLE_COLORS,
   ROLE_ORDER,
-  nodeNameZh,
-  phaseLabel,
   roleLabel,
   statusLabel,
   truncate,
@@ -84,10 +92,7 @@ function wrapLabel(text: string, maxChars: number, maxLines = 2): string[] {
   return lines
 }
 
-function nodeDisplayState(
-  node: GraphDisplayNode,
-  snapshot: WorkflowGraphSnapshot,
-): string {
+function nodeDisplayState(node: GraphDisplayNode, snapshot: WorkflowGraphSnapshot): string {
   if (node.activated === false || node.status === "LOCKED") return "locked"
   const classes: string[] = []
   if (snapshot.currentNodeIds?.includes(node.id)) classes.push("current")
@@ -140,6 +145,7 @@ export function WorkflowGraph({
   const panRef = useRef<GraphPan | null>(null)
   const [isPanning, setIsPanning] = useState(false)
   const [isCentered, setIsCentered] = useState(false)
+  const focusNodeIds = useMemo(() => getWorkflowFocusNodeIds(nodes, snapshot), [nodes, snapshot])
 
   const layout = useMemo(() => {
     if (!nodes.length) {
@@ -160,7 +166,9 @@ export function WorkflowGraph({
     const presentRoles = new Set(nodes.flatMap((node) => nodeRoles(node)))
     const roles = [
       ...ROLE_ORDER.filter((role) => presentRoles.has(role)),
-      ...[...presentRoles].filter((role) => !(ROLE_ORDER as readonly string[]).includes(role)).sort(),
+      ...[...presentRoles]
+        .filter((role) => !(ROLE_ORDER as readonly string[]).includes(role))
+        .sort(),
     ]
     const presentPhases = new Set(nodes.map((node) => node.phase || "Intention"))
     const phases = [
@@ -393,10 +401,18 @@ export function WorkflowGraph({
                 height={ROLE_HEADER_H}
                 className="phase-header"
               />
-              <text x={(layout.originX ?? 0) + 16} y={(layout.originY ?? 0) + 30} className="corner-label">
+              <text
+                x={(layout.originX ?? 0) + 16}
+                y={(layout.originY ?? 0) + 30}
+                className="corner-label"
+              >
                 角色（人）→
               </text>
-              <text x={(layout.originX ?? 0) + 16} y={(layout.originY ?? 0) + 52} className="phase-sub">
+              <text
+                x={(layout.originX ?? 0) + 16}
+                y={(layout.originY ?? 0) + 52}
+                className="phase-sub"
+              >
                 阶段 ↓
               </text>
 
@@ -427,10 +443,18 @@ export function WorkflowGraph({
                         fill={ACCENT}
                       />
                     ) : null}
-                    <text x={roleBound.x + 16} y={(layout.originY ?? 0) + 34} className="role-header-text">
+                    <text
+                      x={roleBound.x + 16}
+                      y={(layout.originY ?? 0) + 34}
+                      className="role-header-text"
+                    >
                       {roleLabel(roleBound.role)}
                     </text>
-                    <text x={roleBound.x + 16} y={(layout.originY ?? 0) + 54} className="role-header-sub">
+                    <text
+                      x={roleBound.x + 16}
+                      y={(layout.originY ?? 0) + 54}
+                      className="role-header-sub"
+                    >
                       {isActiveRole ? `${roleBound.role} · 当前` : roleBound.role}
                     </text>
                   </g>
@@ -482,7 +506,8 @@ export function WorkflowGraph({
                   >
                     {phaseBound.isCurrent
                       ? `当前 · ${PHASE_HINTS[phaseBound.phase as keyof typeof PHASE_HINTS] || phaseBound.phase}`
-                      : PHASE_HINTS[phaseBound.phase as keyof typeof PHASE_HINTS] || phaseBound.phase}
+                      : PHASE_HINTS[phaseBound.phase as keyof typeof PHASE_HINTS] ||
+                        phaseBound.phase}
                   </text>
                   {phaseBound.isCurrent ? (
                     <>
@@ -560,6 +585,8 @@ export function WorkflowGraph({
                 if (!pos) return null
                 const current = isCurrentNode(node.id, snapshot)
                 const ready = Boolean(snapshot.readyNodeIds?.includes(node.id))
+                const isFocused = focusNodeIds.has(node.id)
+                const isCollapsed = !isFocused
                 const roles = nodeRoles(node)
                 const zhName = nodeNameZh(node)
                 const showEnglish = Boolean(node.name && node.name !== zhName)
@@ -583,6 +610,7 @@ export function WorkflowGraph({
                     className={cn(
                       "wf-node node",
                       displayState,
+                      isCollapsed && "is-collapsed",
                       selectedNodeId === node.id && "selected",
                     )}
                     transform={`translate(${pos.x},${pos.y})`}
@@ -606,7 +634,11 @@ export function WorkflowGraph({
                       }
                     }}
                   >
-                    <title>单击查看详情；Ctrl/⌘+单击打开脚本目录</title>
+                    <title>
+                      {isCollapsed
+                        ? "已折叠；单击查看详情"
+                        : "单击查看详情；Ctrl/⌘+单击打开脚本目录"}
+                    </title>
                     {current ? (
                       <rect
                         x={-6}
@@ -623,7 +655,19 @@ export function WorkflowGraph({
                       fill={pos.roleColor}
                       className="role-bar"
                     />
-                    {current ? (
+                    {isCollapsed ? (
+                      <>
+                        <text x={22} y={52} className="collapsed-label">
+                          {truncate(zhName, 15)}
+                        </text>
+                        <text x={22} y={76} className="collapsed-meta">
+                          {truncate(`${stateText} · ${roleSummary}`, 25)}
+                        </text>
+                        <text x={pos.w - 34} y={22} className="collapsed-mark">
+                          ···
+                        </text>
+                      </>
+                    ) : current ? (
                       <>
                         <text x={22} y={20} className="current-tag">
                           ● 当前
@@ -637,29 +681,28 @@ export function WorkflowGraph({
                         {truncate(node.id, 24)}
                       </text>
                     )}
-                    {titleLines.map((line, index) => (
-                      <text
-                        key={`${node.id}-title-${index}`}
-                        x={22}
-                        y={titleStartY + index * 20}
-                        className="name-zh"
-                      >
-                        {line}
-                      </text>
-                    ))}
-                    {showEnglish ? (
+                    {!isCollapsed &&
+                      titleLines.map((line, index) => (
+                        <text
+                          key={`${node.id}-title-${index}`}
+                          x={22}
+                          y={titleStartY + index * 20}
+                          className="name-zh"
+                        >
+                          {line}
+                        </text>
+                      ))}
+                    {!isCollapsed && showEnglish ? (
                       <text x={22} y={titleStartY + titleLines.length * 20 + 2} className="name-en">
                         {truncate(node.name, 28)}
                       </text>
                     ) : null}
-                    <text
-                      x={22}
-                      y={Math.min(cursorY + 14, pos.h - 12)}
-                      className="meta"
-                    >
-                      {truncate(`${stateText} · ${roleSummary}`, 30)}
-                    </text>
-                    {roles.length > 1
+                    {!isCollapsed ? (
+                      <text x={22} y={Math.min(cursorY + 14, pos.h - 12)} className="meta">
+                        {truncate(`${stateText} · ${roleSummary}`, 30)}
+                      </text>
+                    ) : null}
+                    {!isCollapsed && roles.length > 1
                       ? roles.map((role, index) => {
                           const startX = pos.w - 18 - (roles.length - 1) * 13
                           return (

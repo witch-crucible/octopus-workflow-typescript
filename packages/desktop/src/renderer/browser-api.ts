@@ -79,6 +79,13 @@ if (!window.octopus) {
     deleteRequirement: (requirementId: string) => invoke("deleteRequirement", requirementId),
     getRequirementStatus: (requirementId: string) => invoke("getRequirementStatus", requirementId),
     getState: (requirementId: string) => invoke("getState", requirementId),
+    listSubtasks: (requirementId: string) => invoke("listSubtasks", requirementId),
+    addSubtask: (requirementId: string, input: Record<string, unknown>) =>
+      invoke("addSubtask", requirementId, input),
+    setSubtaskStatus: (requirementId: string, subtaskId: string, status: string) =>
+      invoke("setSubtaskStatus", requirementId, subtaskId, status),
+    deleteSubtask: (requirementId: string, subtaskId: string) =>
+      invoke("deleteSubtask", requirementId, subtaskId),
     getWorkflowDefinition: (requirementId: string) =>
       invoke("getWorkflowDefinition", requirementId),
     getExecutionSnapshot: (requirementId: string) => invoke("getExecutionSnapshot", requirementId),

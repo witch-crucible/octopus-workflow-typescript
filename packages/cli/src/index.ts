@@ -36,6 +36,7 @@ import { buildMonitorCommands } from "./commands/monitor.js"
 import { buildMilestoneCommands } from "./commands/milestone.js"
 import { buildMineCommands } from "./commands/mine.js"
 import { buildBrdCommands } from "./commands/brd.js"
+import { buildStorageCommands } from "./commands/storage.js"
 
 class CliRequestedExit extends Error {
   constructor(readonly exitCode: number) {
@@ -78,6 +79,7 @@ async function main(): Promise<void> {
     buildMonitorCommands(program, engine)
     buildMineCommands(program, engine, config.storeDir)
     buildBrdCommands(program, engine)
+    buildStorageCommands(program, engine)
 
     await program.parseAsync(process.argv)
 

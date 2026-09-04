@@ -2,32 +2,35 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
-import Database from "better-sqlite3"
-import postgres from "postgres"
-import type { WorkflowState } from "@octopus/core/workflow.js"
-import type { Project } from "@octopus/core/project.js"
 import { ProjectId, RequirementId } from "@octopus/core/branded-ids.js"
-import { createEmptyProject } from "@octopus/core/project.js"
-import { createEmptyState, migrateWorkflowState } from "@octopus/core/workflow.js"
+import { StoreError } from "@octopus/core/errors.js"
 import type {
   IntegrationHealth,
   NodeRun,
   NodeRunStatus,
   WorkflowEvent,
 } from "@octopus/core/execution.js"
-import { StoreError } from "@octopus/core/errors.js"
+import type { Project } from "@octopus/core/project.js"
+import { createEmptyProject } from "@octopus/core/project.js"
+import type { WorkflowState } from "@octopus/core/workflow.js"
+import { createEmptyState, migrateWorkflowState } from "@octopus/core/workflow.js"
+import Database from "better-sqlite3"
+import postgres from "postgres"
+import { resolveCloudBasePgRestConfig, resolveDatabaseUrl } from "./database-config.js"
 import type { CreateRunInput, ExecutionStore } from "./execution.js"
 import type { StateStore, StoreConfig } from "./index.js"
 import { readSqliteSources } from "./sqlite-import.js"
 
-const TABLES = [
+const LOCAL_TABLES = [
   "capy_projects",
   "capy_requirements",
   "capy_workflow_runs",
   "capy_workflow_events",
   "capy_integration_health",
 ] as const
-type Table = (typeof TABLES)[number]
+const REMOTE_TABLES = ["capy_projects", "capy_requirements"] as const
+type Table = (typeof LOCAL_TABLES)[number]
+type RemoteTable = (typeof REMOTE_TABLES)[number]
 type Row = {
   [key: string]: unknown
   state_json?: unknown
@@ -64,6 +67,8 @@ export interface SyncStatus {
   state: SyncState
   localRevision: number
   lastSyncedLocalRevision: number
+  remoteDataRevision: number
+  lastSyncedRemoteDataRevision: number
   remoteRevision?: number
   lastSyncedAt?: string
   lastError?: string
@@ -72,6 +77,8 @@ export interface SyncStatus {
 export interface SqlitePersistenceStore extends StateStore, ExecutionStore {
   close(): Promise<void>
   getSyncStatus(): Promise<SyncStatus>
+  syncWithRemote(): Promise<SyncStatus>
+  /** @deprecated 使用 syncWithRemote；保留用于兼容现有调用方。 */
   syncWithSupabase(): Promise<SyncStatus>
 }
 
@@ -123,6 +130,13 @@ class SqliteStore implements SqlitePersistenceStore {
       this.db
         .prepare("INSERT OR IGNORE INTO capy_octopus_meta (key,value) VALUES (?,?)")
         .run(key, value)
+    for (const [key, fallback] of [
+      ["remote_data_revision", this.meta("local_revision") ?? "0"],
+      ["last_synced_remote_data_revision", this.meta("last_synced_local_revision") ?? "0"],
+    ])
+      this.db
+        .prepare("INSERT OR IGNORE INTO capy_octopus_meta (key,value) VALUES (?,?)")
+        .run(key, fallback)
   }
 
   private meta(key: string, value?: string): string | undefined {
@@ -143,13 +157,17 @@ class SqliteStore implements SqlitePersistenceStore {
   private revision(): number {
     return Number(this.meta("local_revision") ?? 0)
   }
-  private touch(): void {
+  private touch(remoteRelevant: boolean): void {
     this.meta("local_revision", String(this.revision() + 1))
+    if (remoteRelevant) {
+      const revision = Number(this.meta("remote_data_revision") ?? 0)
+      this.meta("remote_data_revision", String(revision + 1))
+    }
   }
-  private tx<T>(fn: () => T): T {
+  private tx<T>(fn: () => T, remoteRelevant = false): T {
     return this.db.transaction(() => {
       const result = fn()
-      this.touch()
+      this.touch(remoteRelevant)
       return result
     })()
   }
@@ -158,14 +176,14 @@ class SqliteStore implements SqlitePersistenceStore {
   }
   private digest(): string {
     const hash = createHash("sha256")
-    for (const table of TABLES) hash.update(JSON.stringify(this.rows(table)))
+    for (const table of REMOTE_TABLES) hash.update(JSON.stringify(this.rows(table)))
     return hash.digest("hex")
   }
 
   importRows(rows: Record<Table, Row[]>): void {
     this.tx(() => {
-      for (const table of [...TABLES].reverse()) this.db.prepare(`DELETE FROM ${table}`).run()
-      for (const table of TABLES)
+      for (const table of [...LOCAL_TABLES].reverse()) this.db.prepare(`DELETE FROM ${table}`).run()
+      for (const table of LOCAL_TABLES)
         for (const row of rows[table]) {
           const keys = Object.keys(row)
           this.db
@@ -174,7 +192,7 @@ class SqliteStore implements SqlitePersistenceStore {
             )
             .run(...keys.map((key) => row[key]))
         }
-    })
+    }, true)
   }
   getStorePath(): string {
     return this.storeDir
@@ -195,7 +213,7 @@ class SqliteStore implements SqlitePersistenceStore {
     })
   }
   async save(state: WorkflowState): Promise<void> {
-    this.tx(() => this.saveRequirement(state))
+    this.tx(() => this.saveRequirement(state), true)
   }
   async update(
     id: string,
@@ -205,7 +223,7 @@ class SqliteStore implements SqlitePersistenceStore {
       const next = updater(this.loadSync(id))
       this.saveRequirement(next)
       return next
-    })
+    }, true)
   }
   private loadSync(id: string): WorkflowState {
     const row = this.db
@@ -240,7 +258,7 @@ class SqliteStore implements SqlitePersistenceStore {
     return JSON.parse(String(row.state_json)) as Project
   }
   async saveProject(project: Project): Promise<void> {
-    this.tx(() => this.saveProjectSync(project))
+    this.tx(() => this.saveProjectSync(project), true)
   }
   private saveProjectSync(project: Project): void {
     const now = new Date().toISOString()
@@ -256,7 +274,7 @@ class SqliteStore implements SqlitePersistenceStore {
       const next = updater(this.loadProjectSync(id))
       this.saveProjectSync(next)
       return next
-    })
+    }, true)
   }
   private loadProjectSync(id: string): Project {
     const row = this.db
@@ -274,12 +292,12 @@ class SqliteStore implements SqlitePersistenceStore {
       )
       this.saveProjectSync(p)
       return p
-    })
+    }, true)
   }
   async deleteProject(id: string): Promise<void> {
     this.tx(() => {
       this.db.prepare("DELETE FROM capy_projects WHERE project_id=?").run(id)
-    })
+    }, true)
   }
   async listRequirements(projectId?: string): Promise<string[]> {
     const rows = this.db
@@ -308,12 +326,12 @@ class SqliteStore implements SqlitePersistenceStore {
       )
       this.saveRequirement(state)
       return state
-    })
+    }, true)
   }
   async deleteRequirement(id: string): Promise<void> {
     this.tx(() => {
       this.db.prepare("DELETE FROM capy_requirements WHERE requirement_id=?").run(id)
-    })
+    }, true)
   }
 
   async createRun(input: CreateRunInput): Promise<NodeRun> {
@@ -463,34 +481,85 @@ class SqliteStore implements SqlitePersistenceStore {
   }
   async getSyncStatus(): Promise<SyncStatus> {
     const localRevision = this.revision()
-    const synced = Number(this.meta("last_synced_local_revision") ?? 0)
+    const remoteDataRevision = Number(this.meta("remote_data_revision") ?? 0)
+    const synced = Number(this.meta("last_synced_remote_data_revision") ?? 0)
     const error = this.meta("last_sync_error")
     const remote = this.meta("last_remote_revision")
     const syncedAt = this.meta("last_synced_at")
     const result: SyncStatus = {
       state: error
         ? "error"
-        : localRevision > synced
+        : remoteDataRevision > synced
           ? "pending"
           : syncedAt
             ? "synced"
             : "never-synced",
       localRevision,
       lastSyncedLocalRevision: synced,
+      remoteDataRevision,
+      lastSyncedRemoteDataRevision: synced,
     }
     if (remote) result.remoteRevision = Number(remote)
     if (syncedAt) result.lastSyncedAt = syncedAt
     if (error) result.lastError = error
     return result
   }
-  async syncWithSupabase(): Promise<SyncStatus> {
-    const url = process.env["DATABASE_URL"]
-    if (!url) throw new Error("未配置 DATABASE_URL；本地数据库仍可离线运行")
-    const targetRevision = this.revision()
-    const snapshot = Object.fromEntries(TABLES.map((table) => [table, this.rows(table)])) as Record<
-      Table,
-      Row[]
-    >
+  async syncWithRemote(): Promise<SyncStatus> {
+    const config = resolveCloudBasePgRestConfig({ storeDir: this.storeDir })
+    const targetRevision = Number(this.meta("remote_data_revision") ?? 0)
+    const snapshot = Object.fromEntries(
+      REMOTE_TABLES.map((table) => [table, this.rows(table)]),
+    ) as Record<RemoteTable, Row[]>
+    const digest = this.digest()
+    try {
+      const response = await fetch(
+        `${config.baseUrl}/rpc/capy_replace_octopus_snapshot`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            p_projects: snapshot.capy_projects,
+            p_requirements: snapshot.capy_requirements,
+            p_snapshot_digest: digest,
+            p_snapshot_source: "octopus-cloudbase-pg-rest",
+            p_snapshot_scope: "projects-and-requirements",
+          }),
+          signal: AbortSignal.timeout(30_000),
+        },
+      )
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      const result = (await response.json()) as { snapshot_revision?: unknown }
+      const revision = Number(result.snapshot_revision)
+      if (!Number.isSafeInteger(revision) || revision < 1) {
+        throw new Error("RPC 未返回有效的 snapshot_revision")
+      }
+      const syncedAt = new Date().toISOString()
+      this.meta("last_remote_revision", String(revision))
+      this.meta("last_snapshot_digest", digest)
+      this.meta("last_synced_at", syncedAt)
+      this.meta("last_sync_error", "")
+      if (Number(this.meta("remote_data_revision") ?? 0) === targetRevision) {
+        this.meta("last_synced_remote_data_revision", String(targetRevision))
+        this.meta("last_synced_local_revision", String(targetRevision))
+      }
+      return this.getSyncStatus()
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "远端 REST RPC 调用失败"
+      this.meta("last_sync_error", message.slice(0, 500))
+      throw new Error("CloudBase PG REST 同步失败；本地数据未改变")
+    }
+  }
+
+  private async syncSnapshot(url: string): Promise<SyncStatus> {
+    const targetRevision = Number(this.meta("remote_data_revision") ?? 0)
+    const snapshot = Object.fromEntries(
+      REMOTE_TABLES.map((table) => [table, this.rows(table)]),
+    ) as Record<RemoteTable, Row[]>
     const digest = this.digest()
     const client = postgres(url, { prepare: false })
     try {
@@ -499,9 +568,9 @@ class SqliteStore implements SqlitePersistenceStore {
           "SELECT value FROM public.capy_octopus_meta WHERE key = 'snapshot_revision'",
         )
         const revision = Number(metaRows[0]?.value ?? 0) + 1
-        for (const table of [...TABLES].reverse())
+        for (const table of [...REMOTE_TABLES].reverse())
           await transaction.unsafe(`DELETE FROM public.${table}`)
-        for (const table of TABLES) {
+        for (const table of REMOTE_TABLES) {
           for (const row of snapshot[table]) {
             const columns = Object.keys(row)
             const values = columns.map((column) => row[column])
@@ -515,7 +584,8 @@ class SqliteStore implements SqlitePersistenceStore {
           ["snapshot_revision", String(revision)],
           ["snapshot_digest", digest],
           ["snapshot_updated_at", new Date().toISOString()],
-          ["snapshot_source", "octopus-single-machine"],
+          ["snapshot_source", "octopus-cloudbase-hybrid"],
+          ["snapshot_scope", "projects-and-requirements"],
         ]
         for (const [key, value] of metadata) {
           await transaction.unsafe(
@@ -530,16 +600,22 @@ class SqliteStore implements SqlitePersistenceStore {
       this.meta("last_snapshot_digest", digest)
       this.meta("last_synced_at", syncedAt)
       this.meta("last_sync_error", "")
-      if (this.revision() === targetRevision)
+      if (Number(this.meta("remote_data_revision") ?? 0) === targetRevision) {
+        this.meta("last_synced_remote_data_revision", String(targetRevision))
         this.meta("last_synced_local_revision", String(targetRevision))
+      }
       return this.getSyncStatus()
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "远端快照同步失败"
       this.meta("last_sync_error", message.slice(0, 500))
-      throw new Error("Supabase 快照同步失败；本地数据未改变")
+      throw new Error("CloudBase PostgreSQL 同步失败；本地数据未改变")
     } finally {
       await client.end({ timeout: 5 }).catch(() => undefined)
     }
+  }
+
+  async syncWithSupabase(): Promise<SyncStatus> {
+    return this.syncSnapshot(resolveDatabaseUrl({ storeDir: this.storeDir }))
   }
 }
 

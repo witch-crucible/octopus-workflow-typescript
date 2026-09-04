@@ -81,7 +81,7 @@ export class NodeExecutionService {
   }
 
   /**
-   * 在 PostgreSQL 锁行事务中完成读改写；序列化失败和死锁由存储层有限重试。
+   * 在 PersistenceStore 事务中完成读改写，具体并发控制由存储层负责。
    */
   private async transactionalUpdate(
     requirementId: string,

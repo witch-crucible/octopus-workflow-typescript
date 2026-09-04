@@ -58,6 +58,8 @@ import type {
   TaskFilter,
   TaskImportResult,
   TaskProgress,
+  CreateSubtaskParams,
+  Subtask,
 } from "@octopus/core/task.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { StageStatus } from "@octopus/core/task.js"
@@ -101,6 +103,7 @@ import type { StepRuntime } from "@octopus/core/step.js"
 import { createEmptyChecklist } from "@octopus/core/checklist.js"
 import type { PersistenceStore } from "@octopus/context/index.js"
 import { createPersistenceStore } from "@octopus/context/index.js"
+import type { SyncStatus } from "@octopus/context/sqlite-persistence.js"
 import {
   appendWorkflowNode,
   initializeWorkflowFile,
@@ -441,7 +444,17 @@ export class WorkflowEngine {
     await this.nodeExecution.initialize()
   }
 
-  /** 关闭本进程唯一的 PostgreSQL 客户端。 */
+  /** 读取必要数据的远端同步状态；不会访问网络。 */
+  async getStorageSyncStatus(): Promise<SyncStatus> {
+    return this.store.getSyncStatus()
+  }
+
+  /** 显式同步项目和需求到远端 PostgreSQL。 */
+  async syncRemoteStorage(): Promise<SyncStatus> {
+    return this.store.syncWithRemote()
+  }
+
+  /** 关闭本进程的持久化存储。 */
   async close(): Promise<void> {
     await this.store.close()
   }
@@ -1683,6 +1696,66 @@ export class WorkflowEngine {
     }
 
     return tasks
+  }
+
+  /** 获取需求下用户维护的子任务。 */
+  async listSubtasks(requirementId: string): Promise<Subtask[]> {
+    const state = await this.getState(requirementId)
+    return state.subtasks ?? []
+  }
+
+  /** 在需求下新增子任务。 */
+  async addSubtask(requirementId: string, input: CreateSubtaskParams): Promise<Subtask> {
+    const title = input.title.trim()
+    if (!title) throw new Error("子任务标题不能为空")
+    const now = new Date().toISOString()
+    const subtask: Subtask = {
+      id: TaskId(`subtask_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+      requirementId: (await this.getState(requirementId)).requirementId,
+      title,
+      description: input.description?.trim() ?? "",
+      status: TaskStatus.PENDING,
+      ...(input.assignedTo?.trim() ? { assignedTo: input.assignedTo.trim() } : {}),
+      createdAt: now,
+    }
+    await this.transactionalUpdate(requirementId, (current) => {
+      current.subtasks = [...(current.subtasks ?? []), subtask]
+      return current
+    })
+    return subtask
+  }
+
+  /** 更新需求下子任务状态。 */
+  async setSubtaskStatus(
+    requirementId: string,
+    subtaskId: string,
+    status: TaskStatus,
+  ): Promise<Subtask> {
+    let updated: Subtask | undefined
+    await this.transactionalUpdate(requirementId, (current) => {
+      const subtask = (current.subtasks ?? []).find((item) => item.id === subtaskId)
+      if (!subtask) throw new Error(`子任务不存在: ${subtaskId}`)
+      subtask.status = status
+      if (status === TaskStatus.COMPLETED) subtask.completedAt = new Date().toISOString()
+      else delete subtask.completedAt
+      updated = { ...subtask }
+      return current
+    })
+    return updated!
+  }
+
+  async completeSubtask(requirementId: string, subtaskId: string): Promise<Subtask> {
+    return this.setSubtaskStatus(requirementId, subtaskId, TaskStatus.COMPLETED)
+  }
+
+  /** 删除需求下子任务。 */
+  async deleteSubtask(requirementId: string, subtaskId: string): Promise<void> {
+    await this.transactionalUpdate(requirementId, (current) => {
+      const subtasks = current.subtasks ?? []
+      if (!subtasks.some((item) => item.id === subtaskId)) throw new Error(`子任务不存在: ${subtaskId}`)
+      current.subtasks = subtasks.filter((item) => item.id !== subtaskId)
+      return current
+    })
   }
 
   /** 导出需求中当前已经生成的全部任务 */

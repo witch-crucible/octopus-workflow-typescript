@@ -1,7 +1,7 @@
 /**
  * 后台节点 worker 入口。
  *
- * worker 不依赖 CLI/Electron，通过继承的 DATABASE_URL 访问 PostgreSQL、执行节点动作并写入运行事件，
+ * worker 不依赖 CLI/Electron，使用本地 SQLite 执行节点动作并写入运行事件，
  * 因此启动端退出后任务仍可继续执行。
  */
 
