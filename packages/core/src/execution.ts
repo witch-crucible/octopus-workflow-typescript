@@ -9,6 +9,7 @@ import type { HeinrichLevel } from "./risk.js"
 import type { Phase } from "./phase.js"
 import type { Role } from "./role.js"
 import type { TaskStatus } from "./task.js"
+import type { CodeReviewAgent } from "./agent.js"
 
 /** 节点动作定义。动作按数组顺序执行，任一动作失败即停止后续动作。 */
 export type NodeAction =
@@ -28,6 +29,12 @@ export type NodeAction =
       readonly outputFile?: string
       /** 输出文件已存在时覆盖或基于原内容扩展。 */
       readonly ifExists?: "overwrite" | "extend"
+      /** CODE_REVIEW 使用的独立本地 reviewer；缺省时沿用默认 AIClient。 */
+      readonly reviewers?: readonly CodeReviewAgent[]
+      /** reviewer 最少成功数量；不足时节点失败。 */
+      readonly minimumSuccessfulReviewers?: number
+      /** 各 reviewer 原始报告相对于节点工作目录的输出目录。 */
+      readonly reviewOutputDir?: string
     }
   | {
       readonly type: "integration"
@@ -145,6 +152,9 @@ export interface WorkflowEvent {
     | "RUN_FAILED"
     | "RUN_CANCELED"
     | "INTEGRATION_HEALTH"
+    | "REQUIREMENT_CHANGED"
+    | "BRD_UPDATED"
+    | "ARTIFACT_CREATED"
   readonly payload: Readonly<Record<string, unknown>>
   readonly createdAt: string
 }

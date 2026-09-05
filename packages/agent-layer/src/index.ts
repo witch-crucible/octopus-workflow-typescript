@@ -9,9 +9,11 @@
 
 import { spawn } from "node:child_process"
 import { AIAssistantType } from "@octopus/core/agent.js"
-import type { AIRequest, AIResponse } from "@octopus/core/agent.js"
+import type { AIRequest, AIResponse, CodeReviewAgent } from "@octopus/core/agent.js"
 import { AICallError } from "@octopus/core/errors.js"
 import { AgentCallId } from "@octopus/core/branded-ids.js"
+import { crossReviewCode } from "./cross-review.js"
+import type { CrossCodeReviewResponse, CrossReviewOptions } from "./cross-review.js"
 import { executeAIAssistantModule } from "./modules/registry.js"
 
 /** AI 客户端配置 */
@@ -22,6 +24,12 @@ export interface AIClientConfig {
   defaultTimeout: number
   /** claude CLI 路径 */
   claudePath: string
+  /** OCR CLI 路径 */
+  ocrPath: string
+  /** Command Code CLI 路径 */
+  commandCodePath: string
+  /** Codex CLI 路径 */
+  codexPath: string
   /** Hermes Agent CLI 路径（BRD Skill 使用无头模式） */
   hermesPath: string
   /** 是否启用常驻模式 */
@@ -37,6 +45,9 @@ const DEFAULT_CONFIG: AIClientConfig = {
   defaultModel: "haiku",
   defaultTimeout: 120_000,
   claudePath: "claude",
+  ocrPath: "ocr",
+  commandCodePath: "commandcode",
+  codexPath: "codex",
   hermesPath: "hermes",
   persistent: false,
   retries: 2,
@@ -287,6 +298,16 @@ export class AIClient {
     return this.callAssistant(AIAssistantType.CODE_REVIEW, diff)
   }
 
+  /** 通过多个 AI 工具并行执行交叉代码审查。 */
+  async crossReviewCode(
+    input: string,
+    repositoryPath: string,
+    reviewers: readonly CodeReviewAgent[],
+    options?: CrossReviewOptions,
+  ): Promise<CrossCodeReviewResponse> {
+    return crossReviewCode(this.config, input, repositoryPath, reviewers, options)
+  }
+
   /** SQL 风险检测 */
   async checkSQL(sqlContent: string): Promise<AIResponse> {
     return this.callAssistant(AIAssistantType.SQL_RISK_CHECK, sqlContent)
@@ -331,6 +352,7 @@ export function createAIClient(config?: Partial<AIClientConfig>): AIClient {
 // ── AI 辅助模块 API ──
 
 export type { AIAssistantModule, AIAssistantClient } from "./modules/types.js"
+export type { CodeReviewResult, CrossCodeReviewResponse, CrossReviewOptions } from "./cross-review.js"
 export {
   AIAssistantModuleRegistry,
   aiAssistantModuleRegistry,

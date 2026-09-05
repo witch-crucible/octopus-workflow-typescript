@@ -86,6 +86,13 @@ function capabilityToAction(capability: CapabilityRef): NodeAction {
       ...(capability.input !== undefined ? { input: capability.input } : {}),
       ...(capability.outputFile !== undefined ? { outputFile: capability.outputFile } : {}),
       ...(capability.ifExists !== undefined ? { ifExists: capability.ifExists } : {}),
+      ...(capability.reviewers !== undefined ? { reviewers: capability.reviewers } : {}),
+      ...(capability.minimumSuccessfulReviewers !== undefined
+        ? { minimumSuccessfulReviewers: capability.minimumSuccessfulReviewers }
+        : {}),
+      ...(capability.reviewOutputDir !== undefined
+        ? { reviewOutputDir: capability.reviewOutputDir }
+        : {}),
     }
   }
   if (capability.kind === "integration") {
@@ -110,6 +117,11 @@ function actionToCapability(action: NodeAction): CapabilityRef | undefined {
       ...(action.input !== undefined ? { input: action.input } : {}),
       ...(action.outputFile !== undefined ? { outputFile: action.outputFile } : {}),
       ...(action.ifExists !== undefined ? { ifExists: action.ifExists } : {}),
+      ...(action.reviewers !== undefined ? { reviewers: action.reviewers } : {}),
+      ...(action.minimumSuccessfulReviewers !== undefined
+        ? { minimumSuccessfulReviewers: action.minimumSuccessfulReviewers }
+        : {}),
+      ...(action.reviewOutputDir !== undefined ? { reviewOutputDir: action.reviewOutputDir } : {}),
     }
   }
   if (action.type === "integration") {

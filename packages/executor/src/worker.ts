@@ -7,6 +7,7 @@
 
 import { closeSync, openSync, mkdirSync } from "node:fs"
 import { spawn } from "node:child_process"
+import { relative } from "node:path"
 import { pathToFileURL } from "node:url"
 import { loadConfig } from "@octopus/context/config.js"
 import {
@@ -27,7 +28,7 @@ import { ObservationId } from "@octopus/core/branded-ids.js"
 import { createAIClient } from "@octopus/agent-layer/index.js"
 import type { PluginHost } from "@octopus/plugin/index.js"
 import { loadPlugins } from "@octopus/plugin/index.js"
-import { prepareAIOutput, writeAIOutput } from "./ai-output.js"
+import { prepareAIOutput, writeAIOutput, writeCrossReviewReports } from "./ai-output.js"
 
 export interface WorkerArgs {
   storeDir: string
@@ -76,8 +77,10 @@ async function main(): Promise<void> {
 
   let child: ReturnType<typeof spawn> | undefined
   let cancelled = false
+  const reviewerAbortController = new AbortController()
   const interrupt = (): void => {
     cancelled = true
+    reviewerAbortController.abort()
     killProcessGroup(child)
     void markInterruptedRun(executionStore, stateStore, args, run.nodeId).catch((cause) => {
       console.error(`中断落账失败: ${(cause as Error).message}`)
@@ -118,9 +121,8 @@ async function main(): Promise<void> {
         pluginHost,
         step,
         isCancelled: () => cancelled,
-        assignChild: (processHandle) => {
-          child = processHandle
-        },
+        signal: reviewerAbortController.signal,
+        assignChild: (processHandle) => { child = processHandle },
       })
       if (cancelled) throw new WorkerFailure("CANCELED", "运行已取消")
       await appendEvent(executionStore, args, "ACTION_FINISHED", {
@@ -203,6 +205,7 @@ export interface ActionContext {
   pluginHost: PluginHost
   step: StepRuntime
   isCancelled: () => boolean
+  signal?: AbortSignal
   assignChild: (child: ReturnType<typeof spawn>) => void
 }
 
@@ -220,6 +223,58 @@ export async function executeAction(
     if (context.isCancelled()) throw new WorkerFailure("CANCELED", "运行已取消")
     const prepared = prepareAIOutput(action, context.nodePath, context.fallbackAIInput)
     const client = createAIClient(context.config.ai)
+    if (action.reviewers !== undefined) {
+      if (action.assistant !== "CODE_REVIEW") {
+        throw new WorkerFailure("FAILED", "交叉 reviewer 仅支持 CODE_REVIEW assistant")
+      }
+      if (action.reviewers.length === 0) {
+        throw new WorkerFailure("FAILED", "交叉代码评审至少需要一个 reviewer")
+      }
+      const minimumSuccessfulReviewers = action.minimumSuccessfulReviewers ?? action.reviewers.length
+      if (
+        !Number.isSafeInteger(minimumSuccessfulReviewers) ||
+        minimumSuccessfulReviewers < 1 ||
+        minimumSuccessfulReviewers > action.reviewers.length
+      ) {
+        throw new WorkerFailure("FAILED", "交叉代码评审成功门槛必须介于 1 和 reviewer 数量之间")
+      }
+
+      const relativeNodePath = relative(context.projectRoot, context.nodePath).replaceAll("\\", "/")
+      const reviewOutputDir = action.reviewOutputDir ?? "reviews"
+      const excludedPaths = [
+        ...(action.outputFile ? [`${relativeNodePath}/${action.outputFile}`] : []),
+        `${relativeNodePath}/${reviewOutputDir}/**`,
+      ]
+      const response = await client.crossReviewCode(
+        prepared.input,
+        context.projectRoot,
+        action.reviewers,
+        {
+          ...(context.signal !== undefined ? { signal: context.signal } : {}),
+          excludedPaths,
+        },
+      )
+      if (context.isCancelled()) throw new WorkerFailure("CANCELED", "运行已取消")
+      const written = writeCrossReviewReports(context.nodePath, response, {
+        ...(action.outputFile !== undefined ? { outputFile: action.outputFile } : {}),
+        ...(action.reviewOutputDir !== undefined ? { reviewOutputDir: action.reviewOutputDir } : {}),
+        scope: context.stateRequirementId,
+      })
+      if (response.successCount < minimumSuccessfulReviewers) {
+        throw new WorkerFailure(
+          "FAILED",
+          `交叉代码评审至少需要 ${minimumSuccessfulReviewers} 个成功，实际 ${response.successCount} 个；诊断报告已保留`,
+        )
+      }
+      return {
+        summary: response.result.slice(0, 500),
+        successCount: response.successCount,
+        reviewerCount: response.reviews.length,
+        ...(action.outputFile !== undefined ? { outputFile: action.outputFile } : {}),
+        reviewOutputDir: written.reviewOutputDir,
+        extended: prepared.extended,
+      }
+    }
     const response = await client.callAssistant(action.assistant, prepared.input)
     if (prepared.outputPath) writeAIOutput(prepared.outputPath, response.result)
     return {

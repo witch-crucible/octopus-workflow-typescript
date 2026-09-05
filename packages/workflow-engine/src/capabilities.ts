@@ -12,12 +12,34 @@ import { ChecklistItemStatus, createEmptyChecklist } from "@octopus/core/checkli
 import { ChecklistItemId, ObservationId, ArtifactId } from "@octopus/core/branded-ids.js"
 import { ArtifactType } from "@octopus/core/artifact.js"
 import { Role } from "@octopus/core/role.js"
+import { relative } from "node:path"
 import type { CapabilityContext, CapabilityHandler, CapabilityResult } from "@octopus/plugin/types.js"
+import {
+  getWorkflowWorkspace,
+  loadWorkflowDefinition,
+  resolveWorkflowNodeKey,
+} from "@octopus/context/workflow.js"
+import { writeCrossReviewReports } from "@octopus/executor/ai-output.js"
 
 export type { CapabilityContext, CapabilityHandler, CapabilityResult }
 
 const uid = () => `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 const truncate = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n)}…` : s)
+
+function appendAIArtifact(ctx: CapabilityContext, title: string, description: string, content: string): void {
+  ctx.state.artifacts.push({
+    id: ArtifactId(`art_${uid()}`),
+    type: ArtifactType.OTHER,
+    title,
+    description,
+    phase: ctx.step.phase,
+    version: "0.1.0",
+    createdBy: Role.AI,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    content,
+  })
+}
 
 /** AI 能力：调用 agent-layer 助手；CHECKLIST_RECOMMENDATION 落为清单项，其余落为制品 */
 const aiHandler: CapabilityHandler = async (ref, ctx) => {
@@ -27,8 +49,54 @@ const aiHandler: CapabilityHandler = async (ref, ctx) => {
     return { kind: "ai", ref: label, ok: false, summary: "未配置 AIClient" }
   }
   const input = ctx.input ?? ref.input ?? `${ctx.step.name}：${ctx.step.description}`
-  const res = await ctx.aiClient.callAssistant(ref.assistant, input)
-  const text = res.result ?? ""
+  let text: string
+  let crossReviewSummary: string | undefined
+  let crossReviewOk = true
+  if (ref.reviewers !== undefined) {
+    if (ref.assistant !== AIAssistantType.CODE_REVIEW) {
+      return { kind: "ai", ref: label, ok: false, summary: "交叉 reviewer 仅支持 CODE_REVIEW" }
+    }
+    if (!ctx.state.projectRoot) {
+      return { kind: "ai", ref: label, ok: false, summary: "交叉代码评审需要配置源码根目录" }
+    }
+    const definition = loadWorkflowDefinition(ctx.state.projectRoot)
+    const nodeKey = resolveWorkflowNodeKey(definition, ctx.step.id)
+    const nodePath = getWorkflowWorkspace(ctx.state.projectRoot).nodePath(nodeKey)
+    const relativeNodePath = relative(ctx.state.projectRoot, nodePath).replaceAll("\\", "/")
+    const reviewOutputDir = ref.reviewOutputDir ?? "reviews"
+    const res = await ctx.aiClient.crossReviewCode(input, ctx.state.projectRoot, ref.reviewers, {
+      ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      excludedPaths: [
+        ...(ref.outputFile ? [`${relativeNodePath}/${ref.outputFile}`] : []),
+        `${relativeNodePath}/${reviewOutputDir}/**`,
+      ],
+    })
+    if (ctx.signal?.aborted) throw new Error("交叉代码评审已取消")
+    text = res.result
+    writeCrossReviewReports(nodePath, res, {
+      ...(ref.outputFile !== undefined ? { outputFile: ref.outputFile } : {}),
+      ...(ref.reviewOutputDir !== undefined ? { reviewOutputDir: ref.reviewOutputDir } : {}),
+      scope: ctx.state.requirementId,
+    })
+    for (const review of res.reviews) {
+      appendAIArtifact(
+        ctx,
+        `AI ${label} · ${review.agent} · ${ctx.step.id}`,
+        `${review.agent} 的独立代码评审${review.ok ? "" : "（失败）"}`,
+        review.ok
+          ? review.output
+          : [review.error ?? "未知错误", review.output].filter((part) => part !== "").join("\n\n"),
+      )
+    }
+    const minimum = ref.minimumSuccessfulReviewers ?? ref.reviewers.length
+    crossReviewOk = res.successCount >= minimum
+    crossReviewSummary = crossReviewOk
+      ? `${res.successCount}/${ref.reviewers.length} 个 reviewer 成功`
+      : `至少需要 ${minimum} 个成功，实际 ${res.successCount} 个`
+  } else {
+    const res = await ctx.aiClient.callAssistant(ref.assistant, input)
+    text = res.result ?? ""
+  }
 
   if (ref.assistant === AIAssistantType.CHECKLIST_RECOMMENDATION) {
     const phase = ctx.step.phase
@@ -56,19 +124,13 @@ const aiHandler: CapabilityHandler = async (ref, ctx) => {
     return { kind: "ai", ref: label, ok: true, summary: `新增 ${added} 项 checklist` }
   }
 
-  ctx.state.artifacts.push({
-    id: ArtifactId(`art_${uid()}`),
-    type: ArtifactType.OTHER,
-    title: `AI ${label} · ${ctx.step.id}`,
-    description: `步骤 ${ctx.step.id} 的 AI 辅助产出`,
-    phase: ctx.step.phase,
-    version: "0.1.0",
-    createdBy: Role.AI,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    content: text,
-  })
-  return { kind: "ai", ref: label, ok: true, summary: truncate(text) }
+  appendAIArtifact(ctx, `AI ${label} · ${ctx.step.id}`, `步骤 ${ctx.step.id} 的 AI 辅助产出`, text)
+  return {
+    kind: "ai",
+    ref: label,
+    ok: crossReviewOk,
+    summary: crossReviewSummary ?? truncate(text),
+  }
 }
 
 /** Heinrich 能力：按 delta 增加条数并记录观测 */

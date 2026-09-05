@@ -33,6 +33,8 @@ export enum ArtifactType {
   SELF_TEST_REPORT = "SELF_TEST_REPORT",
   /** 技术债务报告 */
   TECH_DEBT_REPORT = "TECH_DEBT_REPORT",
+  /** BRD 检查报告 */
+  BRD_CHECK_REPORT = "BRD_CHECK_REPORT",
   /** 其它 */
   OTHER = "OTHER",
 }
@@ -50,6 +52,7 @@ export const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = {
   [ArtifactType.ESTIMATION]: "估时表",
   [ArtifactType.SELF_TEST_REPORT]: "自我测试表",
   [ArtifactType.TECH_DEBT_REPORT]: "技术债务报告",
+  [ArtifactType.BRD_CHECK_REPORT]: "BRD 检查报告",
   [ArtifactType.OTHER]: "其它",
 }
 
@@ -77,6 +80,21 @@ export interface Artifact {
   filePath?: string
   /** 内容（可选，文本型制品可直接存储） */
   content?: string
+  /** 父制品 ID（版本链，可选） */
+  parentArtifactId?: string
+  /** 来源追踪信息（可选） */
+  source?: {
+    /** 来源运行 ID */
+    runId?: string
+    /** 来源事件序列 */
+    eventSequence?: number
+    /** 文件 sha256 */
+    fileHash?: string
+    /** git commit SHA */
+    commitSha?: string
+    /** Hermes/AI session ID */
+    sessionId?: string
+  }
 }
 
 /** 创建制品的参数 */

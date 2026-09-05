@@ -18,6 +18,7 @@ import { Role } from "./role.js"
 import { PhaseId } from "./branded-ids.js"
 import { AIAssistantType } from "./agent.js"
 import type { HeinrichLevel } from "./risk.js"
+import type { CodeReviewAgent } from "./agent.js"
 
 /**
  * 能力引用 —— 声明式地把一个步骤连接到具体能力。
@@ -31,6 +32,9 @@ export type CapabilityRef =
       readonly input?: string
       readonly outputFile?: string
       readonly ifExists?: "overwrite" | "extend"
+      readonly reviewers?: readonly CodeReviewAgent[]
+      readonly minimumSuccessfulReviewers?: number
+      readonly reviewOutputDir?: string
     }
   /** 外部集成：调用注册的 IntegrationService（如 sonar/postman） */
   | { readonly kind: "integration"; readonly service: string; readonly op: string }
@@ -191,10 +195,11 @@ export const DEFAULT_WORKFLOW_SPEC: WorkflowSpec = {
         { id: "50.2", name: "Branch Merge", description: "SA merges the release branches", responsibleRoles: [Role.SA, Role.DEV], dependsOn: ["50.1"], capabilities: [svc("git", "mergeBranches"), hei(1)] },
         { id: "50.3", name: "AI Checklist Recommendation", description: "AI recommends checklist additions for review by SA, BA, DEV, PM, and QA", responsibleRoles: [Role.SA, Role.BA, Role.DEV, Role.PM, Role.QA, Role.AI], dependsOn: ["50.2"], capabilities: [ai(AIAssistantType.CHECKLIST_RECOMMENDATION)] },
         { id: "50.4", name: "Sonar and Code Review", description: "SA runs Sonar and DEV performs code review", responsibleRoles: [Role.SA, Role.DEV], dependsOn: ["50.3"], capabilities: [svc("sonar", "runScan"), hei(1)] },
-        { id: "50.5", name: "AI Code Review", description: "AI generates UML sequence diagrams and control-flow graphs, then scores change risk", responsibleRoles: [Role.AI], dependsOn: ["50.4"], capabilities: [ai(AIAssistantType.CODE_REVIEW)] },
+        { id: "50.5", name: "AI Code Review", description: "OCR, Command Code, and Codex independently review the current Git changes and produce a cross-review report", responsibleRoles: [Role.AI], dependsOn: ["50.4"], capabilities: [ai(AIAssistantType.CODE_REVIEW, { reviewers: ["ocr", "commandcode", "codex"], minimumSuccessfulReviewers: 2, outputFile: "cross-review.md", reviewOutputDir: "reviews" })] },
         { id: "50.6", name: "Postman and Test Script Generation", description: "SA runs Postman and AI generates automated test scripts", responsibleRoles: [Role.SA, Role.AI], dependsOn: ["50.5"], capabilities: [svc("postman", "runCollection"), ai(AIAssistantType.TEST_SCRIPT_GENERATION), hei(1)] },
         { id: "50.7", name: "SQL Execution and Risk Check", description: "SA and DEV execute SQL while AI detects missing indexes, table locks, and non-reversible changes", responsibleRoles: [Role.SA, Role.DEV, Role.AI], dependsOn: ["50.6"], capabilities: [ai(AIAssistantType.SQL_RISK_CHECK), hei(1)] },
-        { id: "50.8", name: "Magento Release Risk Assessment", description: "SA performs the release and AI assesses release risk in advance", responsibleRoles: [Role.SA, Role.AI], dependsOn: ["50.7"], capabilities: [ai(AIAssistantType.RELEASE_RISK_ASSESSMENT)] },
+        { id: "50.7a", name: "Go-Live Check", description: "SA and QA verify that every test case has passed before production go-live", responsibleRoles: [Role.SA, Role.QA], dependsOn: ["30.10", "40.2", "40.3", "50.6", "50.7"] },
+        { id: "50.8", name: "Magento Release Risk Assessment", description: "SA performs the release and AI assesses release risk in advance", responsibleRoles: [Role.SA, Role.AI], dependsOn: ["50.7a"], capabilities: [ai(AIAssistantType.RELEASE_RISK_ASSESSMENT)] },
         { id: "50.9", name: "Regression Testing", description: "QA performs regression testing", responsibleRoles: [Role.QA], dependsOn: ["50.8"] },
         { id: "50.10", name: "AB Validation and Branch Merge", description: "PM validates the AB test and merges the production branch back into development", responsibleRoles: [Role.PM], dependsOn: ["50.9"] },
       ],

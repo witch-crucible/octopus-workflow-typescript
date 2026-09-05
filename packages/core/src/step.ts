@@ -49,6 +49,8 @@ export interface StepRuntime {
   updatedAt: string
   /** 完成时间（ISO 8601） */
   completedAt?: string
+  /** 完成者标识（可选，agent 模式留痕用） */
+  completedBy?: string
   /** 计划开始日期（YYYY-MM-DD，本地日历日） */
   plannedStart?: string
   /** 计划结束日期（YYYY-MM-DD，本地日历日） */

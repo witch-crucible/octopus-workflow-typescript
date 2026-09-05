@@ -21,6 +21,8 @@ export interface CapabilityContext {
   aiClient?: AIClient | undefined
   integrations: Record<string, IntegrationService>
   input?: string
+  /** 调用方取消长时间运行的 capability（如多 AI 交叉评审）。 */
+  signal?: AbortSignal
 }
 
 /** capability 分发结果 */

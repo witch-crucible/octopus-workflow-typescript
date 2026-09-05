@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs"
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -7,6 +7,7 @@ import { Role } from "@octopus/core/role.js"
 import { TaskStatus } from "@octopus/core/task.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
 import { TaskId } from "@octopus/core/branded-ids.js"
+import { AIAssistantType } from "@octopus/core/agent.js"
 import type { StepRuntime } from "@octopus/core/step.js"
 import type { PersistenceStore } from "@octopus/context/index.js"
 import { createTestPersistenceStore } from "@octopus/context/testing.js"
@@ -21,6 +22,20 @@ function createTemporaryDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), "octopus-worker-"))
   temporaryDirectories.push(directory)
   return directory
+}
+
+function createReviewerExecutable(directory: string, name: string, output?: string): string {
+  const executable = join(directory, `${name}.mjs`)
+  writeFileSync(executable, [
+    "#!/usr/bin/env node",
+    'import { writeFileSync } from "node:fs"',
+    output === undefined
+      ? `writeFileSync(2, ${JSON.stringify(`${name} failed`)})`
+      : `writeFileSync(1, ${JSON.stringify(output)})`,
+    output === undefined ? "process.exitCode = 3" : "",
+  ].filter(Boolean).join("\n"))
+  chmodSync(executable, 0o755)
+  return executable
 }
 
 function createTestStep(phase: Phase = Phase.TESTING): StepRuntime {
@@ -142,6 +157,104 @@ describe("heinrich action 阶段归属", () => {
     expect(state.heinrich.observations).toHaveLength(1)
     expect(state.heinrich.observations[0]?.phase).toBe(Phase.TESTING)
     expect(state.heinrich.observations[0]?.level).toBe(HeinrichLevel.MINOR)
+  })
+})
+
+describe("AI 交叉代码评审 action", () => {
+  function createCrossReviewContext(
+    storeDir: string,
+    nodePath: string,
+    paths: { ocrPath: string; commandCodePath: string; codexPath: string },
+  ): ActionContext {
+    const stateStore = createStateStore({ storeDir })
+    const project = stateStore.createProject("交叉评审项目")
+    const requirementId = stateStore.createRequirement(
+      project.projectId,
+      "交叉评审需求",
+      "",
+      nodePath,
+    ).requirementId
+    return {
+      args: { storeDir, requirementId, runId: "run_cross_review" },
+      nodePath,
+      stateStore,
+      stateRequirementId: requirementId,
+      config: {
+        ...DEFAULT_CONFIG,
+        ai: {
+          ...DEFAULT_CONFIG.ai,
+          ...paths,
+          retries: 0,
+          defaultTimeout: 2_000,
+        },
+      },
+      projectRoot: nodePath,
+      fallbackAIInput: "审查当前 Git 变更",
+      stdoutPath: join(storeDir, "stdout.log"),
+      stderrPath: join(storeDir, "stderr.log"),
+      pluginHost: emptyPluginHost(),
+      step: createTestStep(Phase.RELEASE),
+      isCancelled: () => false,
+      assignChild: () => {},
+    }
+  }
+
+  it("三个 reviewer 独立落盘并生成汇总报告，两个成功即可通过", async () => {
+    const storeDir = createTemporaryDirectory()
+    const nodePath = createTemporaryDirectory()
+    const paths = {
+      ocrPath: createReviewerExecutable(storeDir, "ocr", "OCR finding"),
+      commandCodePath: createReviewerExecutable(storeDir, "commandcode", "Command Code finding"),
+      codexPath: createReviewerExecutable(storeDir, "codex"),
+    }
+    const context = createCrossReviewContext(storeDir, nodePath, paths)
+
+    const result = await executeAction({
+      type: "ai",
+      assistant: AIAssistantType.CODE_REVIEW,
+      reviewers: ["ocr", "commandcode", "codex"],
+      minimumSuccessfulReviewers: 2,
+      outputFile: "cross-review.md",
+      reviewOutputDir: "reviews",
+    }, context)
+
+    const reviewOutputDir = `reviews/${context.stateRequirementId}`
+    expect(result).toMatchObject({
+      successCount: 2,
+      reviewerCount: 3,
+      outputFile: "cross-review.md",
+      reviewOutputDir,
+    })
+    expect(readFileSync(join(nodePath, reviewOutputDir, "ocr.md"), "utf8")).toContain("OCR finding")
+    expect(readFileSync(join(nodePath, reviewOutputDir, "commandcode.md"), "utf8")).toContain("Command Code finding")
+    expect(readFileSync(join(nodePath, reviewOutputDir, "codex.md"), "utf8")).toContain("codex failed")
+    const aggregate = readFileSync(join(nodePath, "cross-review.md"), "utf8")
+    expect(aggregate).toContain("OCR finding")
+    expect(aggregate).toContain("Command Code finding")
+    expect(aggregate).toContain("codex failed")
+  })
+
+  it("成功 reviewer 少于门槛时保留诊断报告并阻止节点通过", async () => {
+    const storeDir = createTemporaryDirectory()
+    const nodePath = createTemporaryDirectory()
+    const paths = {
+      ocrPath: createReviewerExecutable(storeDir, "ocr", "OCR only success"),
+      commandCodePath: createReviewerExecutable(storeDir, "commandcode"),
+      codexPath: createReviewerExecutable(storeDir, "codex"),
+    }
+    const context = createCrossReviewContext(storeDir, nodePath, paths)
+    const action = {
+      type: "ai" as const,
+      assistant: AIAssistantType.CODE_REVIEW,
+      reviewers: ["ocr", "commandcode", "codex"] as const,
+      minimumSuccessfulReviewers: 2,
+      outputFile: "cross-review.md",
+      reviewOutputDir: "reviews",
+    }
+
+    await expect(executeAction(action, context)).rejects.toThrow("至少需要 2 个成功，实际 1 个")
+    expect(readFileSync(join(nodePath, "cross-review.md"), "utf8")).toContain("OCR only success")
+    expect(readFileSync(join(nodePath, `reviews/${context.stateRequirementId}/commandcode.md`), "utf8")).toContain("commandcode failed")
   })
 })
 

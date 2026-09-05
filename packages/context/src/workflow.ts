@@ -15,6 +15,7 @@ import { getWorkflowSpec } from "@octopus/core/spec.js"
 import { Phase } from "@octopus/core/phase.js"
 import { Role } from "@octopus/core/role.js"
 import { HeinrichLevel } from "@octopus/core/risk.js"
+import { AIAssistantType, CODE_REVIEW_AGENTS } from "@octopus/core/agent.js"
 import { applyWorkflowOverlays } from "@octopus/plugin/overlay.js"
 import type { PluginRef, WorkflowOverlay } from "@octopus/plugin/index.js"
 
@@ -68,6 +69,7 @@ const BUILT_IN_NODE_KEY_BY_ID: Readonly<Record<string, string>> = {
   "50.5": "ai-code-review",
   "50.6": "postman-and-test-script-generation",
   "50.7": "sql-execution-and-risk-check",
+  "50.7a": "go-live-check",
   "50.8": "magento-release-risk-assessment",
   "50.9": "regression-testing",
   "50.10": "ab-validation-and-branch-merge",
@@ -90,6 +92,9 @@ const actionSchema = z.discriminatedUnion("type", [
     input: z.string().optional(),
     outputFile: z.string().min(1).optional(),
     ifExists: z.enum(["overwrite", "extend"]).optional(),
+    reviewers: z.array(z.enum(CODE_REVIEW_AGENTS)).min(1).optional(),
+    minimumSuccessfulReviewers: z.number().int().positive().optional(),
+    reviewOutputDir: z.string().min(1).optional(),
   }),
   z.object({
     type: z.literal("integration"),
@@ -103,7 +108,22 @@ const actionSchema = z.discriminatedUnion("type", [
     name: z.string().min(1),
     input: z.record(z.unknown()).optional(),
   }),
-])
+]).superRefine((action, ctx) => {
+  if (action.type !== "ai") return
+  if (action.reviewers && action.assistant !== AIAssistantType.CODE_REVIEW) {
+    ctx.addIssue({ code: "custom", message: "reviewers 仅支持 CODE_REVIEW assistant", path: ["reviewers"] })
+  }
+  if (action.reviewers && new Set(action.reviewers).size !== action.reviewers.length) {
+    ctx.addIssue({ code: "custom", message: "reviewers 不能重复", path: ["reviewers"] })
+  }
+  if (action.minimumSuccessfulReviewers !== undefined) {
+    if (!action.reviewers) {
+      ctx.addIssue({ code: "custom", message: "minimumSuccessfulReviewers 需要 reviewers", path: ["minimumSuccessfulReviewers"] })
+    } else if (action.minimumSuccessfulReviewers > action.reviewers.length) {
+      ctx.addIssue({ code: "custom", message: "minimumSuccessfulReviewers 不能超过 reviewers 数量", path: ["minimumSuccessfulReviewers"] })
+    }
+  }
+})
 
 const pluginRefSchema = z.union([
   z.string().min(1),
@@ -204,6 +224,13 @@ export function definitionFromBuiltInSpec(): WorkflowDefinition {
             ...(capability.input !== undefined ? { input: capability.input } : {}),
             ...(capability.outputFile !== undefined ? { outputFile: capability.outputFile } : {}),
             ...(capability.ifExists !== undefined ? { ifExists: capability.ifExists } : {}),
+            ...(capability.reviewers !== undefined ? { reviewers: capability.reviewers } : {}),
+            ...(capability.minimumSuccessfulReviewers !== undefined
+              ? { minimumSuccessfulReviewers: capability.minimumSuccessfulReviewers }
+              : {}),
+            ...(capability.reviewOutputDir !== undefined
+              ? { reviewOutputDir: capability.reviewOutputDir }
+              : {}),
           }
         }
         if (capability.kind === "integration") {

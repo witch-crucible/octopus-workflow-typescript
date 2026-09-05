@@ -33,6 +33,28 @@ export interface RunWorkflowOptions {
   readonly maxParallel?: number
   readonly pollIntervalMs?: number
   readonly force?: boolean
+  /** Agent 模式：AI 自动完成 manual 节点；隐含 autoAdvance=true */
+  readonly agentMode?: boolean
+  /** 自动推进阶段边界（agentMode 隐含 true） */
+  readonly autoAdvance?: boolean
+}
+
+/** Agent 模式单次运行的汇总结果。 */
+export interface AgentRunSummary {
+  status: "COMPLETED" | "PARTIAL" | "BLOCKED"
+  autoCompleted: Array<{ nodeId: string; nodeName: string; completedBy: string }>
+  blocked: Array<{ nodeId: string; nodeName: string; reason: string }>
+  failed: Array<{ nodeId: string; nodeName: string; error: string }>
+  highRiskNodes: Array<{ nodeId: string; riskReportPath: string }>
+  reportPath: string
+}
+
+/**
+ * Agent 模式返回的扩展快照：在 WorkflowExecutionSnapshot 基础上挂载
+ * agentSummary。非 agentMode 时 agentSummary 为 undefined，保持向后兼容。
+ */
+export interface AgentWorkflowExecutionSnapshot extends WorkflowExecutionSnapshot {
+  agentSummary?: AgentRunSummary
 }
 
 export interface ReadRunLogsOptions {
@@ -252,6 +274,50 @@ export class NodeExecutionService {
     return state
   }
 
+  /**
+   * Agent 模式下的 manual 节点自动完成。
+   *
+   * 校验逻辑与 completeManualNode 一致（节点必须全 manual actions），但在
+   * transactionalUpdate 中额外写入 completedBy="agent" 与 notes="[agent-auto] ..."，
+   * 并发出 payload 含 agent:true 的 RUN_FINISHED 事件，便于审计。
+   *
+   * MVP 不引入 AIClient：直接标记完成，payload 中注明 aiSkipped:true。
+   * 失败（节点不存在/非 manual/依赖未满足）按原有语义抛错，由 runWorkflow 汇总为 BLOCKED。
+   */
+  async completeManualNodeAsAgent(
+    requirementId: string,
+    nodeId: string,
+    force = true,
+  ): Promise<WorkflowState> {
+    const state = await this.transactionalUpdate(requirementId, (current) => {
+      const step = current.steps.find((candidate) => candidate.id === nodeId)
+      if (!step) throw new Error(`节点不存在: ${nodeId}`)
+      if (!(step.actions ?? []).every((action) => action.type === "manual")) {
+        throw new Error(`节点 ${nodeId} 不是手动节点`)
+      }
+      const unmet = step.dependsOn.filter((dependency) => {
+        const target = current.steps.find((candidate) => candidate.id === dependency)
+        return target?.status !== TaskStatus.COMPLETED
+      })
+      if (unmet.length > 0 && !force)
+        throw new Error(`节点 ${nodeId} 依赖未满足: ${unmet.join(", ")}`)
+      step.status = TaskStatus.COMPLETED
+      step.completedAt = new Date().toISOString()
+      step.updatedAt = new Date().toISOString()
+      step.completedBy = "agent"
+      step.notes = "[agent-auto] AI 自动完成 manual 节点"
+      return current
+    })
+    await this.executions.appendEvent({
+      requirementId,
+      nodeId,
+      type: "RUN_FINISHED",
+      payload: { manual: true, agent: true, status: "SUCCEEDED", aiSkipped: true },
+      createdAt: new Date().toISOString(),
+    })
+    return state
+  }
+
   async cancelRun(requirementId: string, runId: string): Promise<NodeRun> {
     const run = await this.executions.getRun(runId)
     if (!run || run.requirementId !== requirementId) throw new Error(`运行不存在: ${runId}`)
@@ -315,6 +381,26 @@ export class NodeExecutionService {
 
   async eventsAfter(requirementId: string, sequence = 0): Promise<WorkflowEvent[]> {
     return this.executions.eventsAfter(requirementId, sequence)
+  }
+
+  /**
+   * 追加需求级事件（无 run 上下文，如 REQUIREMENT_CHANGED/BRD_UPDATED/ARTIFACT_CREATED），
+   * 返回追加后的事件总数，供调用方推导事件序列号。
+   */
+  async emitRequirementEvent(
+    requirementId: string,
+    type: WorkflowEvent["type"],
+    payload: Record<string, unknown>,
+    nodeId?: string,
+  ): Promise<number> {
+    await this.executions.appendEvent({
+      requirementId,
+      ...(nodeId !== undefined ? { nodeId } : {}),
+      type,
+      payload,
+      createdAt: new Date().toISOString(),
+    })
+    return (await this.executions.eventsAfter(requirementId, 0)).length
   }
 
   /**
@@ -402,6 +488,9 @@ export class NodeExecutionService {
   ): Promise<WorkflowExecutionSnapshot> {
     const maxParallel = options.maxParallel ?? 4
     const pollIntervalMs = options.pollIntervalMs ?? 500
+    const agentMode = options.agentMode === true
+    // autoAdvance 由 agentMode 隐含；阶段边界推进复用 WorkflowEngine.advancePhase（index.ts），
+    // 此处循环打通 READY/waiting 即等价推进，无需额外 phase 逻辑。
     if (!Number.isSafeInteger(maxParallel) || maxParallel < 1) {
       throw new Error("maxParallel 必须是正整数")
     }
@@ -412,6 +501,15 @@ export class NodeExecutionService {
     ) {
       throw new Error(`pollIntervalMs 必须是 100 至 ${MAX_TIMER_DELAY_MS}ms 的整数`)
     }
+    const summary: AgentRunSummary = {
+      status: "COMPLETED",
+      autoCompleted: [],
+      blocked: [],
+      failed: [],
+      highRiskNodes: [],
+      reportPath: "",
+    }
+    let progressed = false
     while (true) {
       // 每次轮询先恢复僵死运行，避免卡住调度器
       await this.recoverStaleRuns(requirementId)
@@ -426,14 +524,50 @@ export class NodeExecutionService {
               nodeId,
               options.force === undefined ? {} : { force: options.force },
             )
+            progressed = true
           } catch (cause) {
             launchError ??= cause
+            if (agentMode) {
+              summary.failed.push({
+                nodeId,
+                nodeName: nodeId,
+                error: cause instanceof Error ? cause.message : String(cause),
+              })
+              summary.status = "PARTIAL"
+            }
+          }
+        }
+      }
+      if (agentMode) {
+        for (const nodeId of snapshot.waitingNodeIds) {
+          try {
+            const state = await this.completeManualNodeAsAgent(requirementId, nodeId)
+            const step = state.steps.find((candidate) => candidate.id === nodeId)
+            summary.autoCompleted.push({ nodeId, nodeName: nodeId, completedBy: "agent" })
+            if (isHighRiskNode(nodeId, step?.name)) {
+              summary.highRiskNodes.push({ nodeId, riskReportPath: "" })
+            }
+            progressed = true
+          } catch (cause) {
+            summary.blocked.push({
+              nodeId,
+              nodeName: nodeId,
+              reason: cause instanceof Error ? cause.message : String(cause),
+            })
+            summary.status = "PARTIAL"
           }
         }
       }
       const next = await this.getSnapshot(requirementId)
-      if (next.activeRuns.length === 0 && next.readyNodeIds.length === 0) return next
-      if (launchError && next.activeRuns.length === 0) throw launchError
+      if (next.activeRuns.length === 0 && next.readyNodeIds.length === 0) {
+        if (!agentMode) return next
+        if (next.waitingNodeIds.length === 0 || !progressed) {
+          return withAgentSummary(next, finalizeAgentSummary(summary, next))
+        }
+        progressed = false
+        continue
+      }
+      if (launchError && next.activeRuns.length === 0 && !agentMode) throw launchError
       await new Promise((resolvePromise) => setTimeout(resolvePromise, pollIntervalMs))
     }
   }
@@ -469,6 +603,39 @@ function normalizeLogMaxBytes(value: number | undefined): number {
     throw new Error(`maxBytes 必须是 1 至 ${ABSOLUTE_LOG_MAX_BYTES} 的整数`)
   }
   return value
+}
+
+const HIGH_RISK_NODE_PATTERNS = [
+  "go-live-check",
+  "magento-release-risk-assessment",
+  "sql-execution-and-risk-check",
+]
+
+function isHighRiskNode(nodeId: string, nodeName?: string): boolean {
+  const haystack = `${nodeId} ${nodeName ?? ""}`.toLowerCase()
+  return HIGH_RISK_NODE_PATTERNS.some((pattern) => haystack.includes(pattern))
+}
+
+function finalizeAgentSummary(
+  summary: AgentRunSummary,
+  snapshot: WorkflowExecutionSnapshot,
+): AgentRunSummary {
+  const status: AgentRunSummary["status"] =
+    snapshot.schedulerStatus === "COMPLETED"
+      ? "COMPLETED"
+      : summary.blocked.length > 0 || summary.failed.length > 0
+        ? snapshot.schedulerStatus === "BLOCKED"
+          ? "BLOCKED"
+          : "PARTIAL"
+        : "COMPLETED"
+  return { ...summary, status }
+}
+
+function withAgentSummary(
+  snapshot: WorkflowExecutionSnapshot,
+  summary: AgentRunSummary,
+): AgentWorkflowExecutionSnapshot {
+  return { ...snapshot, agentSummary: summary }
 }
 
 function readLogFileSlice(

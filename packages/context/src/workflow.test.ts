@@ -169,3 +169,58 @@ describe("definitionFromBuiltInSpec 生成 generate-documentation", () => {
     expect(action.input).toContain("Preserve valid existing content and extend changed sections.")
   })
 })
+
+describe("definitionFromBuiltInSpec 生成 AI Code Review", () => {
+  it("保留三个 reviewer、双成功门槛和报告路径", () => {
+    const definition = definitionFromBuiltInSpec()
+    const node = definition.nodes.find((candidate) => candidate.key === "ai-code-review")
+    const action = node?.actions.find((candidate) => candidate.type === "ai")
+
+    expect(action).toMatchObject({
+      type: "ai",
+      assistant: AIAssistantType.CODE_REVIEW,
+      reviewers: ["ocr", "commandcode", "codex"],
+      minimumSuccessfulReviewers: 2,
+      outputFile: "cross-review.md",
+      reviewOutputDir: "reviews",
+    })
+  })
+
+  it("从 workflow.yaml 读取相同的交叉评审配置", () => {
+    const definition = loadWorkflowDefinition(REPO_ROOT)
+    const node = definition.nodes.find((candidate) => candidate.key === "ai-code-review")
+    const action = node?.actions.find((candidate) => candidate.type === "ai")
+
+    expect(action).toMatchObject({
+      reviewers: ["ocr", "commandcode", "codex"],
+      minimumSuccessfulReviewers: 2,
+      outputFile: "cross-review.md",
+      reviewOutputDir: "reviews",
+    })
+  })
+})
+
+describe("definitionFromBuiltInSpec 生成上线检查", () => {
+  it("使用稳定英文 key 并保留测试门禁依赖", () => {
+    const definition = definitionFromBuiltInSpec()
+    const node = definition.nodes.find((candidate) => candidate.key === "go-live-check")
+    expect(node).toBeDefined()
+    expect(node?.phase).toBe(Phase.RELEASE)
+    expect(node?.name).toBe("Go-Live Check")
+    expect(node?.responsibleRoles).toEqual([Role.SA, Role.QA])
+    expect(node?.dependsOn).toEqual([
+      "self-test-and-code-quality",
+      "functional-and-performance-testing",
+      "uat-and-user-acceptance",
+      "postman-and-test-script-generation",
+      "sql-execution-and-risk-check",
+    ])
+    expect(node?.actions).toEqual([{ type: "manual" }])
+    expect(definition.nodeIdMapping["go-live-check"]).toBe("50.7a")
+
+    const release = definition.nodes.find(
+      (candidate) => candidate.key === "magento-release-risk-assessment",
+    )
+    expect(release?.dependsOn).toEqual(["go-live-check"])
+  })
+})

@@ -131,6 +131,7 @@ export const NODE_NAME_ZH: Readonly<Record<string, string>> = {
   "AI Code Review": "AI 代码评审",
   "Postman and Test Script Generation": "Postman 与测试脚本生成",
   "SQL Execution and Risk Check": "SQL 执行与风险检查",
+  "Go-Live Check": "上线检查",
   "Magento Release Risk Assessment": "Magento 发布风险评估",
   "Regression Testing": "回归测试",
   "AB Validation and Branch Merge": "A/B 验证与分支合并",
@@ -180,9 +181,10 @@ export const NODE_DESC_ZH: Readonly<Record<string, string>> = {
   "Branch Merge": "合并发布相关分支。",
   "AI Checklist Recommendation": "AI 推荐发布检查清单。",
   "Sonar and Code Review": "执行静态扫描与代码评审。",
-  "AI Code Review": "AI 辅助代码评审。",
+  "AI Code Review": "OCR、Command Code 与 Codex 并行交叉评审当前 Git 变更。",
   "Postman and Test Script Generation": "生成接口测试集合与脚本。",
   "SQL Execution and Risk Check": "执行 SQL 并评估数据风险。",
+  "Go-Live Check": "确认所有测试用例全部通过后才允许上线。",
   "Magento Release Risk Assessment": "评估 Magento 发布风险。",
   "Regression Testing": "执行回归测试，确认无引入缺陷。",
   "AB Validation and Branch Merge": "A/B 验证通过后合并分支。",
@@ -251,6 +253,8 @@ export type ActionLike = {
   executable?: string
   args?: readonly string[]
   assistant?: string
+  reviewers?: readonly string[]
+  minimumSuccessfulReviewers?: number
   delta?: number
   level?: string
   service?: string
@@ -265,7 +269,13 @@ export function actionLabel(action: ActionLike): string {
     const args = action.args || []
     return `命令：${action.executable || ""}${args.length ? ` ${args.join(" ")}` : ""}`.trim()
   }
-  if (action.type === "ai") return `AI：${action.assistant || "未指定助手"}`
+  if (action.type === "ai") {
+    const reviewers = action.reviewers?.length ? ` · ${action.reviewers.join(" / ")}` : ""
+    const quorum = action.minimumSuccessfulReviewers
+      ? ` · 至少 ${action.minimumSuccessfulReviewers} 个成功`
+      : ""
+    return `AI：${action.assistant || "未指定助手"}${reviewers}${quorum}`
+  }
   if (action.type === "heinrich") {
     return `海因里希：Δ${action.delta ?? 1}${action.level ? ` / ${action.level}` : ""}`
   }

@@ -83,7 +83,7 @@ import {
   MilestoneId,
 } from "@octopus/core/branded-ids.js"
 import { Role } from "@octopus/core/role.js"
-import { InvalidPhaseTransitionError, PhaseLockedError } from "@octopus/core/errors.js"
+import { InvalidPhaseTransitionError, PhaseLockedError, WorkflowError } from "@octopus/core/errors.js"
 import {
   MilestoneStatus,
   assertMilestonePhase,
@@ -113,7 +113,7 @@ import {
   resolveWorkflowNodeId,
   resolveWorkflowNodeKey,
 } from "@octopus/context/workflow.js"
-import type { OctopusConfig } from "@octopus/context/config.js"
+import type { OctopusConfig, RequirementChangeMode } from "@octopus/context/config.js"
 import { toAIClientConfig, loadConfig } from "@octopus/context/config.js"
 import {
   createStepFromNode,
@@ -121,6 +121,7 @@ import {
   createStepsFromDefinition,
 } from "@octopus/task-library/index.js"
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import type { AIClient } from "@octopus/agent-layer/index.js"
 import { createAIClient } from "@octopus/agent-layer/index.js"
 import type { AIEventHandler, AIEventPayload, AIGateResult } from "@octopus/core/agent.js"
@@ -165,6 +166,85 @@ import type { RunNodeOptions, RunWorkflowOptions } from "./execution.js"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/** 收集仍为 COMPLETED 的步骤 id：需求/BRD 变化可能影响任一已完成步骤（不翻状态，只报告+标记）。 */
+function collectCompletedDownstream(steps: StepRuntime[]): string[] {
+  return steps.filter((step) => step.status === TaskStatus.COMPLETED).map((step) => step.id)
+}
+
+/** 需求变化影响报告 markdown（文档 §2.3.2 格式）。 */
+function buildChangeImpactMarkdown(
+  state: WorkflowState,
+  trigger: string,
+  sequence: number,
+  impactedStepIds: string[],
+): string {
+  const byId = new Map(state.steps.map((step) => [step.id, step]))
+  const stepRows = impactedStepIds
+    .map((id) => {
+      const step = byId.get(id)
+      if (!step) return null
+      return `| ${step.id} | ${step.phase} | ${step.status} | ${(step.dependsOn ?? []).join(" → ")} |`
+    })
+    .filter((row): row is string => row !== null)
+    .join("\n")
+  const artifactRows = state.artifacts
+    .map((artifact) => `| ${artifact.id} | ${artifact.type} | ${artifact.phase} | ${artifact.filePath ?? ""} |`)
+    .join("\n")
+  return [
+    "# 需求变化影响报告",
+    "",
+    `- 触发：${trigger}`,
+    `- 时间：${new Date().toISOString()}`,
+    `- 事件序列：#${sequence}`,
+    "",
+    "## 受影响步骤（COMPLETED 状态）",
+    "| 节点 | 阶段 | 状态 | 依赖路径 |",
+    "|------|------|------|---------|",
+    stepRows || "|（无）| | | |",
+    "",
+    "## 受影响制品",
+    "| 制品 | 类型 | 阶段 | 文件路径 |",
+    "|------|------|------|---------|",
+    artifactRows || "|（无）| | | |",
+    "",
+    "## 建议操作",
+    "- 评估是否需要重跑上述步骤",
+    "- 使用 `node show --json <nodeId>` 查看详情",
+    "",
+  ].join("\n")
+}
+
+/** 描述需求补丁触发语义。 */
+function describeRequirementPatch(
+  oldName: string,
+  name: string | undefined,
+  patch: { description?: string; owner?: string | null },
+): string {
+  const parts: string[] = []
+  if (name !== undefined) parts.push(`name: "${oldName}" → "${name}"`)
+  if (patch.description !== undefined) parts.push("description 已更新")
+  if (patch.owner !== undefined) parts.push(`owner: ${patch.owner ?? "(清空)"}`)
+  return `REQUIREMENT_CHANGED（${parts.join("; ") || "无字段变化"}）`
+}
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number)
+  const pb = b.split(".").map(Number)
+  const len = Math.max(pa.length, pb.length)
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+function bumpMinor(version: string): string {
+  const parts = version.split(".").map(Number)
+  const major = parts[0] ?? 0
+  const minor = parts[1] ?? 0
+  return `${major}.${minor + 1}.0`
 }
 
 function isIsoDate(value: unknown): value is string {
@@ -352,6 +432,8 @@ export interface WorkflowEngineConfig {
   aiGatingEnabled?: boolean
   /** 海因里希条数阈值 */
   heinrichThreshold?: number
+  /** 需求变化处理模式：loose 只提醒不拦截，strict 保留现有拦截 */
+  changeMode?: RequirementChangeMode
   /** 外部集成服务表（capability 的 integration handler 按 service 名解析） */
   integrations?: Record<string, IntegrationService>
   /** 已激活的插件宿主；缺省为空，主路径与现在一致 */
@@ -377,6 +459,7 @@ export class WorkflowEngine {
   private readonly strictPermissions: boolean
   private readonly aiGatingEnabled: boolean
   private readonly heinrichThreshold: number
+  private readonly changeMode: RequirementChangeMode
   private readonly registry: CapabilityRegistry
   private readonly integrations: Record<string, IntegrationService>
   private readonly pluginHost: PluginHost
@@ -397,6 +480,7 @@ export class WorkflowEngine {
     this.strictPermissions = config.strictPermissions ?? false
     this.aiGatingEnabled = config.aiGatingEnabled ?? false
     this.heinrichThreshold = config.heinrichThreshold ?? 3
+    this.changeMode = config.changeMode ?? "loose"
     this.pluginHost = config.pluginHost ?? emptyPluginHost()
     this.integrations = { ...this.pluginHost.integrations, ...config.integrations }
     this.registry = new CapabilityRegistry(this.pluginHost.customHandlers)
@@ -432,6 +516,42 @@ export class WorkflowEngine {
     updater: (state: WorkflowState) => WorkflowState,
   ): Promise<WorkflowState> {
     return this.store.update(requirementId, updater)
+  }
+
+  /**
+   * 需求变化宽松模式的影响报告：计算下游影响集（dependsOn 传递闭包中仍为
+   * COMPLETED 的 steps + 关联 artifacts），生成 markdown 并写文件，返回报告路径。
+   * strict 模式下不调用（调用方抛 WorkflowError 拦截）。
+   */
+  private async reportRequirementChange(
+    requirementId: string,
+    trigger: string,
+    type: "REQUIREMENT_CHANGED" | "BRD_UPDATED",
+  ): Promise<{ sequence: number; reportPath: string }> {
+    const sequence = await this.nodeExecution.emitRequirementEvent(requirementId, type, {
+      trigger,
+    })
+    const state = await this.getState(requirementId)
+    const impacted = collectCompletedDownstream(state.steps)
+    const markdown = buildChangeImpactMarkdown(state, trigger, sequence, impacted)
+    const dir = state.projectRoot ?? process.cwd()
+    const reportPath = join(dir, `change-impact-report-${sequence}.md`)
+    try {
+      writeFileSync(reportPath, markdown, "utf-8")
+    } catch {
+      // 报告写文件失败不阻断主流程
+    }
+    if (impacted.length > 0) {
+      await this.transactionalUpdate(requirementId, (current) => {
+        for (const step of current.steps) {
+          if (!impacted.includes(step.id)) continue
+          step.notes =
+            `${step.notes ?? ""} stale-by-change:${sequence} report:change-impact-report-${sequence}.md`.trim()
+        }
+        return current
+      })
+    }
+    return { sequence, reportPath }
   }
 
   /** 节点运行与监控服务。 */
@@ -664,7 +784,12 @@ export class WorkflowEngine {
     if (name !== undefined && name === "") {
       throw new Error("需求名称必须是非空字符串")
     }
-    return this.transactionalUpdate(requirementId, (current) => {
+    const before = await this.getState(requirementId)
+    const trigger = describeRequirementPatch(before.requirementName, name, patch)
+    if (this.changeMode === "strict") {
+      throw new WorkflowError(`需求变更被拦截（strict 模式）：${trigger}`)
+    }
+    await this.transactionalUpdate(requirementId, (current) => {
       if (name !== undefined) current.requirementName = name
       if (patch.description !== undefined) current.description = patch.description
       if (patch.owner !== undefined) {
@@ -682,6 +807,8 @@ export class WorkflowEngine {
       }
       return current
     })
+    await this.reportRequirementChange(requirementId, trigger, "REQUIREMENT_CHANGED")
+    return this.getState(requirementId)
   }
 
   /** 删除需求状态及运行记录，不删除磁盘上的 workflow.yaml。 */
@@ -1241,6 +1368,7 @@ export class WorkflowEngine {
     requirementId: string,
     stepId: string,
     input?: string,
+    signal?: AbortSignal,
   ): Promise<WorkflowState> {
     const state = await this.getState(requirementId)
     const expectedState = JSON.stringify(state)
@@ -1263,10 +1391,17 @@ export class WorkflowEngine {
       aiClient: this.aiClient,
       integrations: this.integrations,
       ...(input !== undefined ? { input } : {}),
+      ...(signal !== undefined ? { signal } : {}),
     }
     const runs = workingStep.capabilityRuns ?? []
+    let crossReviewAttempted = false
+    let crossReviewFailure: string | undefined
     for (const ref of caps) {
       const result = await this.registry.dispatch(ref, ctx)
+      if (ref.kind === "ai" && ref.reviewers !== undefined) {
+        crossReviewAttempted = true
+        if (!result.ok) crossReviewFailure = result.summary ?? "交叉代码评审未达到成功门槛"
+      }
       runs.push({
         kind: result.kind,
         ref: result.ref,
@@ -1274,6 +1409,17 @@ export class WorkflowEngine {
         at: new Date().toISOString(),
         ...(result.summary !== undefined ? { summary: result.summary } : {}),
       })
+    }
+    if (crossReviewAttempted) {
+      if (crossReviewFailure) {
+        workingStep.status = TaskStatus.BLOCKED
+        delete workingStep.completedAt
+        workingStep.notes = crossReviewFailure
+      } else if (workingStep.status === TaskStatus.BLOCKED) {
+        workingStep.status = TaskStatus.PENDING
+        delete workingStep.completedAt
+        delete workingStep.notes
+      }
     }
     workingStep.capabilityRuns = runs
     workingStep.updatedAt = new Date().toISOString()
@@ -1598,6 +1744,12 @@ export class WorkflowEngine {
       throw new InvalidPhaseTransitionError(state.currentPhase, targetPhase, "不能回退到后续阶段")
     }
 
+    if (this.changeMode === "strict") {
+      throw new WorkflowError(
+        `阶段回退被拦截（strict 模式）：${state.currentPhase} → ${targetPhase}`,
+      )
+    }
+
     // AI 门控（handler 收到的是旧快照，保持现有行为）
     let aiAllowed = false
     if (this.aiGatingEnabled) {
@@ -1658,6 +1810,13 @@ export class WorkflowEngine {
       current.currentPhase = targetPhase
       return current
     })
+    // loose 追加事件 + 影响报告 + 下游标记；strict 已在方法入口拦截
+    await this.reportRequirementChange(
+      requirementId,
+      `rollback: ${state.currentPhase} → ${targetPhase}`,
+      "REQUIREMENT_CHANGED",
+    )
+    return this.getState(requirementId)
   }
 
   // ── 权限校验 ──
@@ -2241,26 +2400,57 @@ export class WorkflowEngine {
       createdBy: Role
       content?: string
       filePath?: string
+      parentArtifactId?: string
+      source?: Artifact["source"]
+      stepId?: string
     },
   ): Promise<WorkflowState> {
-    return this.transactionalUpdate(requirementId, (current) => {
+    const state = await this.transactionalUpdate(requirementId, (current) => {
+      const siblings = current.artifacts.filter(
+        (item) => item.type === params.type && item.title === params.title,
+      )
+      let latest = "0.0.0"
+      for (const sibling of siblings) {
+        if (compareVersions(sibling.version, latest) > 0) latest = sibling.version
+      }
+      const nextVersion = bumpMinor(latest)
       const artifact = {
         id: ArtifactId(`art_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
         type: params.type,
         title: params.title,
         description: params.description,
         phase: params.phase,
-        version: "0.1.0",
+        version: nextVersion,
         createdBy: params.createdBy,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         ...(params.content !== undefined ? { content: params.content } : {}),
         ...(params.filePath !== undefined ? { filePath: params.filePath } : {}),
+        ...(params.parentArtifactId !== undefined
+          ? { parentArtifactId: params.parentArtifactId }
+          : {}),
+        ...(params.source !== undefined ? { source: params.source } : {}),
       } as Artifact
 
       current.artifacts.push(artifact)
+      if (params.stepId !== undefined) {
+        const step = current.steps.find((item) => item.id === params.stepId)
+        if (step) {
+          step.artifactIds = [...(step.artifactIds ?? []), artifact.id]
+        }
+      }
       return current
     })
+    const created = state.artifacts[state.artifacts.length - 1]
+    if (created) {
+      await this.nodeExecution.emitRequirementEvent(requirementId, "ARTIFACT_CREATED", {
+        artifactId: created.id,
+        artifactType: created.type,
+        title: created.title,
+        version: created.version,
+      })
+    }
+    return state
   }
 
   /** 获取制品列表 */
@@ -2876,11 +3066,16 @@ export class WorkflowEngine {
     requirementId: string,
     options?: { dryRun?: boolean },
   ): Promise<BrdGenerateResult> {
-    return runBrdGenerate(
+    const result = await runBrdGenerate(
       await this.prepareBrdNodeInput(projectId, requirementId),
       this.createBrdNodeRuntime(),
       options,
     )
+    // engine 侧 loose 只发事件不拦截；strict 拦截只在 updateRequirement/rollbackTo
+    if (options?.dryRun !== true) {
+      await this.reportRequirementChange(requirementId, "brd: generate", "BRD_UPDATED")
+    }
+    return result
   }
 
   /** Hermes Agent 无头运行项目级 Skill，基于历史 BRD 与当前代码生成并自动优化 BRD。 */
@@ -2889,11 +3084,15 @@ export class WorkflowEngine {
     requirementId: string,
     options?: { dryRun?: boolean },
   ): Promise<BrdOptimizeResult> {
-    return runBrdOptimize(
+    const result = await runBrdOptimize(
       await this.prepareBrdNodeInput(projectId, requirementId),
       this.createBrdNodeRuntime(),
       options,
     )
+    if (options?.dryRun !== true) {
+      await this.reportRequirementChange(requirementId, "brd: optimize", "BRD_UPDATED")
+    }
+    return result
   }
 
   /** AI 检查 BRD；dryRun 只返回提示词；缺少已有 BRD 时抛错 */
@@ -3419,6 +3618,7 @@ export async function createWorkflowEngineFromConfig(
       strictPermissions: config.workflow.strictPermissions,
       aiGatingEnabled: config.workflow.aiGatingEnabled,
       heinrichThreshold: config.workflow.heinrichThreshold,
+      changeMode: config.workflow.changeMode,
       integrations,
       pluginHost,
       ...(teambition?.operatorId !== undefined
