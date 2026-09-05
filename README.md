@@ -110,7 +110,9 @@ add:
 
 插件导出 `default` 或 `octopusPlugin`，在 `activate(ctx)` 里叠加节点、注册新的 AI 模块 id、集成服务或自定义能力名称；不能覆盖内置 12 类 AI 模块，也不能覆盖 `ai` / `heinrich` 能力处理器。路径相对项目根，包名从该项目的 `node_modules` 解析，加载失败则进程退出。测试夹具 `packages/plugin/fixtures/sample-plugin/` 是一份可复制的最小插件，本仓库默认不启用任何插件。
 
-CloudBase PG 模式环境变量：`storage sync` 必须读取 `CLOUDBASE_ENV_ID` 和 `CLOUDBASE_APIKEY`，通过 `https://<envId>.api.tcloudbasegateway.com/v1/rdb/rest/rpc/capy_replace_octopus_snapshot` 调用 PostgREST RPC。`CLOUDBASE_APIKEY` 对应 `service_role`，只能注入后端进程，不能传给渲染器或提交到仓库。数据库直连仅用于部署迁移：`pnpm db:migrate` 依次读取 `CLOUDBASE_MIGRATION_URL`、`CLOUDBASE_DATABASE_URL`、`DATABASE_MIGRATION_URL` 和 `DATABASE_URL`；运行时连接串读取 `CLOUDBASE_DATABASE_URL`（缺失时回退到 `DATABASE_URL`），CloudBase 专用同步不回退到 `DATABASE_URL`。开发态读取仓库根 `.env`；打包 Electron 读取进程环境或 `userData/store/.env`。其他变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_OCR_PATH`、`OCTOPUS_AI_COMMANDCODE_PATH`、`OCTOPUS_AI_CODEX_PATH`、`OCTOPUS_AI_HERMES_PATH`。
+CloudBase PG 模式环境变量：`storage sync` 必须读取 `CLOUDBASE_ENV_ID` 和 `CLOUDBASE_APIKEY`，通过 `https://<envId>.api.tcloudbasegateway.com/v1/rdb/rest/rpc/capy_replace_octopus_snapshot` 调用 PostgREST RPC。`CLOUDBASE_APIKEY` 对应 `service_role`，只能注入后端进程，不能传给渲染器或提交到仓库。数据库直连仅用于部署迁移：`pnpm db:migrate` 依次读取 `CLOUDBASE_MIGRATION_URL`、`CLOUDBASE_DATABASE_URL`、`DATABASE_MIGRATION_URL` 和 `DATABASE_URL`；运行时连接串读取 `CLOUDBASE_DATABASE_URL`（缺失时回退到 `DATABASE_URL`），CloudBase 专用同步不回退到 `DATABASE_URL`。
+
+数据库环境变量：运行时必填 `DATABASE_URL`；迁移可选 `DATABASE_MIGRATION_URL`（推荐 direct 或 5432 session pooler）。开发态读取仓库根 `.env`；打包 Electron 读取进程环境或 `userData/store/.env`。其他变量：`OCTOPUS_STORE_DIR`、`OCTOPUS_AI_MODEL`、`OCTOPUS_AI_TIMEOUT`、`OCTOPUS_AI_CLAUDE_PATH`、`OCTOPUS_AI_OCR_PATH`、`OCTOPUS_AI_COMMANDCODE_PATH`、`OCTOPUS_AI_CODEX_PATH`、`OCTOPUS_AI_HERMES_PATH`。
 
 `AI Code Review` 节点默认并行调用 `ocr`、`commandcode` 与 `codex` 审查当前 Git 变更。三个 reviewer 的原始报告按需求隔离写入节点目录的 `reviews/<requirement-id>/`，最新汇总报告写入 `cross-review.md`；至少两个 reviewer 成功时节点才通过。每次调用都会显式排除这些生成报告，避免被后续 review 再次纳入；本仓库的内置节点目录另有 `.gitignore` 作为补充。
 
