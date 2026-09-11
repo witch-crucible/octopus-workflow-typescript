@@ -161,19 +161,21 @@ describe("heinrich action 阶段归属", () => {
 })
 
 describe("AI 交叉代码评审 action", () => {
-  function createCrossReviewContext(
+  async function createCrossReviewContext(
     storeDir: string,
     nodePath: string,
     paths: { ocrPath: string; commandCodePath: string; codexPath: string },
-  ): ActionContext {
-    const stateStore = createStateStore({ storeDir })
-    const project = stateStore.createProject("交叉评审项目")
-    const requirementId = stateStore.createRequirement(
+  ): Promise<ActionContext> {
+    const { store: stateStore } = await createTestPersistenceStore(storeDir)
+    stores.push(stateStore)
+    const project = await stateStore.createProject("交叉评审项目")
+    const requirement = await stateStore.createRequirement(
       project.projectId,
       "交叉评审需求",
       "",
       nodePath,
-    ).requirementId
+    )
+    const requirementId = requirement.requirementId
     return {
       args: { storeDir, requirementId, runId: "run_cross_review" },
       nodePath,
@@ -207,7 +209,7 @@ describe("AI 交叉代码评审 action", () => {
       commandCodePath: createReviewerExecutable(storeDir, "commandcode", "Command Code finding"),
       codexPath: createReviewerExecutable(storeDir, "codex"),
     }
-    const context = createCrossReviewContext(storeDir, nodePath, paths)
+    const context = await createCrossReviewContext(storeDir, nodePath, paths)
 
     const result = await executeAction({
       type: "ai",
@@ -242,7 +244,7 @@ describe("AI 交叉代码评审 action", () => {
       commandCodePath: createReviewerExecutable(storeDir, "commandcode"),
       codexPath: createReviewerExecutable(storeDir, "codex"),
     }
-    const context = createCrossReviewContext(storeDir, nodePath, paths)
+    const context = await createCrossReviewContext(storeDir, nodePath, paths)
     const action = {
       type: "ai" as const,
       assistant: AIAssistantType.CODE_REVIEW,
