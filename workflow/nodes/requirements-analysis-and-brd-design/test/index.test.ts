@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   HERMES_BRD_SKILL,
+  readBrdHistory,
   runBrdCheck,
   runBrdGenerate,
   runBrdOptimize,
@@ -116,5 +117,57 @@ describe("requirements-analysis-and-brd-design 节点编排", () => {
   it("check 在 BRD 不存在时给出可诊断错误", async () => {
     const { runtime } = recordingRuntime()
     await expect(runBrdCheck(input(), runtime)).rejects.toThrow(/未找到已有 BRD/)
+  })
+
+  it("两次 generate 串联历史，snapshot.previousSha 指向上一版", async () => {
+    const { runtime, artifacts } = recordingRuntime()
+    const first = await runBrdGenerate(input(), runtime)
+    let callCount = 0
+    runtime.callAssistant = async (assistant) => {
+      callCount += 1
+      return { result: `# BRD\n生成内容 v${callCount + 1}` }
+    }
+    const second = await runBrdGenerate(input(), runtime)
+
+    expect(first.snapshot?.previousSha).toBeNull()
+    expect(second.snapshot?.previousSha).toBe(first.snapshot?.sha)
+    expect(artifacts[0]?.source).toMatchObject({ fileHash: first.snapshot?.sha })
+    expect(artifacts[1]?.source).toMatchObject({ fileHash: second.snapshot?.sha })
+
+    const history = readBrdHistory(join(projectRoot, "docs/brd.md"))
+    expect(history.entries.map((entry) => entry.source)).toEqual(["generate", "generate"])
+  })
+
+  it("两次 generate 之间的手工修改被记为独立的 manual 版本", async () => {
+    const { runtime } = recordingRuntime()
+    await runBrdGenerate(input(), runtime)
+    writeFileSync(join(projectRoot, "docs/brd.md"), "# BRD\n手工追加内容", "utf8")
+    await runBrdGenerate(input(), runtime)
+
+    const history = readBrdHistory(join(projectRoot, "docs/brd.md"))
+    expect(history.entries.map((entry) => entry.source)).toEqual(["generate", "manual", "generate"])
+  })
+
+  it("check 在有上一版本时提示词包含变更 diff，且检查报告登记为 Artifact", async () => {
+    const { runtime, artifacts } = recordingRuntime()
+    await runBrdGenerate(input(), runtime)
+    writeFileSync(join(projectRoot, "docs/brd.md"), "# BRD\n生成内容\n新增一行", "utf8")
+
+    const result = await runBrdCheck(input(), runtime)
+    const checkPrompt = result.promptsUsed.find((item) => item.id === "check")
+
+    expect(checkPrompt?.prompt).toContain("+ 新增一行")
+    expect(result.checkedSha).toBeDefined()
+    expect(artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "BRD_CHECK_REPORT",
+          source: { fileHash: result.checkedSha },
+        }),
+      ]),
+    )
+
+    const history = readBrdHistory(join(projectRoot, "docs/brd.md"))
+    expect(history.entries[history.entries.length - 1]?.sha).toBe(result.checkedSha)
   })
 })

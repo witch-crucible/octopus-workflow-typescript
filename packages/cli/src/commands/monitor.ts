@@ -73,7 +73,7 @@ export function buildMonitorCommands(program: Command, engine: WorkflowEngine): 
     })
 }
 
-function parseInterval(value: string): number {
+export function parseInterval(value: string): number {
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed) || parsed < 100 || parsed > MAX_TIMER_DELAY_MS) {
     throw new Error(`--interval 必须是 100 至 ${MAX_TIMER_DELAY_MS}ms 的整数`)

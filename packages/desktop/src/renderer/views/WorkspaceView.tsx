@@ -1012,7 +1012,7 @@ export function WorkspaceView({ requirementId, onProjectKnown }: WorkspaceViewPr
   return (
     <div
       className={cn(
-        "workspace-view relative grid min-h-0 flex-1",
+        "workspace-view relative grid h-full min-h-0 flex-1",
         isCompact
           ? "grid-cols-1"
           : cn(

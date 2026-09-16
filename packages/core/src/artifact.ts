@@ -106,4 +106,8 @@ export interface CreateArtifactParams {
   createdBy: Role
   filePath?: string
   content?: string
+  /** 父制品 ID（版本链，可选） */
+  parentArtifactId?: string
+  /** 来源追踪信息（可选） */
+  source?: Artifact["source"]
 }

@@ -1,4 +1,5 @@
 import {
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
@@ -57,6 +58,9 @@ type GraphPan = {
   scrollTop: number
   moved: boolean
 }
+
+// 指针移动超过该距离才视为拖拽，避免误伤节点单击
+const PAN_THRESHOLD = 4
 
 const NODE_W = 250
 const NODE_H = 128
@@ -143,6 +147,7 @@ export function WorkflowGraph({
   const arrowActiveId = `arrow-active-${reactId}`
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const panRef = useRef<GraphPan | null>(null)
+  const suppressClickRef = useRef(false)
   const [isPanning, setIsPanning] = useState(false)
   const [isCentered, setIsCentered] = useState(false)
   const focusNodeIds = useMemo(() => getWorkflowFocusNodeIds(nodes, snapshot), [nodes, snapshot])
@@ -271,8 +276,11 @@ export function WorkflowGraph({
   }, [layout.width, layout.height, zoom, nodes.length])
 
   const endPan = useCallback(() => {
-    if (!panRef.current) return
+    const pan = panRef.current
+    if (!pan) return
     panRef.current = null
+    const wrap = wrapRef.current
+    if (wrap?.hasPointerCapture(pan.pointerId)) wrap.releasePointerCapture(pan.pointerId)
     setIsPanning(false)
   }, [])
 
@@ -281,7 +289,6 @@ export function WorkflowGraph({
     if (event.button !== 0) return false
     const target = event.target
     if (!(target instanceof Element)) return true
-    if (target.closest(".wf-node")) return false
     if (target.closest("button, a, input, textarea, select, label")) return false
     return true
   }, [])
@@ -290,7 +297,10 @@ export function WorkflowGraph({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const wrap = wrapRef.current
       if (!wrap || !canStartPan(event)) return
-      event.preventDefault()
+      suppressClickRef.current = false
+      const onNode = event.target instanceof Element && Boolean(event.target.closest(".wf-node"))
+      // 在节点上按下时保留默认行为（聚焦），拖拽超过阈值后才接管
+      if (!(onNode && event.button === 0)) event.preventDefault()
       panRef.current = {
         pointerId: event.pointerId,
         x: event.clientX,
@@ -299,32 +309,51 @@ export function WorkflowGraph({
         scrollTop: wrap.scrollTop,
         moved: false,
       }
-      setIsPanning(true)
-      wrap.setPointerCapture(event.pointerId)
     },
     [canStartPan],
   )
 
-  const onPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const wrap = wrapRef.current
-    const pan = panRef.current
-    if (!wrap || !pan || event.pointerId !== pan.pointerId) return
-    const dx = event.clientX - pan.x
-    const dy = event.clientY - pan.y
-    if (!pan.moved && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) pan.moved = true
-    wrap.scrollLeft = pan.scrollLeft - dx
-    wrap.scrollTop = pan.scrollTop - dy
-    event.preventDefault()
-  }, [])
+  const onPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const wrap = wrapRef.current
+      const pan = panRef.current
+      if (!wrap || !pan || event.pointerId !== pan.pointerId) return
+      if (event.buttons === 0) {
+        endPan()
+        return
+      }
+      const dx = event.clientX - pan.x
+      const dy = event.clientY - pan.y
+      if (!pan.moved) {
+        if (Math.abs(dx) < PAN_THRESHOLD && Math.abs(dy) < PAN_THRESHOLD) return
+        pan.moved = true
+        setIsPanning(true)
+        wrap.setPointerCapture(event.pointerId)
+      }
+      wrap.scrollLeft = pan.scrollLeft - dx
+      wrap.scrollTop = pan.scrollTop - dy
+      event.preventDefault()
+    },
+    [endPan],
+  )
 
   const onPointerUp = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const pan = panRef.current
       if (!pan || event.pointerId !== pan.pointerId) return
+      if (pan.moved) suppressClickRef.current = true
       endPan()
     },
     [endPan],
   )
+
+  // 拖拽结束后浏览器仍会派发 click，吞掉它以免误选节点
+  const onClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!suppressClickRef.current) return
+    suppressClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }, [])
 
   const nameById = useMemo(() => {
     const map = new Map<string, string>()
@@ -341,24 +370,25 @@ export function WorkflowGraph({
         isCentered && "is-centered",
         className,
       )}
-      title="拖拽空白处平移；Ctrl/⌘ + 滚轮缩放"
+      title="按住拖拽平移；Ctrl/⌘ + 滚轮缩放"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onLostPointerCapture={onPointerUp}
+      onClickCapture={onClickCapture}
     >
       <div
         className="wf-graph-scaler"
         style={{
-          transform: `scale(${zoom})`,
           width: layout.width ? `${Math.ceil(layout.width * zoom)}px` : "auto",
           height: layout.height ? `${Math.ceil(layout.height * zoom)}px` : "auto",
         }}
       >
         <svg
           className="wf-graph"
-          width={layout.width}
-          height={layout.height}
+          width={layout.width * zoom}
+          height={layout.height * zoom}
           viewBox={`0 0 ${layout.width} ${layout.height}`}
           role="img"
           aria-label="工作流角色泳道图"

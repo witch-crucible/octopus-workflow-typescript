@@ -33,16 +33,24 @@ import {
   type ProjectBrdDesignConfigPatch,
 } from "@octopus/core/brd-design.js"
 import {
+  detectUnrecordedBrdChange,
+  diffBrdVersions,
+  formatLineDiff,
   previewBrdNodePrompts,
+  readBrdHistory,
+  resolveBrdAbsolutePath,
   runBrdCheck,
   runBrdGenerate,
   runBrdOptimize,
+  toProjectRelative,
   type BrdCheckResult,
   type BrdGenerateResult,
+  type BrdHistoryEntry,
   type BrdOptimizeResult,
   type BrdNodeInput,
   type BrdNodeRuntime,
   type BrdRenderedPrompt,
+  type BrdVersionDiff,
 } from "../../../workflow/nodes/requirements-analysis-and-brd-design/src/index.js"
 import {
   Phase,
@@ -73,7 +81,7 @@ import {
   createEmptyHeinrichRecord,
   HeinrichLevel,
 } from "@octopus/core/risk.js"
-import type { ArtifactType, Artifact } from "@octopus/core/artifact.js"
+import { ArtifactType, type Artifact } from "@octopus/core/artifact.js"
 import {
   PhaseId,
   TaskId,
@@ -159,6 +167,7 @@ import type {
   IntegrationHealth,
   NodeRun,
   WorkflowDefinition,
+  WorkflowEvent,
   WorkflowExecutionSnapshot,
   WorkflowNodeSpec,
 } from "@octopus/core/execution.js"
@@ -442,6 +451,14 @@ export interface WorkflowEngineConfig {
   teambitionOperatorId?: string
 }
 
+/** BRD 变动链路中的一个版本：账本条目 + 事件 + 关联制品。 */
+export interface BrdTraceVersion {
+  entry: BrdHistoryEntry
+  event?: WorkflowEvent
+  artifact?: Artifact
+  checks: Artifact[]
+}
+
 /** 创建节点后的配置及运行态结果。 */
 export interface CreateNodeResult {
   readonly requirementId: string
@@ -527,9 +544,11 @@ export class WorkflowEngine {
     requirementId: string,
     trigger: string,
     type: "REQUIREMENT_CHANGED" | "BRD_UPDATED",
+    extraPayload?: Record<string, unknown>,
   ): Promise<{ sequence: number; reportPath: string }> {
     const sequence = await this.nodeExecution.emitRequirementEvent(requirementId, type, {
       trigger,
+      ...extraPayload,
     })
     const state = await this.getState(requirementId)
     const impacted = collectCompletedDownstream(state.steps)
@@ -3072,8 +3091,12 @@ export class WorkflowEngine {
       options,
     )
     // engine 侧 loose 只发事件不拦截；strict 拦截只在 updateRequirement/rollbackTo
-    if (options?.dryRun !== true) {
-      await this.reportRequirementChange(requirementId, "brd: generate", "BRD_UPDATED")
+    // AI 输出与上一版内容相同（snapshot.changed === false）时不重复发事件
+    if (options?.dryRun !== true && result.snapshot?.changed === true) {
+      await this.reportRequirementChange(requirementId, "brd: generate", "BRD_UPDATED", {
+        sha: result.snapshot.sha,
+        previousSha: result.snapshot.previousSha,
+      })
     }
     return result
   }
@@ -3089,8 +3112,11 @@ export class WorkflowEngine {
       this.createBrdNodeRuntime(),
       options,
     )
-    if (options?.dryRun !== true) {
-      await this.reportRequirementChange(requirementId, "brd: optimize", "BRD_UPDATED")
+    if (options?.dryRun !== true && result.snapshot?.changed === true) {
+      await this.reportRequirementChange(requirementId, "brd: optimize", "BRD_UPDATED", {
+        sha: result.snapshot.sha,
+        previousSha: result.snapshot.previousSha,
+      })
     }
     return result
   }
@@ -3106,6 +3132,83 @@ export class WorkflowEngine {
       this.createBrdNodeRuntime(),
       options,
     )
+  }
+
+  /**
+   * 检测 BRD 文件是否被手工修改（内容与账本最新记录不一致）。
+   * 检测到变化时登记 BRD Artifact 并发出 BRD_UPDATED 事件；否则返回 changed:false。
+   */
+  async snapshotBrd(
+    projectId: string,
+    requirementId: string,
+  ): Promise<{ changed: boolean; entry?: BrdHistoryEntry }> {
+    const input = await this.prepareBrdNodeInput(projectId, requirementId)
+    const absoluteOutputPath = resolveBrdAbsolutePath(input.config, input.projectRoot)
+    const detected = detectUnrecordedBrdChange(absoluteOutputPath, requirementId)
+    if (!detected) return { changed: false }
+    await this.createArtifact(requirementId, {
+      type: ArtifactType.BRD,
+      title: `${input.requirementName} BRD`,
+      description: "检测到手工修改的商业需求文档",
+      phase: Phase.INTENTION,
+      createdBy: Role.PM,
+      filePath: toProjectRelative(input.projectRoot, absoluteOutputPath),
+      source: { fileHash: detected.entry.sha },
+    })
+    await this.reportRequirementChange(requirementId, "brd: manual edit detected", "BRD_UPDATED", {
+      sha: detected.entry.sha,
+      previousSha: detected.entry.previousSha,
+      source: detected.entry.source,
+    })
+    return { changed: true, entry: detected.entry }
+  }
+
+  /** 列出 BRD 快照历史（时间正序）。 */
+  async listBrdHistory(projectId: string, requirementId: string): Promise<BrdHistoryEntry[]> {
+    const input = await this.prepareBrdNodeInput(projectId, requirementId)
+    const absoluteOutputPath = resolveBrdAbsolutePath(input.config, input.projectRoot)
+    return readBrdHistory(absoluteOutputPath).entries
+  }
+
+  /** 对比两个 BRD 版本；缺省比较上一条到最新一条。 */
+  async diffBrd(
+    projectId: string,
+    requirementId: string,
+    options?: { from?: string; to?: string },
+  ): Promise<BrdVersionDiff> {
+    const input = await this.prepareBrdNodeInput(projectId, requirementId)
+    const absoluteOutputPath = resolveBrdAbsolutePath(input.config, input.projectRoot)
+    return diffBrdVersions(absoluteOutputPath, options?.from, options?.to)
+  }
+
+  /**
+   * 按版本串联 BRD 变动链路：快照账本条目 + BRD_UPDATED 事件 + BRD/检查报告 Artifact。
+   */
+  async getBrdTrace(projectId: string, requirementId: string): Promise<BrdTraceVersion[]> {
+    const input = await this.prepareBrdNodeInput(projectId, requirementId)
+    const absoluteOutputPath = resolveBrdAbsolutePath(input.config, input.projectRoot)
+    const entries = readBrdHistory(absoluteOutputPath).entries
+    const [state, events] = await Promise.all([
+      this.getState(requirementId),
+      this.execution.eventsAfter(requirementId, 0),
+    ])
+    const brdUpdatedEvents = events.filter((event) => event.type === "BRD_UPDATED")
+    return entries.map((entry) => {
+      const event = brdUpdatedEvents.find((candidate) => candidate.payload["sha"] === entry.sha)
+      const artifact = state.artifacts.find(
+        (candidate) => candidate.type === ArtifactType.BRD && candidate.source?.fileHash === entry.sha,
+      )
+      const checks = state.artifacts.filter(
+        (candidate) =>
+          candidate.type === ArtifactType.BRD_CHECK_REPORT && candidate.source?.fileHash === entry.sha,
+      )
+      return {
+        entry,
+        checks,
+        ...(event !== undefined ? { event } : {}),
+        ...(artifact !== undefined ? { artifact } : {}),
+      }
+    })
   }
 
   private async prepareBrdNodeInput(
@@ -3140,7 +3243,19 @@ export class WorkflowEngine {
           }
         : {}),
       createArtifact: async (requirementId, params) => {
-        await this.createArtifact(requirementId, params)
+        let resolvedParams = params
+        if (params.parentArtifactId === undefined) {
+          const state = await this.getState(requirementId)
+          const siblings = state.artifacts.filter(
+            (item) => item.type === params.type && item.title === params.title,
+          )
+          const latest = siblings.reduce<Artifact | undefined>(
+            (max, item) => (!max || compareVersions(item.version, max.version) > 0 ? item : max),
+            undefined,
+          )
+          if (latest) resolvedParams = { ...params, parentArtifactId: latest.id }
+        }
+        await this.createArtifact(requirementId, resolvedParams)
       },
     }
   }

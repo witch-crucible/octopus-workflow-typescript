@@ -9,6 +9,11 @@
  *   generate [requirementId] [--project] [--dry-run] [--json]
  *   optimize [requirementId] [--project] [--dry-run] [--json]
  *   check [requirementId] [--project] [--dry-run] [--json]
+ *   snapshot [requirementId] [--project] [--json]
+ *   history [requirementId] [--project] [--json]
+ *   diff [requirementId] [--project] [--from] [--to] [--stat] [--json]
+ *   watch [requirementId] [--project] [--interval]
+ *   trace [requirementId] [--project] [--json]
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -18,6 +23,7 @@ import type { WorkflowEngine } from "@octopus/workflow-engine/index.js"
 import type { BrdPromptId, ProjectBrdDesignConfigPatch } from "@octopus/core/brd-design.js"
 import { BRD_PROMPT_IDS } from "@octopus/core/brd-design.js"
 import { resolveRequirementId } from "../resolve-requirement.js"
+import { parseInterval } from "./monitor.js"
 
 async function resolveProjectIdForRequirement(
   engine: WorkflowEngine,
@@ -271,6 +277,11 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
             return
           }
           console.log(`✅ BRD 已生成: ${result.outputPath}`)
+          if (result.snapshot) {
+            console.log(
+              `   sha: ${result.snapshot.sha.slice(0, 12)}（上一版: ${result.snapshot.previousSha?.slice(0, 12) ?? "无"}）${result.snapshot.changed ? "" : "（内容与上一版相同）"}`,
+            )
+          }
         } catch (err) {
           console.error(`❌ 生成 BRD 失败: ${(err as Error).message}`)
           process.exitCode = 1
@@ -312,6 +323,11 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
             return
           }
           console.log(`✅ Hermes Agent 已生成并自动优化 BRD: ${result.outputPath}`)
+          if (result.snapshot) {
+            console.log(
+              `   sha: ${result.snapshot.sha.slice(0, 12)}（上一版: ${result.snapshot.previousSha?.slice(0, 12) ?? "无"}）${result.snapshot.changed ? "" : "（内容与上一版相同）"}`,
+            )
+          }
         } catch (err) {
           console.error(`❌ Hermes BRD 自动优化失败: ${(err as Error).message}`)
           process.exitCode = 1
@@ -350,8 +366,185 @@ export function buildBrdCommands(program: Command, engine: WorkflowEngine): void
             return
           }
           console.log(`✅ BRD 检查报告: ${result.reportPath}`)
+          if (result.checkedSha) {
+            console.log(`   已检查版本 sha: ${result.checkedSha.slice(0, 12)}`)
+          }
         } catch (err) {
           console.error(`❌ 检查 BRD 失败: ${(err as Error).message}`)
+          process.exitCode = 1
+        }
+      },
+    )
+
+  brd
+    .command("snapshot")
+    .description("检测 BRD 是否被手工修改；有变化时登记快照与 Artifact")
+    .argument("[requirementId]", "需求 ID")
+    .option("--project <projectId>", "项目 ID（默认从需求反查）")
+    .option("--json", "以 JSON 格式输出")
+    .action(
+      async (requirementId: string | undefined, options: { project?: string; json?: boolean }) => {
+        try {
+          const rid = await resolveRequirementId(engine, requirementId)
+          if (!rid) return
+          const projectId = options.project ?? (await resolveProjectIdForRequirement(engine, rid))
+          const result = await engine.snapshotBrd(projectId, rid)
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2))
+            return
+          }
+          if (!result.changed) {
+            console.log("ℹ️  未检测到手工修改")
+            return
+          }
+          console.log(
+            `✅ 检测到手工修改，已登记快照: ${result.entry?.sha.slice(0, 12)}（来源: ${result.entry?.source}）`,
+          )
+        } catch (err) {
+          console.error(`❌ 检测 BRD 快照失败: ${(err as Error).message}`)
+          process.exitCode = 1
+        }
+      },
+    )
+
+  brd
+    .command("history")
+    .description("列出 BRD 生成/优化/手工修改历史")
+    .argument("[requirementId]", "需求 ID")
+    .option("--project <projectId>", "项目 ID（默认从需求反查）")
+    .option("--json", "以 JSON 格式输出")
+    .action(
+      async (requirementId: string | undefined, options: { project?: string; json?: boolean }) => {
+        try {
+          const rid = await resolveRequirementId(engine, requirementId)
+          if (!rid) return
+          const projectId = options.project ?? (await resolveProjectIdForRequirement(engine, rid))
+          const entries = await engine.listBrdHistory(projectId, rid)
+          if (options.json) {
+            console.log(JSON.stringify(entries, null, 2))
+            return
+          }
+          if (entries.length === 0) {
+            console.log("ℹ️  暂无 BRD 历史")
+            return
+          }
+          console.log(`\n📜 BRD 历史（${entries.length} 条）\n`)
+          for (const entry of entries) {
+            console.log(`${entry.sha.slice(0, 12)}  ${entry.source.padEnd(8)}  ${entry.createdAt}`)
+          }
+          console.log()
+        } catch (err) {
+          console.error(`❌ 列出 BRD 历史失败: ${(err as Error).message}`)
+          process.exitCode = 1
+        }
+      },
+    )
+
+  brd
+    .command("diff")
+    .description("对比两个 BRD 版本（缺省比较上一条到最新一条）")
+    .argument("[requirementId]", "需求 ID")
+    .option("--project <projectId>", "项目 ID（默认从需求反查）")
+    .option("--from <sha>", "起始版本 sha（可为前缀）")
+    .option("--to <sha>", "目标版本 sha（可为前缀，默认最新）")
+    .option("--stat", "只输出增删统计，不输出逐行 diff")
+    .option("--json", "以 JSON 格式输出")
+    .action(
+      async (
+        requirementId: string | undefined,
+        options: { project?: string; from?: string; to?: string; stat?: boolean; json?: boolean },
+      ) => {
+        try {
+          const rid = await resolveRequirementId(engine, requirementId)
+          if (!rid) return
+          const projectId = options.project ?? (await resolveProjectIdForRequirement(engine, rid))
+          const result = await engine.diffBrd(projectId, rid, {
+            ...(options.from !== undefined ? { from: options.from } : {}),
+            ...(options.to !== undefined ? { to: options.to } : {}),
+          })
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2))
+            return
+          }
+          console.log(`${result.from.sha.slice(0, 12)} → ${result.to.sha.slice(0, 12)}`)
+          console.log(`+${result.diff.added} / -${result.diff.removed}`)
+          if (options.stat || result.diff.truncated) return
+          for (const line of result.diff.lines) {
+            const prefix = line.type === "add" ? "+" : line.type === "remove" ? "-" : " "
+            console.log(`${prefix} ${line.text}`)
+          }
+        } catch (err) {
+          console.error(`❌ 对比 BRD 版本失败: ${(err as Error).message}`)
+          process.exitCode = 1
+        }
+      },
+    )
+
+  brd
+    .command("watch")
+    .description("轮询检测 BRD 手工修改")
+    .argument("[requirementId]", "需求 ID")
+    .option("--project <projectId>", "项目 ID（默认从需求反查）")
+    .option("--interval <ms>", "轮询间隔", "2000")
+    .action(
+      async (requirementId: string | undefined, options: { project?: string; interval: string }) => {
+        const rid = await resolveRequirementId(engine, requirementId)
+        if (!rid) return
+        const projectId = options.project ?? (await resolveProjectIdForRequirement(engine, rid))
+        const interval = parseInterval(options.interval)
+        console.log("正在监控 BRD 变化，按 Ctrl+C 退出。")
+        while (true) {
+          try {
+            const result = await engine.snapshotBrd(projectId, rid)
+            if (result.changed) {
+              console.log(
+                `[${new Date().toISOString()}] 检测到变化: ${result.entry?.sha.slice(0, 12)}（来源: ${result.entry?.source}）`,
+              )
+            }
+          } catch (err) {
+            console.error(`⚠️  检测失败: ${(err as Error).message}`)
+          }
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, interval))
+        }
+      },
+    )
+
+  brd
+    .command("trace")
+    .description("按版本串联 BRD 变动链路：快照 → 事件 → 制品 → 检查报告")
+    .argument("[requirementId]", "需求 ID")
+    .option("--project <projectId>", "项目 ID（默认从需求反查）")
+    .option("--json", "以 JSON 格式输出")
+    .action(
+      async (requirementId: string | undefined, options: { project?: string; json?: boolean }) => {
+        try {
+          const rid = await resolveRequirementId(engine, requirementId)
+          if (!rid) return
+          const projectId = options.project ?? (await resolveProjectIdForRequirement(engine, rid))
+          const trace = await engine.getBrdTrace(projectId, rid)
+          if (options.json) {
+            console.log(JSON.stringify(trace, null, 2))
+            return
+          }
+          if (trace.length === 0) {
+            console.log("ℹ️  暂无 BRD 变动记录")
+            return
+          }
+          console.log(`\n🔗 BRD 变动链路（${trace.length} 个版本）\n`)
+          for (const version of trace) {
+            const { entry, event, artifact, checks } = version
+            console.log(`── ${entry.sha.slice(0, 12)} (${entry.source}, ${entry.createdAt}) ──`)
+            console.log(`   事件: ${event ? `#${event.sequence} ${event.type}` : "（无）"}`)
+            console.log(`   制品: ${artifact ? `${artifact.title} v${artifact.version}` : "（无）"}`)
+            if (checks.length > 0) {
+              for (const check of checks) console.log(`   检查报告: ${check.title} v${check.version}`)
+            } else {
+              console.log("   检查报告: （无）")
+            }
+          }
+          console.log()
+        } catch (err) {
+          console.error(`❌ 获取 BRD 变动链路失败: ${(err as Error).message}`)
           process.exitCode = 1
         }
       },

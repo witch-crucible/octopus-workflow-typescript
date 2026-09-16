@@ -4,6 +4,7 @@
  */
 
 import type { ProjectId } from "./branded-ids.js"
+import type { ReleaseChecklistTemplate, ReleasePlan, SetupChecklistItem } from "./release-plan.js"
 
 /** 项目级 Teambition 绑定 */
 export interface ProjectTeambitionBinding {
@@ -55,6 +56,12 @@ export interface Project {
   teambition?: ProjectTeambitionBinding
   teambitionVersion?: ProjectTeambitionVersionBinding
   metadata?: Record<string, string>
+  /** 导入的上线 Checklist 模板；一个项目只保留一份 */
+  releaseTemplate?: ReleaseChecklistTemplate
+  /** 各 TB 版本对应的发布计划，key 为 versionId */
+  releasePlans?: Record<string, ReleasePlan>
+  /** 项目级 Setup 清单（一次性环境准备，不随版本变化） */
+  setupChecklist?: SetupChecklistItem[]
 }
 
 /** 项目列表摘要 */
@@ -69,11 +76,7 @@ export interface ProjectSummary {
 }
 
 /** 创建空白项目 */
-export function createEmptyProject(
-  projectId: ProjectId,
-  name: string,
-  description = "",
-): Project {
+export function createEmptyProject(projectId: ProjectId, name: string, description = ""): Project {
   const now = new Date().toISOString()
   return {
     projectId,

@@ -16,6 +16,7 @@ import {
   type BrdPromptVars,
   type ProjectBrdDesignConfig,
 } from "@octopus/core/brd-design.js"
+import { diffBrdVersions, formatLineDiff, readBrdHistory } from "./history.js"
 
 const PER_SOURCE_CHAR_LIMIT = 10_000
 const GLOBAL_CHAR_LIMIT = 50_000
@@ -71,6 +72,28 @@ export interface BrdRenderedPrompt {
 
 function resolvePath(projectRoot: string, pathValue: string): string {
   return isAbsolute(pathValue) ? pathValue : resolve(projectRoot, pathValue)
+}
+
+/** 解析 BRD 产出文件的绝对路径（不读取文件内容）。 */
+export function resolveBrdAbsolutePath(config: ProjectBrdDesignConfig, projectRoot: string): string {
+  return resolvePath(projectRoot, resolveBrdOutputPath(config))
+}
+
+/**
+ * 计算「上一版本以来的实际变更」文本，供 check 提示词使用。
+ * 只读取账本，不做任何写入；账本条目不足两条时返回占位说明。
+ */
+function computeBrdChangeDiffText(absoluteOutputPath: string): string {
+  const history = readBrdHistory(absoluteOutputPath)
+  if (history.entries.length < 2) {
+    return "（无历史版本，首次评审）"
+  }
+  try {
+    const { diff } = diffBrdVersions(absoluteOutputPath)
+    return formatLineDiff(diff)
+  } catch (error) {
+    return `（无法计算变更 diff: ${(error as Error).message}）`
+  }
 }
 
 function listTopEntries(dir: string, depth: number): string[] {
@@ -385,6 +408,7 @@ export function gatherBrdSourceContext(
     websiteUrl: s.websiteUrl ?? "（未配置）",
     miniprogramBuildArtifact: s.miniprogramBuildArtifact ?? "（未配置）",
     historicalBrds,
+    brdChangeDiff: computeBrdChangeDiffText(absoluteOutputPath),
   }
 
   return {

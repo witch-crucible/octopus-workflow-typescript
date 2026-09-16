@@ -16,12 +16,19 @@ import {
   encodeBrdPromptEnvelope,
   gatherBrdSourceContext,
   renderBrdPromptsForContext,
+  resolveBrdAbsolutePath,
   resolveBrdCheckReportPath,
   toProjectRelative,
   type BrdRenderedPrompt,
 } from "./context.js"
+import {
+  detectUnrecordedBrdChange,
+  readBrdHistory,
+  recordBrdSnapshot,
+} from "./history.js"
 
 export * from "./context.js"
+export * from "./history.js"
 
 export interface BrdNodeInput {
   config: ProjectBrdDesignConfig
@@ -43,12 +50,20 @@ export interface BrdNodeRuntime {
 
 export const HERMES_BRD_SKILL = "brd-generator"
 
+/** 写入后的快照信息；AI 输出与上一版内容相同（changed:false）时仍返回该版本条目。 */
+export interface BrdSnapshotInfo {
+  sha: string
+  previousSha: string | null
+  changed: boolean
+}
+
 export interface BrdGenerateResult {
   outputPath: string
   result?: string
   promptsUsed: BrdRenderedPrompt[]
   warnings: string[]
   dryRun: boolean
+  snapshot?: BrdSnapshotInfo
 }
 
 export interface BrdCheckResult {
@@ -57,6 +72,8 @@ export interface BrdCheckResult {
   promptsUsed: BrdRenderedPrompt[]
   warnings: string[]
   dryRun: boolean
+  /** 被检查的 BRD 版本 sha（不存在已有 BRD 时省略） */
+  checkedSha?: string
 }
 
 export interface BrdOptimizeResult extends BrdGenerateResult {
@@ -110,10 +127,15 @@ export async function runBrdGenerate(
   }
   if (!runtime.callAssistant) throw new Error("未配置 AI 客户端，无法生成 BRD")
 
+  detectUnrecordedBrdChange(context.absoluteOutputPath, input.requirementId)
   const envelope = encodeBrdPromptEnvelope(generatePrompt.system, generatePrompt.prompt)
   const response = await runtime.callAssistant(AIAssistantType.BRD_GENERATE, envelope)
   mkdirSync(dirname(context.absoluteOutputPath), { recursive: true })
   writeFileSync(context.absoluteOutputPath, response.result, "utf8")
+  const { entry, changed } = recordBrdSnapshot(context.absoluteOutputPath, response.result, {
+    source: "generate",
+    requirementId: input.requirementId,
+  })
   await runtime.createArtifact(input.requirementId, {
     type: ArtifactType.BRD,
     title: `${input.requirementName} BRD`,
@@ -122,6 +144,7 @@ export async function runBrdGenerate(
     createdBy: Role.AI,
     content: response.result.slice(0, 4_000),
     filePath: toProjectRelative(input.projectRoot, context.absoluteOutputPath),
+    source: { fileHash: entry.sha },
   })
   return {
     outputPath: context.outputPath,
@@ -129,6 +152,7 @@ export async function runBrdGenerate(
     promptsUsed,
     warnings: context.warnings,
     dryRun: false,
+    snapshot: { sha: entry.sha, previousSha: entry.previousSha, changed },
   }
 }
 
@@ -169,8 +193,13 @@ export async function runBrdOptimize(
     throw new Error("Hermes Agent 返回内容不符合 BRD 输出契约：首行必须是 Markdown 一级标题")
   }
 
+  detectUnrecordedBrdChange(context.absoluteOutputPath, input.requirementId)
   mkdirSync(dirname(context.absoluteOutputPath), { recursive: true })
   writeFileSync(context.absoluteOutputPath, optimizedBrd, "utf8")
+  const { entry, changed } = recordBrdSnapshot(context.absoluteOutputPath, optimizedBrd, {
+    source: "optimize",
+    requirementId: input.requirementId,
+  })
   await runtime.createArtifact(input.requirementId, {
     type: ArtifactType.BRD,
     title: `${input.requirementName} BRD`,
@@ -179,6 +208,7 @@ export async function runBrdOptimize(
     createdBy: Role.AI,
     content: optimizedBrd.slice(0, 4_000),
     filePath: toProjectRelative(input.projectRoot, context.absoluteOutputPath),
+    source: { fileHash: entry.sha },
   })
   return {
     outputPath: context.outputPath,
@@ -188,6 +218,7 @@ export async function runBrdOptimize(
     dryRun: false,
     agent: "hermes",
     skill: HERMES_BRD_SKILL,
+    snapshot: { sha: entry.sha, previousSha: entry.previousSha, changed },
   }
 }
 
@@ -196,12 +227,16 @@ export async function runBrdCheck(
   runtime: BrdNodeRuntime,
   options?: { dryRun?: boolean },
 ): Promise<BrdCheckResult> {
+  const absoluteOutputPath = resolveBrdAbsolutePath(input.config, input.projectRoot)
+  detectUnrecordedBrdChange(absoluteOutputPath, input.requirementId)
   const context = gather(input)
   if (!context.existingBrd.trim()) {
     throw new Error(
       `未找到已有 BRD（${context.outputPath}）。请先运行 brd generate，或将 BRD 放入该路径后再检查。`,
     )
   }
+  const historyEntries = readBrdHistory(absoluteOutputPath).entries
+  const checkedEntry = historyEntries[historyEntries.length - 1]
   const promptsUsed = renderBrdPromptsForContext(input.config, context, "check")
   const checkPrompt = promptsUsed.find((item) => item.id === "check")
   if (!checkPrompt) throw new Error("未找到 check 提示词")
@@ -214,6 +249,7 @@ export async function runBrdCheck(
       promptsUsed,
       warnings: context.warnings,
       dryRun: true,
+      ...(checkedEntry ? { checkedSha: checkedEntry.sha } : {}),
     }
   }
   if (!runtime.callAssistant) throw new Error("未配置 AI 客户端，无法检查 BRD")
@@ -222,11 +258,22 @@ export async function runBrdCheck(
   const response = await runtime.callAssistant(AIAssistantType.BRD_CHECK, envelope)
   mkdirSync(dirname(reportAbsolute), { recursive: true })
   writeFileSync(reportAbsolute, response.result, "utf8")
+  await runtime.createArtifact(input.requirementId, {
+    type: ArtifactType.BRD_CHECK_REPORT,
+    title: `${input.requirementName} BRD 检查报告`,
+    description: "AI 生成的 BRD 完善性检查报告",
+    phase: Phase.INTENTION,
+    createdBy: Role.AI,
+    content: response.result.slice(0, 4_000),
+    filePath: reportPath,
+    ...(checkedEntry ? { source: { fileHash: checkedEntry.sha } } : {}),
+  })
   return {
     reportPath,
     result: response.result,
     promptsUsed,
     warnings: context.warnings,
     dryRun: false,
+    ...(checkedEntry ? { checkedSha: checkedEntry.sha } : {}),
   }
 }

@@ -135,7 +135,6 @@
   cursor: grabbing !important;
 }
 .wf-graph-scaler {
-  transform-origin: 0 0;
   display: inline-block;
   min-width: 100%;
 }
